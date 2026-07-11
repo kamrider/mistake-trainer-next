@@ -1,0 +1,38 @@
+[package]
+name = "mistake-trainer-next"
+version = "0.1.0"
+description = "Offline-first mistake training desktop app"
+authors = ["Mistake Trainer Next contributors"]
+edition = "2024"
+rust-version = "1.97"
+build = "build.rs"
+
+[lib]
+name = "mistake_trainer_next_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[dependencies]
+aes-gcm = "0.10"
+getrandom = "0.3"
+fsrs = "=6.6.1"
+rusqlite = { version = "0.38", features = ["bundled-sqlcipher-vendored-openssl", "uuid"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+specta = { version = "=2.0.0-rc.25", features = ["derive", "function"] }
+specta-typescript = "=0.0.12"
+sha2 = "0.10"
+tauri = { version = "2.11", features = [] }
+tauri-specta = { version = "=2.0.0-rc.25", features = ["typescript"] }
+thiserror = "2"
+uuid = { version = "1", features = ["v7", "serde"] }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dev-dependencies]
+pretty_assertions = "1"
+tempfile = "3"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

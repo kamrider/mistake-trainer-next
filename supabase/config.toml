@@ -1,0 +1,25 @@
+project_id = "mistake-trainer-next"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "storage", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+
+[db]
+port = 54322
+major_version = 17
+
+[studio]
+enabled = true
+port = 54323
+
+[auth]
+enabled = true
+site_url = "http://127.0.0.1:1420"
+additional_redirect_urls = ["tauri://localhost"]
+enable_signup = true
+
+[storage]
+enabled = true
+file_size_limit = "50MiB"

@@ -1,0 +1,28 @@
+import { createMemoryHistory } from 'vue-router'
+import { describe, expect, it } from 'vitest'
+import { createAppRouter } from './router'
+
+describe('app router', () => {
+  it('defines each primary workspace exactly once', () => {
+    const router = createAppRouter(createMemoryHistory())
+    const names = router.getRoutes().map((route) => route.name)
+
+    expect(names).toEqual(expect.arrayContaining([
+      'dashboard',
+      'inbox',
+      'library',
+      'review',
+      'report',
+      'settings',
+    ]))
+    expect(new Set(names).size).toBe(names.length)
+  })
+
+  it('loads the core review room with the shell to avoid an unstyled first frame', () => {
+    const router = createAppRouter(createMemoryHistory())
+    const review = router.getRoutes().find((route) => route.name === 'review')
+
+    expect(review).toBeDefined()
+    expect(typeof review?.components?.default).not.toBe('function')
+  })
+})
