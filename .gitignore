@@ -15,4 +15,5 @@ src-tauri/target/
 .idea/
 .vscode/
 .tools/
+.worktrees/
 Thumbs.db
