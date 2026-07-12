@@ -4,6 +4,8 @@ import {
   type RouterHistory,
 } from 'vue-router'
 import DashboardView from './views/DashboardView.vue'
+import CaptureView from './views/CaptureView.vue'
+import LibraryView from './views/LibraryView.vue'
 import ReviewView from './views/ReviewView.vue'
 
 export function createAppRouter(history: RouterHistory = createWebHashHistory()) {
@@ -14,22 +16,12 @@ export function createAppRouter(history: RouterHistory = createWebHashHistory())
       {
         path: '/inbox',
         name: 'inbox',
-        component: () => import('./views/PlaceholderView.vue'),
-        props: {
-          eyebrow: '采集整理',
-          title: '采集箱',
-          description: '题图与答案图会先在这里安全暂存、去重和配对。',
-        },
+        component: CaptureView,
       },
       {
         path: '/library',
         name: 'library',
-        component: () => import('./views/PlaceholderView.vue'),
-        props: {
-          eyebrow: '题库',
-          title: '题库',
-          description: '搜索、筛选、编辑和归档你的错题。',
-        },
+        component: LibraryView,
       },
       { path: '/review', name: 'review', component: ReviewView },
       {

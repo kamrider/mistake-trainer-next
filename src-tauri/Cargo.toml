@@ -14,8 +14,11 @@ crate-type = ["lib", "cdylib", "staticlib"]
 [dependencies]
 aes-gcm = "0.10"
 getrandom = "0.3"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+keyring = { version = "=4.1.4", default-features = false, features = ["v1", "windows-native-keyring-store"] }
 fsrs = "=6.6.1"
 rusqlite = { version = "0.38", features = ["bundled-sqlcipher-vendored-openssl", "uuid"] }
+rfd = { version = "=0.17.2", default-features = false, features = ["common-controls-v6"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 specta = { version = "=2.0.0-rc.25", features = ["derive", "function"] }

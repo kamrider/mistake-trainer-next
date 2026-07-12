@@ -5,6 +5,12 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 /** Commands */
 export const commands = {
 	systemStatus: () => __TAURI_INVOKE<AppResult<SystemStatus>>("system_status"),
+	libraryContext: () => __TAURI_INVOKE<AppResult<LibraryContext>>("library_context"),
+	problemList: (status: ProblemStatusFilter) => __TAURI_INVOKE<AppResult<ProblemSummary[]>>("problem_list", { status }),
+	captureCommit: (input: CaptureCommitInput) => __TAURI_INVOKE<AppResult<CaptureCommitOutput>>("capture_commit", { input }),
+	captureList: () => __TAURI_INVOKE<AppResult<StagedAsset[]>>("capture_list"),
+	captureRemove: (stagedAssetId: string) => __TAURI_INVOKE<AppResult<boolean>>("capture_remove", { stagedAssetId }),
+	captureSelect: (role: string) => __TAURI_INVOKE<AppResult<StagedAsset[]>>("capture_select", { role }),
 };
 
 /* Types */
@@ -16,6 +22,44 @@ export type AppError = {
 };
 
 export type AppResult<T> = ({ ok: boolean; data: T }) & { error?: never } | ({ ok: boolean; error: AppError }) & { data?: never };
+
+export type CaptureCommitInput = {
+	subject: string,
+	note: string,
+	stagedAssetIds: string[],
+};
+
+export type CaptureCommitOutput = {
+	problemId: string,
+};
+
+export type LibraryContext = {
+	profileId: string,
+	profileName: string,
+	storage: string,
+};
+
+export type ProblemStatusFilter = "active" | "archived" | "trashed";
+
+export type ProblemSummary = {
+	id: string,
+	subject: string,
+	note: string,
+	status: string,
+	questionAssetCount: number,
+	answerAssetCount: number,
+	updatedAtUtcMs: number | null,
+};
+
+export type StagedAsset = {
+	id: string,
+	fileName: string,
+	role: string,
+	mediaType: string,
+	byteLength: number | null,
+	width: number,
+	height: number,
+};
 
 export type SystemStatus = {
 	appVersion: string,

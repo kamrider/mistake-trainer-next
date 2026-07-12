@@ -4,7 +4,8 @@ use std::{
 };
 
 use rusqlite::{Connection, OptionalExtension, params};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use specta::Type;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -57,6 +58,43 @@ pub struct Problem {
     pub revision: i64,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ProblemStatusFilter {
+    Active,
+    Archived,
+    Trashed,
+}
+
+impl ProblemStatusFilter {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Archived => "archived",
+            Self::Trashed => "trashed",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ProblemListQuery {
+    pub account_id: String,
+    pub profile_id: String,
+    pub status: ProblemStatusFilter,
+}
+
+#[derive(Clone, Debug, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ProblemSummary {
+    pub id: String,
+    pub subject: String,
+    pub note: String,
+    pub status: String,
+    pub question_asset_count: i32,
+    pub answer_asset_count: i32,
+    pub updated_at_utc_ms: f64,
+}
+
 #[derive(Debug, Error)]
 pub enum ProblemUseCaseError {
     #[error("learner profile was not found for this account")]
@@ -71,6 +109,40 @@ pub enum ProblemUseCaseError {
     File(#[from] std::io::Error),
     #[error("problem outbox serialization failed")]
     Serialization(#[from] serde_json::Error),
+}
+
+pub fn list_problem_summaries(
+    connection: &Connection,
+    query: ProblemListQuery,
+) -> Result<Vec<ProblemSummary>, ProblemUseCaseError> {
+    let mut statement = connection.prepare(
+        "SELECT p.id, p.subject, p.note, p.status,
+                SUM(CASE WHEN pa.role = 'question' THEN 1 ELSE 0 END),
+                SUM(CASE WHEN pa.role = 'answer' THEN 1 ELSE 0 END),
+                p.updated_at_utc_ms
+         FROM problems p
+         LEFT JOIN problem_assets pa ON pa.problem_id = p.id
+         WHERE p.account_id = ?1 AND p.profile_id = ?2 AND p.status = ?3
+         GROUP BY p.id
+         ORDER BY p.updated_at_utc_ms DESC, p.id DESC",
+    )?;
+    let rows = statement.query_map(
+        params![query.account_id, query.profile_id, query.status.as_str()],
+        |row| {
+            Ok(ProblemSummary {
+                id: row.get(0)?,
+                subject: row.get(1)?,
+                note: row.get(2)?,
+                status: row.get(3)?,
+                question_asset_count: row.get(4)?,
+                answer_asset_count: row.get(5)?,
+                updated_at_utc_ms: row.get(6)?,
+            })
+        },
+    )?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(ProblemUseCaseError::Database)
 }
 
 #[derive(Serialize)]

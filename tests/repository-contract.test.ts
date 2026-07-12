@@ -31,4 +31,13 @@ describe('repository quality gates', () => {
       expect(workflow).toContain(command)
     }
   })
+
+  it('builds the frontend before compiling Tauri test targets', () => {
+    const workflow = readFileSync(resolve('.github/workflows/ci.yml'), 'utf8')
+    const frontendBuild = workflow.indexOf('- run: pnpm build')
+    const rustTests = workflow.indexOf('cargo test --all-targets')
+
+    expect(frontendBuild).toBeGreaterThan(-1)
+    expect(rustTests).toBeGreaterThan(frontendBuild)
+  })
 })
