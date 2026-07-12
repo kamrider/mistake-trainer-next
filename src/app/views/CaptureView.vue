@@ -13,9 +13,14 @@ const errorMessage = ref('')
 
 async function refresh() {
   if (!isTauri()) return
-  const result = normalizeAppResult(await commands.captureList())
-  if (result.ok) assets.value = result.data
-  else errorMessage.value = result.error.userMessage
+  try {
+    const result = normalizeAppResult(await commands.captureList())
+    if (result.ok) assets.value = result.data
+    else errorMessage.value = result.error.userMessage
+  }
+  catch {
+    errorMessage.value = '暂存区连接中断，请重新打开应用后再试。'
+  }
 }
 
 async function select(role: 'question' | 'answer') {
@@ -24,27 +29,44 @@ async function select(role: 'question' | 'answer') {
     errorMessage.value = '请在 Windows 桌面应用中选择图片；浏览器预览只展示界面。'
     return
   }
-  const result = normalizeAppResult(await commands.captureSelect(role))
-  if (result.ok) await refresh()
-  else errorMessage.value = result.error.userMessage
+  try {
+    const result = normalizeAppResult(await commands.captureSelect(role))
+    if (result.ok) await refresh()
+    else errorMessage.value = result.error.userMessage
+  }
+  catch {
+    errorMessage.value = '没有完成图片选择，请稍后重试。'
+  }
 }
 
 async function remove(stagedAssetId: string) {
   errorMessage.value = ''
   if (!isTauri()) return
-  const result = normalizeAppResult(await commands.captureRemove(stagedAssetId))
-  if (result.ok) await refresh()
-  else errorMessage.value = result.error.userMessage
+  try {
+    const result = normalizeAppResult(await commands.captureRemove(stagedAssetId))
+    if (result.ok) await refresh()
+    else errorMessage.value = result.error.userMessage
+  }
+  catch {
+    errorMessage.value = '没有移除这张图片，请稍后重试。'
+  }
 }
 
 async function commit(input: CaptureCommitInput) {
   if (!isTauri()) return
   saving.value = true
   errorMessage.value = ''
-  const result = normalizeAppResult(await commands.captureCommit(input))
-  saving.value = false
-  if (result.ok) await router.push({ name: 'library' })
-  else errorMessage.value = result.error.userMessage
+  try {
+    const result = normalizeAppResult(await commands.captureCommit(input))
+    if (result.ok) await router.push({ name: 'library' })
+    else errorMessage.value = result.error.userMessage
+  }
+  catch {
+    errorMessage.value = '保存连接中断，原图片仍在暂存区，可以直接重试。'
+  }
+  finally {
+    saving.value = false
+  }
 }
 
 onMounted(refresh)

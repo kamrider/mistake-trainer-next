@@ -1,7 +1,8 @@
 use serde::Serialize;
 use specta::Type;
+use tauri::State;
 
-use crate::application::result::AppResult;
+use crate::{application::result::AppResult, infrastructure::runtime::LibraryRuntime};
 
 #[derive(Clone, Debug, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -11,18 +12,18 @@ pub struct SystemStatus {
     sync: &'static str,
 }
 
-pub fn status_for_version(app_version: &str) -> AppResult<SystemStatus> {
+pub fn status_for_version(app_version: &str, storage: &'static str) -> AppResult<SystemStatus> {
     AppResult::success(SystemStatus {
         app_version: app_version.to_owned(),
-        storage: "locked",
+        storage,
         sync: "offline",
     })
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn system_status() -> AppResult<SystemStatus> {
-    status_for_version(env!("CARGO_PKG_VERSION"))
+pub fn system_status(_state: State<'_, LibraryRuntime>) -> AppResult<SystemStatus> {
+    status_for_version(env!("CARGO_PKG_VERSION"), "ready")
 }
 
 pub fn specta_commands<R: tauri::Runtime>() -> tauri_specta::Commands<R> {

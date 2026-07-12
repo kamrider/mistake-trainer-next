@@ -3,8 +3,8 @@ use serde_json::json;
 
 #[test]
 fn system_status_uses_the_public_app_result_shape() {
-    let value =
-        serde_json::to_value(status_for_version("0.1.0")).expect("serialize command result");
+    let value = serde_json::to_value(status_for_version("0.1.0", "ready"))
+        .expect("serialize command result");
 
     assert_eq!(
         value,
@@ -12,7 +12,7 @@ fn system_status_uses_the_public_app_result_shape() {
             "ok": true,
             "data": {
                 "appVersion": "0.1.0",
-                "storage": "locked",
+                "storage": "ready",
                 "sync": "offline"
             }
         })

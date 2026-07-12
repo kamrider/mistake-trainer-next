@@ -6,7 +6,9 @@ use specta::Type;
 use thiserror::Error;
 use uuid::Uuid;
 
-const MAX_FILE_BYTES: usize = 25 * 1024 * 1024;
+pub const MAX_CAPTURE_FILE_BYTES: u64 = 25 * 1024 * 1024;
+const MAX_STAGED_ASSETS: usize = 40;
+const MAX_STAGED_BYTES: usize = 100 * 1024 * 1024;
 const MAX_DIMENSION: u32 = 12_000;
 const MAX_PIXELS: u64 = 80_000_000;
 
@@ -26,60 +28,98 @@ pub struct StagedAsset {
 pub(crate) struct StagedCapture {
     pub summary: StagedAsset,
     pub bytes: Vec<u8>,
+    sequence: u64,
 }
 
 #[derive(Debug, Default)]
 pub struct CaptureStage {
-    assets: Mutex<HashMap<String, StagedCapture>>,
+    state: Mutex<CaptureStageState>,
+}
+
+#[derive(Debug, Default)]
+struct CaptureStageState {
+    assets: HashMap<String, StagedCapture>,
+    next_sequence: u64,
+    total_bytes: usize,
+}
+
+pub(crate) enum ConsumeError<E> {
+    Stage(StageCaptureError),
+    Operation(E),
 }
 
 impl CaptureStage {
     pub fn len(&self) -> Result<usize, StageCaptureError> {
-        self.assets
+        self.state
             .lock()
-            .map(|assets| assets.len())
+            .map(|state| state.assets.len())
             .map_err(|_| StageCaptureError::StageUnavailable)
     }
 
     pub fn summaries(&self) -> Result<Vec<StagedAsset>, StageCaptureError> {
-        let assets = self
-            .assets
+        let state = self
+            .state
             .lock()
             .map_err(|_| StageCaptureError::StageUnavailable)?;
-        let mut summaries = assets
-            .values()
+        let mut captures = state.assets.values().collect::<Vec<_>>();
+        captures.sort_by_key(|capture| capture.sequence);
+        Ok(captures
+            .into_iter()
             .map(|capture| capture.summary.clone())
-            .collect::<Vec<_>>();
-        summaries.sort_by(|left, right| left.id.cmp(&right.id));
-        Ok(summaries)
+            .collect())
     }
 
     pub fn remove(&self, id: &str) -> Result<bool, StageCaptureError> {
-        self.assets
-            .lock()
-            .map(|mut assets| assets.remove(id).is_some())
-            .map_err(|_| StageCaptureError::StageUnavailable)
-    }
-
-    pub(crate) fn captures(&self, ids: &[String]) -> Result<Vec<StagedCapture>, StageCaptureError> {
-        let assets = self
-            .assets
+        let mut state = self
+            .state
             .lock()
             .map_err(|_| StageCaptureError::StageUnavailable)?;
-        ids.iter()
-            .map(|id| assets.get(id).cloned().ok_or(StageCaptureError::NotFound))
-            .collect()
+        let removed = state.assets.remove(id);
+        if let Some(capture) = &removed {
+            state.total_bytes = state.total_bytes.saturating_sub(capture.bytes.len());
+        }
+        Ok(removed.is_some())
     }
 
     pub(crate) fn remove_many(&self, ids: &[String]) -> Result<(), StageCaptureError> {
-        let mut assets = self
-            .assets
+        let mut state = self
+            .state
             .lock()
             .map_err(|_| StageCaptureError::StageUnavailable)?;
         for id in ids {
-            assets.remove(id);
+            if let Some(capture) = state.assets.remove(id) {
+                state.total_bytes = state.total_bytes.saturating_sub(capture.bytes.len());
+            }
         }
         Ok(())
+    }
+
+    pub(crate) fn consume_on_success<T, E>(
+        &self,
+        ids: &[String],
+        operation: impl FnOnce(Vec<StagedCapture>) -> Result<T, E>,
+    ) -> Result<T, ConsumeError<E>> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ConsumeError::Stage(StageCaptureError::StageUnavailable))?;
+        let captures = ids
+            .iter()
+            .map(|id| {
+                state
+                    .assets
+                    .get(id)
+                    .cloned()
+                    .ok_or(ConsumeError::Stage(StageCaptureError::NotFound))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let output = operation(captures).map_err(ConsumeError::Operation)?;
+        for id in ids {
+            if let Some(capture) = state.assets.remove(id) {
+                state.total_bytes = state.total_bytes.saturating_sub(capture.bytes.len());
+            }
+        }
+        Ok(output)
     }
 }
 
@@ -93,6 +133,8 @@ pub enum StageCaptureError {
     StageUnavailable,
     #[error("staged image was not found")]
     NotFound,
+    #[error("capture staging capacity has been reached")]
+    StageFull,
 }
 
 pub fn stage_image_bytes(
@@ -104,7 +146,7 @@ pub fn stage_image_bytes(
     if !matches!(role, "question" | "answer") {
         return Err(StageCaptureError::InvalidRole);
     }
-    if bytes.is_empty() || bytes.len() > MAX_FILE_BYTES {
+    if bytes.is_empty() || u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_CAPTURE_FILE_BYTES {
         return Err(StageCaptureError::InvalidImage);
     }
 
@@ -145,16 +187,25 @@ pub fn stage_image_bytes(
         width,
         height,
     };
-    stage
-        .assets
+    let mut state = stage
+        .state
         .lock()
-        .map_err(|_| StageCaptureError::StageUnavailable)?
-        .insert(
-            summary.id.clone(),
-            StagedCapture {
-                summary: summary.clone(),
-                bytes,
-            },
-        );
+        .map_err(|_| StageCaptureError::StageUnavailable)?;
+    if state.assets.len() >= MAX_STAGED_ASSETS
+        || state.total_bytes.saturating_add(bytes.len()) > MAX_STAGED_BYTES
+    {
+        return Err(StageCaptureError::StageFull);
+    }
+    let sequence = state.next_sequence;
+    state.next_sequence = state.next_sequence.saturating_add(1);
+    state.total_bytes = state.total_bytes.saturating_add(bytes.len());
+    state.assets.insert(
+        summary.id.clone(),
+        StagedCapture {
+            summary: summary.clone(),
+            bytes,
+            sequence,
+        },
+    );
     Ok(summary)
 }

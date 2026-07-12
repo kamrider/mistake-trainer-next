@@ -7,7 +7,10 @@ use crate::{
     application::result::AppResult,
     infrastructure::runtime::LibraryRuntime,
     modules::{
-        capture::{CaptureStage, StageCaptureError, StagedAsset, stage_image_bytes},
+        capture::{
+            CaptureStage, ConsumeError, MAX_CAPTURE_FILE_BYTES, StageCaptureError, StagedAsset,
+            stage_image_bytes,
+        },
         problems::{AssetRole, CaptureAsset, CreateProblem, create_problem},
     },
 };
@@ -24,6 +27,12 @@ pub struct CaptureCommitInput {
 #[serde(rename_all = "camelCase")]
 pub struct CaptureCommitOutput {
     pub problem_id: String,
+}
+
+enum CommitAttemptError {
+    MissingPair,
+    LibraryUnavailable,
+    PersistFailed,
 }
 
 pub fn capture_list_for(stage: &CaptureStage) -> AppResult<Vec<StagedAsset>> {
@@ -54,74 +63,85 @@ pub fn capture_commit_for(
     input: CaptureCommitInput,
     now_utc_ms: i64,
 ) -> AppResult<CaptureCommitOutput> {
-    let captures = match stage.captures(&input.staged_asset_ids) {
-        Ok(captures) => captures,
-        Err(StageCaptureError::NotFound) => {
+    let CaptureCommitInput {
+        subject,
+        note,
+        staged_asset_ids,
+    } = input;
+    let result = stage.consume_on_success(&staged_asset_ids, |captures| {
+        let has_question = captures
+            .iter()
+            .any(|capture| capture.summary.role == "question");
+        let has_answer = captures
+            .iter()
+            .any(|capture| capture.summary.role == "answer");
+        if !has_question || !has_answer {
+            return Err(CommitAttemptError::MissingPair);
+        }
+
+        let assets = captures
+            .into_iter()
+            .map(|capture| CaptureAsset {
+                role: if capture.summary.role == "question" {
+                    AssetRole::Question
+                } else {
+                    AssetRole::Answer
+                },
+                media_type: capture.summary.media_type,
+                bytes: capture.bytes,
+            })
+            .collect();
+        let mut connection = runtime
+            .connection
+            .lock()
+            .map_err(|_| CommitAttemptError::LibraryUnavailable)?;
+        create_problem(
+            &mut connection,
+            &runtime.blob_root,
+            &runtime.asset_key,
+            CreateProblem {
+                account_id: runtime.account_id().to_owned(),
+                profile_id: runtime.profile_id().to_owned(),
+                subject,
+                note,
+                assets,
+                now_utc_ms,
+            },
+        )
+        .map_err(|_| CommitAttemptError::PersistFailed)
+    });
+
+    let problem = match result {
+        Ok(problem) => problem,
+        Err(ConsumeError::Stage(StageCaptureError::NotFound)) => {
             return capture_error(
                 "staged_asset_missing",
                 "有图片已经不在暂存区，请重新选择后再保存。",
                 false,
             );
         }
-        Err(_) => {
+        Err(ConsumeError::Stage(_)) => {
             return capture_error(
                 "capture_stage_unavailable",
                 "图片暂存区暂时不可用，请重新打开应用后再试。",
                 true,
             );
         }
-    };
-    let has_question = captures
-        .iter()
-        .any(|capture| capture.summary.role == "question");
-    let has_answer = captures
-        .iter()
-        .any(|capture| capture.summary.role == "answer");
-    if !has_question || !has_answer {
-        return capture_error(
-            "question_and_answer_required",
-            "请至少添加一张题图和一张答案图。",
-            false,
-        );
-    }
-
-    let assets = captures
-        .into_iter()
-        .map(|capture| CaptureAsset {
-            role: if capture.summary.role == "question" {
-                AssetRole::Question
-            } else {
-                AssetRole::Answer
-            },
-            media_type: capture.summary.media_type,
-            bytes: capture.bytes,
-        })
-        .collect();
-    let mut connection = match runtime.connection.lock() {
-        Ok(connection) => connection,
-        Err(_) => {
+        Err(ConsumeError::Operation(CommitAttemptError::MissingPair)) => {
+            return capture_error(
+                "question_and_answer_required",
+                "请至少添加一张题图和一张答案图。",
+                false,
+            );
+        }
+        Err(ConsumeError::Operation(CommitAttemptError::LibraryUnavailable)) => {
             return capture_error(
                 "library_lock_poisoned",
                 "本地题库暂时不可写入，请重新打开应用后再试。",
                 true,
             );
         }
-    };
-    let problem = match create_problem(
-        &mut connection,
-        &runtime.blob_root,
-        &runtime.asset_key,
-        CreateProblem {
-            account_id: runtime.account_id().to_owned(),
-            profile_id: runtime.profile_id().to_owned(),
-            subject: input.subject,
-            note: input.note,
-            assets,
-            now_utc_ms,
-        },
-    ) {
-        Ok(problem) => problem,
-        Err(_) => {
+        Err(ConsumeError::Operation(CommitAttemptError::PersistFailed)) => {
             return capture_error(
                 "capture_commit_failed",
                 "错题没有保存成功，原图片仍在暂存区，可以稍后重试。",
@@ -129,14 +149,6 @@ pub fn capture_commit_for(
             );
         }
     };
-    drop(connection);
-    if stage.remove_many(&input.staged_asset_ids).is_err() {
-        return capture_error(
-            "capture_cleanup_failed",
-            "错题已保存，但暂存区未能清理；重新打开页面即可。",
-            false,
-        );
-    }
     AppResult::success(CaptureCommitOutput {
         problem_id: problem.id,
     })
@@ -192,6 +204,21 @@ pub fn capture_select(stage: State<'_, CaptureStage>, role: String) -> AppResult
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("image");
+        let file_too_large = std::fs::metadata(&path)
+            .map(|metadata| metadata.len() > MAX_CAPTURE_FILE_BYTES)
+            .unwrap_or(false);
+        if file_too_large {
+            let ids = selected
+                .iter()
+                .map(|asset: &StagedAsset| asset.id.clone())
+                .collect::<Vec<_>>();
+            let _ = stage.remove_many(&ids);
+            return capture_error(
+                "capture_image_too_large",
+                "单张图片不能超过 25 MB，请压缩后再选择。",
+                false,
+            );
+        }
         let bytes = match std::fs::read(&path) {
             Ok(bytes) => bytes,
             Err(_) => {
@@ -209,6 +236,18 @@ pub fn capture_select(stage: State<'_, CaptureStage>, role: String) -> AppResult
         };
         match stage_image_bytes(&stage, file_name, &role, bytes) {
             Ok(asset) => selected.push(asset),
+            Err(StageCaptureError::StageFull) => {
+                let ids = selected
+                    .iter()
+                    .map(|asset: &StagedAsset| asset.id.clone())
+                    .collect::<Vec<_>>();
+                let _ = stage.remove_many(&ids);
+                return capture_error(
+                    "capture_stage_full",
+                    "暂存区最多保留 40 张或 100 MB 图片，请先保存或移除一部分。",
+                    false,
+                );
+            }
             Err(_) => {
                 let ids = selected
                     .iter()

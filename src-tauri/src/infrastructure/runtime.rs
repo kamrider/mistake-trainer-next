@@ -86,6 +86,8 @@ pub enum RuntimeError {
     InvalidAssetKey,
     #[error("stored account identity is malformed")]
     InvalidAccountId,
+    #[error("an existing library is missing required secure credentials")]
+    MissingCredentials,
     #[error("local data directory could not be created")]
     File(#[from] std::io::Error),
     #[error("encrypted database could not be opened")]
@@ -103,6 +105,7 @@ impl RuntimeError {
             Self::InvalidDatabaseKey => "invalid_database_key",
             Self::InvalidAssetKey => "invalid_asset_key",
             Self::InvalidAccountId => "invalid_account_id",
+            Self::MissingCredentials => "library_credentials_missing",
             Self::File(_) => "data_directory_failed",
             Self::Database(_) => "database_open_failed",
             Self::Profile(_) => "profile_initialize_failed",
@@ -116,17 +119,22 @@ pub fn initialize_local_library(
     secrets: &dyn SecretStore,
     now_utc_ms: i64,
 ) -> Result<LibraryRuntime, RuntimeError> {
-    let asset_key_hex = load_or_create_secret(secrets, ASSET_KEY, random_key_hex)?;
+    let database_path = root.join("library.db");
+    let existing_library = database_path.exists() || root.join("assets").exists();
+    let asset_key_hex = load_required_secret(secrets, ASSET_KEY, existing_library, random_key_hex)?;
     let asset_key = decode_key(&asset_key_hex).ok_or(RuntimeError::InvalidAssetKey)?;
-    let database_key = load_or_create_secret(secrets, DATABASE_KEY, random_key_hex)?;
+    let database_key =
+        load_required_secret(secrets, DATABASE_KEY, existing_library, random_key_hex)?;
     if decode_key(&database_key).is_none() {
         return Err(RuntimeError::InvalidDatabaseKey);
     }
-    let account_id = load_or_create_secret(secrets, ACCOUNT_ID, || Uuid::now_v7().to_string())?;
+    let account_id = load_required_secret(secrets, ACCOUNT_ID, existing_library, || {
+        Uuid::now_v7().to_string()
+    })?;
     Uuid::parse_str(&account_id).map_err(|_| RuntimeError::InvalidAccountId)?;
 
     std::fs::create_dir_all(root)?;
-    let mut connection = open_encrypted_database(&root.join("library.db"), &database_key)?;
+    let mut connection = open_encrypted_database(&database_path, &database_key)?;
     run_migrations(&mut connection)?;
     let existing_profile = connection
         .query_row(
@@ -160,13 +168,17 @@ pub fn initialize_local_library(
     })
 }
 
-fn load_or_create_secret(
+fn load_required_secret(
     secrets: &dyn SecretStore,
     name: &str,
+    existing_library: bool,
     create: impl FnOnce() -> String,
 ) -> Result<String, RuntimeError> {
     if let Some(value) = secrets.get(name).map_err(RuntimeError::SecretStore)? {
         return Ok(value);
+    }
+    if existing_library {
+        return Err(RuntimeError::MissingCredentials);
     }
     let value = create();
     secrets

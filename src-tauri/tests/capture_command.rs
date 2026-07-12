@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Mutex};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Barrier, Mutex},
+};
 
 use mistake_trainer_next_lib::{
     commands::capture::{CaptureCommitInput, capture_commit_for},
@@ -90,4 +93,56 @@ fn unknown_staged_ids_leave_the_database_and_existing_stage_unchanged() {
         .query_row("SELECT COUNT(*) FROM problems", [], |row| row.get(0))
         .expect("problem count");
     assert_eq!(problem_count, 0);
+}
+
+#[test]
+fn concurrent_commits_can_consume_a_staged_pair_only_once() {
+    let directory = tempdir().expect("tempdir");
+    let runtime = Arc::new(
+        initialize_local_library(directory.path(), &MemorySecretStore::default(), 100)
+            .expect("runtime"),
+    );
+    let stage = Arc::new(CaptureStage::default());
+    let question = stage_image_bytes(&stage, "question.png", "question", VALID_PNG.to_vec())
+        .expect("question");
+    let answer =
+        stage_image_bytes(&stage, "answer.png", "answer", VALID_PNG.to_vec()).expect("answer");
+    let ids = vec![question.id, answer.id];
+    let barrier = Arc::new(Barrier::new(2));
+    let handles = (0..2)
+        .map(|index| {
+            let runtime = Arc::clone(&runtime);
+            let stage = Arc::clone(&stage);
+            let barrier = Arc::clone(&barrier);
+            let ids = ids.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                serde_json::to_value(capture_commit_for(
+                    &runtime,
+                    &stage,
+                    CaptureCommitInput {
+                        subject: "数学".to_owned(),
+                        note: String::new(),
+                        staged_asset_ids: ids,
+                    },
+                    200 + index,
+                ))
+                .expect("result json")
+            })
+        })
+        .collect::<Vec<_>>();
+    let results = handles
+        .into_iter()
+        .map(|handle| handle.join().expect("commit thread"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        results.iter().filter(|result| result["ok"] == true).count(),
+        1
+    );
+    let connection = runtime.connection.lock().unwrap();
+    let problem_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM problems", [], |row| row.get(0))
+        .expect("problem count");
+    assert_eq!(problem_count, 1);
 }

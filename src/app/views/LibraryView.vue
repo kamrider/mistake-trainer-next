@@ -12,26 +12,38 @@ const status = ref<ProblemStatusFilter>('active')
 const problems = ref<ProblemSummary[]>([])
 const loading = ref(true)
 const errorMessage = ref('')
+let refreshSequence = 0
 
 async function refresh() {
+  const sequence = ++refreshSequence
   loading.value = true
   errorMessage.value = ''
-  if (!isTauri()) {
-    problems.value = []
-    loading.value = false
-    return
-  }
+  try {
+    if (!isTauri()) {
+      problems.value = []
+      return
+    }
 
-  const [contextResult, problemResult] = await Promise.all([
-    commands.libraryContext(),
-    commands.problemList(status.value),
-  ])
-  const context = normalizeAppResult(contextResult)
-  const list = normalizeAppResult(problemResult)
-  if (context.ok) profileName.value = context.data.profileName
-  if (list.ok) problems.value = list.data
-  else errorMessage.value = list.error.userMessage
-  loading.value = false
+    const requestedStatus = status.value
+    const [contextResult, problemResult] = await Promise.all([
+      commands.libraryContext(),
+      commands.problemList(requestedStatus),
+    ])
+    if (sequence !== refreshSequence) return
+    const context = normalizeAppResult(contextResult)
+    const list = normalizeAppResult(problemResult)
+    if (context.ok) profileName.value = context.data.profileName
+    if (list.ok) problems.value = list.data
+    else errorMessage.value = list.error.userMessage
+  }
+  catch {
+    if (sequence === refreshSequence) {
+      errorMessage.value = '题库连接中断，请重新打开应用后再试。'
+    }
+  }
+  finally {
+    if (sequence === refreshSequence) loading.value = false
+  }
 }
 
 async function changeStatus(nextStatus: ProblemStatusFilter) {

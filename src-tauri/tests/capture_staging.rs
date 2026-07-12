@@ -54,3 +54,23 @@ fn staged_assets_can_be_listed_and_removed_without_file_paths() {
     assert!(!stage.remove(&asset.id).expect("remove twice"));
     assert_eq!(stage.len().expect("stage lock"), 0);
 }
+
+#[test]
+fn staging_has_a_process_memory_safety_budget() {
+    let stage = CaptureStage::default();
+    for index in 0..40 {
+        stage_image_bytes(
+            &stage,
+            &format!("question-{index}.png"),
+            "question",
+            VALID_PNG.to_vec(),
+        )
+        .expect("within item budget");
+    }
+
+    let error = stage_image_bytes(&stage, "one-too-many.png", "question", VALID_PNG.to_vec())
+        .expect_err("stage must reject unbounded item growth");
+
+    assert!(matches!(error, StageCaptureError::StageFull));
+    assert_eq!(stage.len().expect("stage lock"), 40);
+}

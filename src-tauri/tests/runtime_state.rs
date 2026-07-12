@@ -59,3 +59,21 @@ fn malformed_stored_asset_key_is_rejected_without_overwriting_it() {
         Some("not-a-32-byte-hex-key")
     );
 }
+
+#[test]
+fn existing_library_with_a_missing_secret_fails_closed_without_replacement() {
+    for missing_name in ["asset-key", "database-key", "account-id"] {
+        let directory = tempdir().expect("tempdir");
+        let secrets = MemorySecretStore::default();
+        let runtime = initialize_local_library(directory.path(), &secrets, 100)
+            .expect("initialize local library");
+        drop(runtime);
+        secrets.values.lock().unwrap().remove(missing_name);
+
+        let error = initialize_local_library(directory.path(), &secrets, 200)
+            .expect_err("existing data must never create replacement credentials");
+
+        assert_eq!(error.code(), "library_credentials_missing");
+        assert_eq!(secrets.get(missing_name).unwrap(), None);
+    }
+}
