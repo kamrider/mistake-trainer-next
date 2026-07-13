@@ -8,8 +8,9 @@ use crate::{
     infrastructure::runtime::LibraryRuntime,
     modules::exports::{
         CreateExportSnapshot, DeletedExportSnapshotSummary, ExportLayout, ExportSnapshotSummary,
-        create_export_snapshot, delete_export_snapshot, list_deleted_export_snapshots,
-        list_export_snapshots, restore_export_snapshot,
+        GeneratedExportSummary, create_export_snapshot, delete_export_snapshot,
+        list_deleted_export_snapshots, list_export_snapshots, prepare_export,
+        restore_export_snapshot, write_prepared_export,
     },
 };
 
@@ -77,6 +78,41 @@ pub fn export_create(
 
 #[tauri::command]
 #[specta::specta]
+pub fn export_generate(
+    state: State<'_, LibraryRuntime>,
+    snapshot_id: String,
+) -> AppResult<Option<GeneratedExportSummary>> {
+    let Some(destination) = rfd::FileDialog::new()
+        .set_title("选择导出文件夹")
+        .pick_folder()
+    else {
+        return AppResult::success(None);
+    };
+    let prepared = {
+        let connection = match state.connection.lock() {
+            Ok(connection) => connection,
+            Err(_) => return export_error("library_lock_poisoned"),
+        };
+        match prepare_export(
+            &connection,
+            &state.blob_root,
+            &state.asset_key,
+            state.account_id(),
+            state.profile_id(),
+            &snapshot_id,
+        ) {
+            Ok(prepared) => prepared,
+            Err(_) => return export_error("export_generate_failed"),
+        }
+    };
+    match write_prepared_export(prepared, &destination) {
+        Ok(summary) => AppResult::success(Some(summary)),
+        Err(_) => export_error("export_generate_failed"),
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn export_delete(state: State<'_, LibraryRuntime>, snapshot_id: String) -> AppResult<bool> {
     let mut connection = match state.connection.lock() {
         Ok(connection) => connection,
@@ -121,9 +157,16 @@ fn current_utc_millis() -> i64 {
 }
 
 fn export_error<T>(code: &str) -> AppResult<T> {
+    let user_message = match code {
+        "export_generate_failed" => "文件没有生成，请检查目标目录空间与权限后重试。",
+        "export_restore_failed" => "导出快照没有恢复，请稍后重试。",
+        "export_delete_failed" => "导出快照没有删除，请稍后重试。",
+        "export_list_failed" | "export_trash_list_failed" => "导出快照没有读取成功，请稍后重试。",
+        _ => "导出快照没有保存，请检查选题后重试。",
+    };
     AppResult::failure(
         code,
-        "导出快照没有保存，请检查选题后重试。",
+        user_message,
         true,
         Uuid::now_v7().to_string(),
     )

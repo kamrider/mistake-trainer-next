@@ -31,6 +31,7 @@ fn builder_for<R: tauri::Runtime>() -> Builder<R> {
         commands::exports::export_list,
         commands::exports::export_trash_list,
         commands::exports::export_create,
+        commands::exports::export_generate,
         commands::exports::export_delete,
         commands::exports::export_restore,
         commands::capture::capture_commit,

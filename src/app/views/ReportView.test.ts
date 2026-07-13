@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ReportView from './ReportView.vue'
 
 const api = vi.hoisted(() => ({
-  reportSummary: vi.fn(), exportList: vi.fn(), exportTrashList: vi.fn(), problemList: vi.fn(), exportCreate: vi.fn(), exportDelete: vi.fn(), exportRestore: vi.fn(),
+  reportSummary: vi.fn(), exportList: vi.fn(), exportTrashList: vi.fn(), problemList: vi.fn(), exportCreate: vi.fn(), exportGenerate: vi.fn(), exportDelete: vi.fn(), exportRestore: vi.fn(),
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => true }))
@@ -28,6 +28,9 @@ describe('ReportView', () => {
       id: 'snapshot-1', title: '本周复盘', problemCount: 1, layout: 'question_answer_alternating', createdAtUtcMs: 1,
     } })
     api.exportDelete.mockResolvedValue({ ok: true, data: true })
+    api.exportGenerate.mockResolvedValue({ ok: true, data: {
+      snapshotId: 'snapshot-1', outputName: '本周复盘.docx', problemCount: 1, layout: 'question_answer_alternating',
+    } })
     api.exportRestore.mockResolvedValue({ ok: true, data: true })
   })
 
@@ -65,5 +68,19 @@ describe('ReportView', () => {
 
     await waitFor(() => expect(api.exportRestore).toHaveBeenCalledWith('snapshot-deleted'))
     expect(screen.queryByRole('button', { name: '恢复导出快照：上月复盘' })).not.toBeInTheDocument()
+  })
+
+  it('generates a real file from a saved snapshot and reports only its safe file name', async () => {
+    const user = userEvent.setup()
+    api.exportList.mockResolvedValue({ ok: true, data: [{
+      id: 'snapshot-1', title: '本周复盘', problemCount: 1,
+      layout: 'question_answer_alternating', createdAtUtcMs: 1,
+    }] })
+    render(ReportView)
+
+    await user.click(await screen.findByRole('button', { name: '生成导出文件：本周复盘' }))
+
+    await waitFor(() => expect(api.exportGenerate).toHaveBeenCalledWith('snapshot-1'))
+    expect(screen.getByRole('status')).toHaveTextContent('已生成 本周复盘.docx，共 1 题。')
   })
 })

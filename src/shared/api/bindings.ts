@@ -17,6 +17,7 @@ export const commands = {
 	exportList: () => __TAURI_INVOKE<AppResult<ExportSnapshotSummary[]>>("export_list"),
 	exportTrashList: () => __TAURI_INVOKE<AppResult<DeletedExportSnapshotSummary[]>>("export_trash_list"),
 	exportCreate: (input: ExportCreateInput) => __TAURI_INVOKE<AppResult<ExportSnapshotSummary>>("export_create", { input }),
+	exportGenerate: (snapshotId: string) => __TAURI_INVOKE<AppResult<GeneratedExportSummary | null>>("export_generate", { snapshotId }),
 	exportDelete: (snapshotId: string) => __TAURI_INVOKE<AppResult<boolean>>("export_delete", { snapshotId }),
 	exportRestore: (snapshotId: string) => __TAURI_INVOKE<AppResult<boolean>>("export_restore", { snapshotId }),
 	captureCommit: (input: CaptureCommitInput) => __TAURI_INVOKE<AppResult<CaptureCommitOutput>>("capture_commit", { input }),
@@ -74,6 +75,13 @@ export type ExportSnapshotSummary = {
 };
 
 export type FsrsRating = "again" | "hard" | "good" | "easy";
+
+export type GeneratedExportSummary = {
+	snapshotId: string,
+	outputName: string,
+	problemCount: number,
+	layout: ExportLayout,
+};
 
 export type LibraryContext = {
 	profileId: string,

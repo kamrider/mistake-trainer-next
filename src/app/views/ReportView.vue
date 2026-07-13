@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { isTauri } from '@tauri-apps/api/core'
-import { ChartNoAxesColumnIncreasing, Clock3, FileArchive, Flame, RotateCcw, Trash2 } from '@lucide/vue'
+import { ChartNoAxesColumnIncreasing, Clock3, FileArchive, FileDown, Flame, RotateCcw, Trash2 } from '@lucide/vue'
 import { computed, onMounted, ref } from 'vue'
 import { commands, type DeletedExportSnapshotSummary, type ExportLayout, type ExportSnapshotSummary, type ProblemSummary, type ReportSummary } from '../../shared/api/bindings'
 import { normalizeAppResult } from '../../shared/api/normalize-result'
@@ -15,7 +15,9 @@ const problemsLoaded = ref(false)
 const loading = ref(true)
 const saving = ref(false)
 const deletingId = ref('')
+const generatingId = ref('')
 const restoringId = ref('')
+const generatedMessage = ref('')
 const errorMessage = ref('')
 const title = ref(`错题复盘 ${new Date().toLocaleDateString('zh-CN')}`)
 const layout = ref<ExportLayout>('question_answer_alternating')
@@ -131,6 +133,28 @@ async function deleteSnapshot(snapshotId: string) {
   }
   finally {
     deletingId.value = ''
+  }
+}
+
+async function generateSnapshot(snapshot: ExportSnapshotSummary) {
+  generatingId.value = snapshot.id
+  generatedMessage.value = ''
+  errorMessage.value = ''
+  try {
+    const result = normalizeAppResult(await commands.exportGenerate(snapshot.id))
+    if (!result.ok) {
+      errorMessage.value = result.error.userMessage
+      return
+    }
+    if (result.data) {
+      generatedMessage.value = `已生成 ${result.data.outputName}，共 ${result.data.problemCount} 题。`
+    }
+  }
+  catch {
+    errorMessage.value = '文件没有生成，请检查目标目录空间与权限后重试。'
+  }
+  finally {
+    generatingId.value = ''
   }
 }
 
@@ -255,7 +279,7 @@ onMounted(load)
 
     <section class="paper-panel export-panel">
       <header>
-        <div><p>导出中心</p><h2>保存选题与排版配置</h2><span>当前仅保存同步快照；DOCX 与原图文件生成尚未接入。</span></div><FileArchive
+        <div><p>导出中心</p><h2>保存配置并生成学习材料</h2><span>先保存可同步快照，再由 Rust 解密并原子生成 DOCX 或原图文件夹。</span></div><FileArchive
           :size="24"
           aria-hidden="true"
         />
@@ -286,6 +310,13 @@ onMounted(load)
           {{ saving ? '正在保存…' : `保存 ${Math.min(activeProblems.length, 500)} 道活动题配置` }}
         </button>
       </div>
+      <p
+        v-if="generatedMessage"
+        class="success-banner"
+        role="status"
+      >
+        {{ generatedMessage }}
+      </p>
       <ul
         v-if="snapshots.length"
         class="snapshot-list"
@@ -295,21 +326,31 @@ onMounted(load)
           :key="snapshot.id"
         >
           <span><strong>{{ snapshot.title }}</strong><small>{{ snapshot.problemCount }} 题 · {{ layoutLabel(snapshot.layout) }} · {{ snapshotDate(snapshot.createdAtUtcMs) }}</small></span>
-          <button
-            type="button"
-            :aria-label="`删除导出快照：${snapshot.title}`"
-            :disabled="deletingId === snapshot.id"
-            @click="deleteSnapshot(snapshot.id)"
-          >
-            <Trash2 :size="16" />
-          </button>
+          <div class="snapshot-actions">
+            <button
+              type="button"
+              :aria-label="`生成导出文件：${snapshot.title}`"
+              :disabled="Boolean(generatingId)"
+              @click="generateSnapshot(snapshot)"
+            >
+              <FileDown :size="16" />{{ generatingId === snapshot.id ? '生成中…' : '生成文件' }}
+            </button>
+            <button
+              type="button"
+              :aria-label="`删除导出快照：${snapshot.title}`"
+              :disabled="deletingId === snapshot.id"
+              @click="deleteSnapshot(snapshot.id)"
+            >
+              <Trash2 :size="16" />
+            </button>
+          </div>
         </li>
       </ul>
       <p
         v-else-if="snapshotsLoaded"
         class="empty-copy"
       >
-        尚无导出快照。这里保存的是选题与排版配置，不会在当前版本生成文件。
+        尚无导出快照。保存一次选题与排版配置后，即可生成 DOCX 或原图文件夹。
       </p>
       <p
         v-else
@@ -382,7 +423,8 @@ button { display: inline-flex; gap: 7px; align-items: center; justify-content: c
 fieldset { display: flex; flex-wrap: wrap; gap: 10px 16px; margin: 0; padding: 0; border: 0; } legend { width: 100%; margin-bottom: 7px; } fieldset label { display: flex; gap: 5px; align-items: center; }
 .export-form > button { min-height: 40px; padding: 0 15px; color: white; border-color: var(--green-deep); background: var(--green-deep); }
 .snapshot-list { display: grid; gap: 8px; margin: 18px 0 0; padding: 0; list-style: none; } .snapshot-list li { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--line); }
-.snapshot-list strong, .snapshot-list small { display: block; } .snapshot-list small { margin-top: 4px; color: var(--ink-muted); } .snapshot-list button { width: 34px; height: 34px; color: var(--cinnabar); }
+.snapshot-list strong, .snapshot-list small { display: block; } .snapshot-list small { margin-top: 4px; color: var(--ink-muted); } .snapshot-list button { min-width: 34px; height: 34px; padding: 0 9px; color: var(--cinnabar); } .snapshot-actions { display: flex; gap: 7px; align-items: center; } .snapshot-actions button:first-child { color: var(--green-deep); }
+.success-banner { margin: 16px 0 0; padding: 11px 13px; border: 1px solid rgba(33,51,45,.16); border-radius: 10px; background: var(--green-soft); color: var(--green-deep); font-size: 12px; }
 .trash-panel { margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--line); } .trash-panel > header { display: flex; justify-content: space-between; gap: 16px; align-items: end; } .trash-panel h3 { margin: 0; color: var(--green-deep); font-family: Georgia,'Microsoft YaHei',serif; } .trash-panel header p, .trash-panel header span { margin: 0 0 5px; color: var(--ink-muted); font-size: 11px; } .trash-list button { width: auto; padding: 7px 10px; color: var(--green-deep); }
 .empty-copy { color: var(--ink-muted); font-size: 13px; }
 @media (max-width: 1050px) { .metric-grid { grid-template-columns: repeat(2,1fr); } .report-grid { grid-template-columns: 1fr; } .export-form { grid-template-columns: 1fr; } }
