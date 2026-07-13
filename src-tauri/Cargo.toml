@@ -13,6 +13,7 @@ crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
 aes-gcm = "0.10"
+base64 = "0.22"
 getrandom = "0.3"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 keyring = { version = "=4.1.4", default-features = false, features = ["v1", "windows-native-keyring-store"] }

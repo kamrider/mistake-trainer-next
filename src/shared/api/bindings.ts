@@ -6,7 +6,12 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 export const commands = {
 	systemStatus: () => __TAURI_INVOKE<AppResult<SystemStatus>>("system_status"),
 	libraryContext: () => __TAURI_INVOKE<AppResult<LibraryContext>>("library_context"),
-	problemList: (status: ProblemStatusFilter) => __TAURI_INVOKE<AppResult<ProblemSummary[]>>("problem_list", { status }),
+	problemDetail: (problemId: string) => __TAURI_INVOKE<AppResult<ProblemDetail>>("problem_detail", { problemId }),
+	problemChangeStatus: (input: ProblemStatusInput) => __TAURI_INVOKE<AppResult<number>>("problem_change_status", { input }),
+	problemList: (status: ProblemStatusFilter, search: string | null) => __TAURI_INVOKE<AppResult<ProblemSummary[]>>("problem_list", { status, search }),
+	problemUpdate: (input: ProblemUpdateInput) => __TAURI_INVOKE<AppResult<boolean>>("problem_update", { input }),
+	reviewQueue: (problemId: string | null) => __TAURI_INVOKE<AppResult<ReviewQueueItem[]>>("review_queue", { problemId }),
+	reviewSubmit: (input: ReviewSubmitInput) => __TAURI_INVOKE<AppResult<ReviewSubmission>>("review_submit", { input }),
 	captureCommit: (input: CaptureCommitInput) => __TAURI_INVOKE<AppResult<CaptureCommitOutput>>("capture_commit", { input }),
 	captureList: () => __TAURI_INVOKE<AppResult<StagedAsset[]>>("capture_list"),
 	captureRemove: (stagedAssetId: string) => __TAURI_INVOKE<AppResult<boolean>>("capture_remove", { stagedAssetId }),
@@ -33,13 +38,37 @@ export type CaptureCommitOutput = {
 	problemId: string,
 };
 
+export type FsrsRating = "again" | "hard" | "good" | "easy";
+
 export type LibraryContext = {
 	profileId: string,
 	profileName: string,
 	storage: string,
 };
 
+export type ProblemAssetPreview = {
+	id: string,
+	role: string,
+	position: number,
+	mediaType: string,
+	dataUrl: string,
+};
+
+export type ProblemDetail = {
+	id: string,
+	subject: string,
+	note: string,
+	status: string,
+	updatedAtUtcMs: number | null,
+	assets: ProblemAssetPreview[],
+};
+
 export type ProblemStatusFilter = "active" | "archived" | "trashed";
+
+export type ProblemStatusInput = {
+	problemIds: string[],
+	targetStatus: ProblemStatusFilter,
+};
 
 export type ProblemSummary = {
 	id: string,
@@ -49,6 +78,35 @@ export type ProblemSummary = {
 	questionAssetCount: number,
 	answerAssetCount: number,
 	updatedAtUtcMs: number | null,
+};
+
+export type ProblemUpdateInput = {
+	problemId: string,
+	subject: string,
+	note: string,
+};
+
+export type ReviewQueueItem = {
+	problemId: string,
+	dueAtUtcMs: number | null,
+	reviewCount: number,
+};
+
+export type ReviewSubmission = {
+	eventId: string,
+	problemId: string,
+	rating: string,
+	dueAtUtcMs: number | null,
+	stability: number | null,
+	difficulty: number | null,
+	algorithmVersion: string,
+	parameterVersion: string,
+};
+
+export type ReviewSubmitInput = {
+	problemId: string,
+	rating: FsrsRating,
+	durationMs: number,
 };
 
 export type StagedAsset = {

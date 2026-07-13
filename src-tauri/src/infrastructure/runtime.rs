@@ -16,6 +16,7 @@ use crate::{
 const DATABASE_KEY: &str = "database-key";
 const ASSET_KEY: &str = "asset-key";
 const ACCOUNT_ID: &str = "account-id";
+const DEVICE_ID: &str = "device-id";
 
 pub trait SecretStore {
     fn get(&self, name: &str) -> Result<Option<String>, String>;
@@ -58,6 +59,7 @@ pub struct LibraryRuntime {
     pub blob_root: PathBuf,
     pub asset_key: [u8; 32],
     account_id: String,
+    device_id: String,
     profile_id: String,
     profile_name: String,
 }
@@ -69,6 +71,10 @@ impl LibraryRuntime {
 
     pub fn profile_id(&self) -> &str {
         &self.profile_id
+    }
+
+    pub fn device_id(&self) -> &str {
+        &self.device_id
     }
 
     pub fn profile_name(&self) -> &str {
@@ -86,6 +92,8 @@ pub enum RuntimeError {
     InvalidAssetKey,
     #[error("stored account identity is malformed")]
     InvalidAccountId,
+    #[error("stored device identity is malformed")]
+    InvalidDeviceId,
     #[error("an existing library is missing required secure credentials")]
     MissingCredentials,
     #[error("local data directory could not be created")]
@@ -105,6 +113,7 @@ impl RuntimeError {
             Self::InvalidDatabaseKey => "invalid_database_key",
             Self::InvalidAssetKey => "invalid_asset_key",
             Self::InvalidAccountId => "invalid_account_id",
+            Self::InvalidDeviceId => "invalid_device_id",
             Self::MissingCredentials => "library_credentials_missing",
             Self::File(_) => "data_directory_failed",
             Self::Database(_) => "database_open_failed",
@@ -132,6 +141,17 @@ pub fn initialize_local_library(
         Uuid::now_v7().to_string()
     })?;
     Uuid::parse_str(&account_id).map_err(|_| RuntimeError::InvalidAccountId)?;
+    let device_id = match secrets.get(DEVICE_ID).map_err(RuntimeError::SecretStore)? {
+        Some(value) => value,
+        None => {
+            let value = Uuid::now_v7().to_string();
+            secrets
+                .set(DEVICE_ID, &value)
+                .map_err(RuntimeError::SecretStore)?;
+            value
+        }
+    };
+    Uuid::parse_str(&device_id).map_err(|_| RuntimeError::InvalidDeviceId)?;
 
     std::fs::create_dir_all(root)?;
     let mut connection = open_encrypted_database(&database_path, &database_key)?;
@@ -163,6 +183,7 @@ pub fn initialize_local_library(
         blob_root: root.join("assets"),
         asset_key,
         account_id,
+        device_id,
         profile_id,
         profile_name,
     })

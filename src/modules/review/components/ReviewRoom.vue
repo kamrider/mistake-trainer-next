@@ -1,29 +1,49 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ArrowLeft, Eye, RotateCcw, Sparkles } from '@lucide/vue'
-import type { SimpleRating } from '../domain/rating'
+import type { FsrsRating, SimpleRating } from '../domain/rating'
 
 const props = defineProps<{
   subject: string
   prompt: string
   answer: string
+  questionImages?: string[]
+  answerImages?: string[]
   current: number
   total: number
+  submitting?: boolean
 }>()
 
 const emit = defineEmits<{
   exit: []
-  rate: [rating: SimpleRating]
+  rate: [rating: SimpleRating | FsrsRating]
 }>()
 
 const revealed = ref(false)
+const advanced = ref(false)
 const progress = computed(() => `${Math.round((props.current / props.total) * 100)}%`)
 
-watch(() => props.prompt, () => { revealed.value = false })
+watch(() => props.current, () => { revealed.value = false })
 
-function submit(rating: SimpleRating) {
+function submit(rating: SimpleRating | FsrsRating) {
+  if (props.submitting) return
   emit('rate', rating)
 }
+
+function handleShortcut(event: KeyboardEvent) {
+  if (!revealed.value || props.submitting) return
+  if (!advanced.value) {
+    if (event.key === '1') submit('forgot')
+    if (event.key === '2') submit('remembered')
+    return
+  }
+  const ratings: Record<string, FsrsRating> = { 1: 'again', 2: 'hard', 3: 'good', 4: 'easy' }
+  const rating = ratings[event.key]
+  if (rating) submit(rating)
+}
+
+onMounted(() => window.addEventListener('keydown', handleShortcut))
+onBeforeUnmount(() => window.removeEventListener('keydown', handleShortcut))
 </script>
 
 <template>
@@ -64,7 +84,20 @@ function submit(rating: SimpleRating) {
       </h1>
       <article class="problem-paper">
         <span class="paper-label">题目</span>
-        <p>{{ prompt }}</p>
+        <div
+          v-if="questionImages?.length"
+          class="review-images"
+        >
+          <img
+            v-for="(source, index) in questionImages"
+            :key="source"
+            :src="source"
+            :alt="`训练题图 ${index + 1}`"
+          >
+        </div>
+        <p v-else>
+          {{ prompt }}
+        </p>
       </article>
 
       <button
@@ -88,15 +121,40 @@ function submit(rating: SimpleRating) {
           aria-live="polite"
         >
           <span class="paper-label">答案</span>
-          <p>{{ answer }}</p>
+          <div
+            v-if="answerImages?.length"
+            class="review-images"
+          >
+            <img
+              v-for="(source, index) in answerImages"
+              :key="source"
+              :src="source"
+              :alt="`训练答案图 ${index + 1}`"
+            >
+          </div>
+          <p v-else>
+            {{ answer }}
+          </p>
         </article>
         <p class="rating-prompt">
           这次你记得怎么样？
         </p>
-        <div class="rating-actions">
+        <button
+          type="button"
+          class="mode-toggle"
+          :aria-pressed="advanced"
+          @click="advanced = !advanced"
+        >
+          {{ advanced ? '返回双按钮' : '使用 FSRS 四档评分' }}
+        </button>
+        <div
+          v-if="!advanced"
+          class="rating-actions"
+        >
           <button
             class="forgot-action"
             type="button"
+            :disabled="submitting"
             @click="submit('forgot')"
           >
             <RotateCcw :size="18" />忘记了
@@ -104,12 +162,46 @@ function submit(rating: SimpleRating) {
           <button
             class="remember-action"
             type="button"
+            :disabled="submitting"
             @click="submit('remembered')"
           >
             <Sparkles :size="18" />记住了
           </button>
         </div>
-        <small class="shortcut-hint">快捷键：1 忘记 · 2 记住</small>
+        <div
+          v-else
+          class="rating-actions advanced-actions"
+        >
+          <button
+            type="button"
+            :disabled="submitting"
+            @click="submit('again')"
+          >
+            没想起来
+          </button>
+          <button
+            type="button"
+            :disabled="submitting"
+            @click="submit('hard')"
+          >
+            有点吃力
+          </button>
+          <button
+            type="button"
+            :disabled="submitting"
+            @click="submit('good')"
+          >
+            记住了
+          </button>
+          <button
+            type="button"
+            :disabled="submitting"
+            @click="submit('easy')"
+          >
+            太简单了
+          </button>
+        </div>
+        <small class="shortcut-hint">{{ advanced ? '快捷键：1 重来 · 2 困难 · 3 良好 · 4 简单' : '快捷键：1 忘记 · 2 记住' }}</small>
       </div>
     </section>
   </main>
@@ -128,6 +220,8 @@ function submit(rating: SimpleRating) {
 h1 { margin: 11px 0 28px; font-size: clamp(29px,4vw,43px); font-weight: 650; letter-spacing: -.04em; }
 .problem-paper, .answer-paper { position: relative; min-height: 190px; padding: 42px; border: 1px solid var(--line); border-radius: 3px 18px 18px 18px; background: var(--paper-raised); box-shadow: var(--shadow-soft); text-align: left; }
 .problem-paper p, .answer-paper p { margin: 0; font-family: Georgia, "Microsoft YaHei UI", serif; font-size: clamp(20px,2.6vw,28px); line-height: 1.8; }
+.review-images { display: grid; gap: 12px; }
+.review-images img { display: block; width: 100%; max-height: 62vh; object-fit: contain; border-radius: 3px 12px 12px 12px; background: white; }
 .paper-label { position: absolute; top: 0; left: 0; padding: 7px 14px; color: var(--ink-muted); border-radius: 0 0 10px; background: var(--sand); font-size: 11px; font-weight: 700; letter-spacing: .12em; }
 .reveal-action { display: inline-flex; gap: 9px; align-items: center; min-height: 48px; margin-top: 26px; padding: 0 24px; color: var(--white); border: 0; border-radius: 999px; background: var(--green-deep); cursor: pointer; font-weight: 700; transition: transform var(--motion-feedback) var(--ease-standard); }
 .reveal-action:active, .rating-actions button:active { transform: scale(.985); }
@@ -135,10 +229,14 @@ h1 { margin: 11px 0 28px; font-size: clamp(29px,4vw,43px); font-weight: 650; let
 .answer-paper { min-height: 130px; border-color: rgba(185,88,63,.25); background: #fbf5ea; }
 .answer-paper .paper-label { color: #8b4634; background: #efd8cd; }
 .rating-prompt { margin: 26px 0 14px; color: var(--ink-muted); }
+.mode-toggle { margin: -5px 0 14px; padding: 4px 8px; color: var(--green-deep); border: 0; border-bottom: 1px solid currentColor; background: transparent; cursor: pointer; font-size: 12px; }
 .rating-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; max-width: 430px; margin: 0 auto; }
 .rating-actions button { display: inline-flex; gap: 9px; align-items: center; justify-content: center; min-height: 48px; border-radius: 999px; cursor: pointer; font-weight: 700; transition: transform var(--motion-feedback) var(--ease-standard), background var(--motion-standard) var(--ease-standard); }
+.rating-actions button:disabled { cursor: wait; opacity: .55; }
+.advanced-actions { grid-template-columns: repeat(4,1fr); max-width: 680px; }
+.advanced-actions button:nth-child(3), .advanced-actions button:nth-child(4) { color: var(--white); border: 1px solid var(--green-deep); background: var(--green-deep); }
 .forgot-action { border: 1px solid var(--line); background: rgba(255,253,247,.75); }
 .remember-action { color: var(--white); border: 1px solid var(--cinnabar); background: var(--cinnabar); }
 .shortcut-hint { display: block; margin-top: 14px; color: var(--ink-muted); }
-@media (max-width: 620px) { .review-room { padding: 18px 18px 36px; } .review-header { margin-bottom: 28px; } .problem-paper, .answer-paper { padding: 34px 24px 26px; } }
+@media (max-width: 620px) { .review-room { padding: 18px 18px 36px; } .review-header { margin-bottom: 28px; } .problem-paper, .answer-paper { padding: 34px 24px 26px; } .advanced-actions { grid-template-columns: 1fr 1fr; } }
 </style>

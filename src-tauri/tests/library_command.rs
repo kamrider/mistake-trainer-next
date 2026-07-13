@@ -51,8 +51,12 @@ fn commands_use_runtime_identity_instead_of_accepting_account_or_profile_ids() {
     .expect("problem");
 
     let context = serde_json::to_value(library_context_for(&runtime)).expect("context json");
-    let problems = serde_json::to_value(problem_list_for(&runtime, ProblemStatusFilter::Active))
-        .expect("problem list json");
+    let problems = serde_json::to_value(problem_list_for(
+        &runtime,
+        ProblemStatusFilter::Active,
+        None,
+    ))
+    .expect("problem list json");
 
     assert_eq!(context["ok"], true);
     assert_eq!(context["data"]["profileName"], "本机学习档案");

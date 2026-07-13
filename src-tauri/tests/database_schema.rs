@@ -21,6 +21,7 @@ fn initial_migration_creates_the_offline_first_core_schema() {
         "sync_operations",
         "sync_conflicts",
         "tombstones",
+        "review_sessions",
     ];
     for table in expected {
         let found: i64 = connection
@@ -36,7 +37,7 @@ fn initial_migration_creates_the_offline_first_core_schema() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        1
+        2
     );
 }
 

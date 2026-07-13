@@ -59,6 +59,7 @@ fn list_returns_only_the_selected_account_profile_with_asset_counts() {
             account_id: "account-1".to_owned(),
             profile_id: selected.id,
             status: ProblemStatusFilter::Active,
+            search: None,
         },
     )
     .expect("list problems");
@@ -115,6 +116,7 @@ fn list_status_filter_separates_active_and_archived_problems() {
             account_id: "account-1".to_owned(),
             profile_id: profile.id.clone(),
             status: ProblemStatusFilter::Active,
+            search: None,
         },
     )
     .expect("active list");
@@ -124,6 +126,7 @@ fn list_status_filter_separates_active_and_archived_problems() {
             account_id: "account-1".to_owned(),
             profile_id: profile.id,
             status: ProblemStatusFilter::Archived,
+            search: None,
         },
     )
     .expect("archived list");
@@ -142,6 +145,71 @@ fn list_status_filter_separates_active_and_archived_problems() {
             .collect::<Vec<_>>(),
         vec![archived]
     );
+}
+
+#[test]
+fn list_search_matches_subject_or_note_without_treating_wildcards_as_patterns() {
+    let directory = tempdir().expect("tempdir");
+    let mut connection =
+        open_encrypted_database(&directory.path().join("library.db"), "problem-search-key")
+            .expect("open database");
+    run_migrations(&mut connection).expect("migrate database");
+    let profile = create_profile(
+        &mut connection,
+        CreateProfile {
+            account_id: "account-1".to_owned(),
+            name: "小树".to_owned(),
+            now_utc_ms: 10,
+        },
+    )
+    .expect("profile");
+    let math = create_fixture_problem(
+        &mut connection,
+        directory.path(),
+        "account-1",
+        &profile.id,
+        "数学",
+        20,
+    );
+    connection
+        .execute(
+            "UPDATE problems SET note = '奇函数定义域' WHERE id = ?1",
+            [&math],
+        )
+        .expect("note fixture");
+    create_fixture_problem(
+        &mut connection,
+        directory.path(),
+        "account-1",
+        &profile.id,
+        "物理_实验",
+        30,
+    );
+
+    let by_note = list_problem_summaries(
+        &connection,
+        ProblemListQuery {
+            account_id: "account-1".to_owned(),
+            profile_id: profile.id.clone(),
+            status: ProblemStatusFilter::Active,
+            search: Some("定义域".to_owned()),
+        },
+    )
+    .expect("search by note");
+    let literal_wildcard = list_problem_summaries(
+        &connection,
+        ProblemListQuery {
+            account_id: "account-1".to_owned(),
+            profile_id: profile.id,
+            status: ProblemStatusFilter::Active,
+            search: Some("_".to_owned()),
+        },
+    )
+    .expect("literal wildcard search");
+
+    assert_eq!(by_note.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(), vec![math]);
+    assert_eq!(literal_wildcard.len(), 1);
+    assert_eq!(literal_wildcard[0].subject, "物理_实验");
 }
 
 fn create_fixture_problem(

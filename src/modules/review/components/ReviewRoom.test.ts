@@ -41,4 +41,63 @@ describe('ReviewRoom', () => {
 
     expect(view.emitted('rate')).toEqual([['forgot']])
   })
+
+  it('renders encrypted image previews and supports the remembered keyboard shortcut', async () => {
+    const user = userEvent.setup()
+    const view = render(ReviewRoom, {
+      props: {
+        subject: '物理',
+        prompt: '复盘提示',
+        answer: '答案提示',
+        questionImages: ['data:image/png;base64,AA=='],
+        answerImages: ['data:image/png;base64,AA=='],
+        current: 1,
+        total: 1,
+      },
+    })
+
+    expect(screen.getByRole('img', { name: '训练题图 1' })).toBeVisible()
+    expect(screen.queryByRole('img', { name: '训练答案图 1' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '显示答案' }))
+    expect(screen.getByRole('img', { name: '训练答案图 1' })).toBeVisible()
+    await user.keyboard('2')
+    expect(view.emitted('rate')).toEqual([['remembered']])
+  })
+
+  it('hides the answer again when consecutive problems share the same prompt', async () => {
+    const user = userEvent.setup()
+    const view = render(ReviewRoom, {
+      props: {
+        subject: '数学',
+        prompt: '相同的复盘提示',
+        answer: '相同题目的正确答案',
+        current: 1,
+        total: 2,
+      },
+    })
+
+    await user.click(screen.getByRole('button', { name: '显示答案' }))
+    expect(screen.getByText('相同题目的正确答案')).toBeVisible()
+    await view.rerender({ current: 2 })
+    expect(screen.queryByText('相同题目的正确答案')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '显示答案' })).toBeVisible()
+  })
+
+  it('supports opt-in four-rating FSRS controls', async () => {
+    const user = userEvent.setup()
+    const view = render(ReviewRoom, {
+      props: {
+        subject: '数学',
+        prompt: '题目',
+        answer: '答案',
+        current: 1,
+        total: 1,
+      },
+    })
+
+    await user.click(screen.getByRole('button', { name: '显示答案' }))
+    await user.click(screen.getByRole('button', { name: '使用 FSRS 四档评分' }))
+    await user.click(screen.getByRole('button', { name: '有点吃力' }))
+    expect(view.emitted('rate')).toEqual([['hard']])
+  })
 })

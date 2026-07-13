@@ -31,6 +31,7 @@ fn local_library_reopens_with_the_same_identity_profile_and_encryption_keys() {
         .expect("initialize first local library");
     let first_account = first.account_id().to_owned();
     let first_profile = first.profile_id().to_owned();
+    let first_device = first.device_id().to_owned();
     assert_eq!(first.profile_name(), "本机学习档案");
     drop(first);
 
@@ -39,7 +40,8 @@ fn local_library_reopens_with_the_same_identity_profile_and_encryption_keys() {
 
     assert_eq!(reopened.account_id(), first_account);
     assert_eq!(reopened.profile_id(), first_profile);
-    assert_eq!(secrets.values.lock().unwrap().len(), 3);
+    assert_eq!(reopened.device_id(), first_device);
+    assert_eq!(secrets.values.lock().unwrap().len(), 4);
 }
 
 #[test]

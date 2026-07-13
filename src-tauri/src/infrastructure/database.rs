@@ -35,11 +35,19 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
         0 => {
             let transaction = connection.transaction()?;
             transaction.execute_batch(include_str!("../../migrations/0001_initial.sql"))?;
-            transaction.pragma_update(None, "user_version", 1)?;
+            transaction.execute_batch(include_str!("../../migrations/0002_review_sessions.sql"))?;
+            transaction.pragma_update(None, "user_version", 2)?;
             transaction.commit()?;
             Ok(())
         }
-        1 => Ok(()),
+        1 => {
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(include_str!("../../migrations/0002_review_sessions.sql"))?;
+            transaction.pragma_update(None, "user_version", 2)?;
+            transaction.commit()?;
+            Ok(())
+        }
+        2 => Ok(()),
         newer => Err(DatabaseError::UnsupportedSchema(newer)),
     }
 }

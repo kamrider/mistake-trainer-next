@@ -10,6 +10,7 @@ describe('LibraryWorkspace', () => {
       props: {
         profileName: '本机学习档案',
         status: 'active',
+        search: '',
         loading: false,
         problems: [
           {
@@ -29,6 +30,8 @@ describe('LibraryWorkspace', () => {
     expect(screen.getByText('数学')).toBeVisible()
     expect(screen.getByText('2 张题图')).toBeVisible()
     expect(screen.getByText('1 张答案')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '查看详情' }))
+    expect(view.emitted('openDetail')).toEqual([['problem-1']])
     await user.click(screen.getByRole('button', { name: '录入新错题' }))
 
     expect(view.emitted('capture')).toHaveLength(1)
@@ -39,6 +42,7 @@ describe('LibraryWorkspace', () => {
       props: {
         profileName: '本机学习档案',
         status: 'active',
+        search: '',
         loading: false,
         problems: [],
       },
@@ -46,5 +50,24 @@ describe('LibraryWorkspace', () => {
 
     expect(screen.getByText('题库还是空的')).toBeVisible()
     expect(screen.getByRole('button', { name: '录入第一道错题' })).toBeVisible()
+  })
+
+  it('emits searchable text and explains an empty search result', async () => {
+    const user = userEvent.setup()
+    const view = render(LibraryWorkspace, {
+      props: {
+        profileName: '本机学习档案',
+        status: 'active',
+        search: '奇函数',
+        loading: false,
+        problems: [],
+      },
+    })
+
+    expect(screen.getByText('没有找到匹配的错题')).toBeVisible()
+    const input = screen.getByRole('searchbox', { name: '搜索题库' })
+    await user.clear(input)
+    await user.type(input, '物理')
+    expect(view.emitted('searchChange')?.at(-1)).toEqual(['物理'])
   })
 })
