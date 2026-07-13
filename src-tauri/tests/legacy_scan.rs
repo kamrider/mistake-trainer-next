@@ -43,6 +43,14 @@ fn scan_reports_missing_pairs_and_preserves_the_legacy_tree() {
             .iter()
             .any(|issue| issue.code == "missing_asset")
     );
+    let absolute_root = directory.path().to_string_lossy();
+    assert!(
+        report
+            .issues
+            .iter()
+            .all(|issue| !issue.detail.contains(absolute_root.as_ref())),
+        "preflight issues must not expose the selected absolute path"
+    );
     assert_eq!(tree_fingerprint(directory.path()), before);
 }
 
@@ -75,7 +83,7 @@ fn scan_rejects_relative_paths_that_escape_a_member_files_directory() {
     fs::create_dir_all(member.join("files")).expect("fixture directories");
     fs::write(
         member.join(".metadata.json"),
-        r#"{"version":"1.1","files":{"x":{"id":"x","relativePath":"../../secret.png","originalFileName":"x.png"}}}"#,
+        r#"{"version":"1.1","files":{"x":{"id":"C:\\Users\\private","relativePath":"../../secret.png","originalFileName":"x.png"}}}"#,
     )
     .expect("fixture metadata");
 
@@ -87,6 +95,102 @@ fn scan_rejects_relative_paths_that_escape_a_member_files_directory() {
             .issues
             .iter()
             .any(|issue| issue.code == "unsafe_relative_path")
+    );
+    assert!(
+        report
+            .issues
+            .iter()
+            .all(|issue| !issue.detail.contains("secret.png")),
+        "untrusted relative paths must not be echoed into the report"
+    );
+    assert!(
+        report
+            .issues
+            .iter()
+            .all(|issue| issue.record_id.as_deref() != Some("C:\\Users\\private")),
+        "path-like record identifiers must be redacted"
+    );
+}
+
+#[test]
+fn scan_rejects_oversized_metadata_before_reading_or_parsing_it() {
+    let directory = tempdir().expect("tempdir");
+    let member = directory.path().join("members").join("oversized");
+    fs::create_dir_all(member.join("files")).expect("fixture directories");
+    let metadata = fs::File::create(member.join(".metadata.json")).expect("fixture metadata");
+    metadata
+        .set_len(16 * 1024 * 1024 + 1)
+        .expect("sparse oversized metadata");
+
+    let report = scan_legacy_storage(directory.path()).expect("scan succeeds with report");
+
+    assert_eq!(report.metadata_records, 0);
+    assert!(
+        report
+            .issues
+            .iter()
+            .any(|issue| issue.code == "metadata_too_large")
+    );
+}
+
+#[test]
+fn scan_rejects_an_oversized_asset_without_counting_it_as_readable() {
+    let directory = tempdir().expect("tempdir");
+    let member = directory.path().join("members").join("large-asset");
+    let files = member.join("files");
+    fs::create_dir_all(&files).expect("fixture directories");
+    let asset = fs::File::create(files.join("large.png")).expect("fixture asset");
+    asset
+        .set_len(64 * 1024 * 1024 + 1)
+        .expect("sparse oversized asset");
+    fs::write(
+        member.join(".metadata.json"),
+        r#"{"files":{"large":{"id":"large","relativePath":"large.png"}}}"#,
+    )
+    .expect("fixture metadata");
+
+    let report = scan_legacy_storage(directory.path()).expect("scan succeeds with report");
+
+    assert_eq!(report.existing_assets, 0);
+    assert!(
+        report
+            .issues
+            .iter()
+            .any(|issue| issue.code == "asset_too_large")
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn scan_rejects_a_member_junction_that_resolves_outside_the_selected_root() {
+    use std::process::{Command, Stdio};
+
+    let directory = tempdir().expect("tempdir");
+    let outside = tempdir().expect("outside tempdir");
+    let members = directory.path().join("members");
+    fs::create_dir_all(&members).expect("members directory");
+    fs::write(outside.path().join(".metadata.json"), r#"{"files":{}}"#).expect("outside metadata");
+    let junction = members.join("escaped");
+    let status = Command::new("cmd")
+        .arg("/c")
+        .arg("mklink")
+        .arg("/J")
+        .arg(&junction)
+        .arg(outside.path())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("create junction fixture");
+    assert!(status.success(), "junction fixture must be created");
+
+    let report = scan_legacy_storage(directory.path()).expect("scan succeeds with report");
+
+    assert_eq!(report.members, 0);
+    assert!(
+        report
+            .issues
+            .iter()
+            .any(|issue| issue.code == "unsafe_member_path")
     );
 }
 

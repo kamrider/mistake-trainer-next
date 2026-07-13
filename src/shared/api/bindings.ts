@@ -10,6 +10,7 @@ export const commands = {
 	problemChangeStatus: (input: ProblemStatusInput) => __TAURI_INVOKE<AppResult<number>>("problem_change_status", { input }),
 	problemList: (status: ProblemStatusFilter, search: string | null) => __TAURI_INVOKE<AppResult<ProblemSummary[]>>("problem_list", { status, search }),
 	problemUpdate: (input: ProblemUpdateInput) => __TAURI_INVOKE<AppResult<boolean>>("problem_update", { input }),
+	legacyScan: () => __TAURI_INVOKE<AppResult<LegacyScanReport | null>>("legacy_scan"),
 	reviewQueue: (problemId: string | null) => __TAURI_INVOKE<AppResult<ReviewQueueItem[]>>("review_queue", { problemId }),
 	reviewSubmit: (input: ReviewSubmitInput) => __TAURI_INVOKE<AppResult<ReviewSubmission>>("review_submit", { input }),
 	reportSummary: () => __TAURI_INVOKE<AppResult<ReportSummary>>("report_summary"),
@@ -81,6 +82,24 @@ export type GeneratedExportSummary = {
 	outputName: string,
 	problemCount: number,
 	layout: ExportLayout,
+};
+
+export type LegacyIssue = {
+	code: string,
+	member: string,
+	recordId: string | null,
+	detail: string,
+};
+
+export type LegacyScanReport = {
+	members: number,
+	metadataRecords: number,
+	existingAssets: number,
+	trainingRecords: number,
+	frozenRecords: number,
+	duplicateAssets: number,
+	truncated: boolean,
+	issues: LegacyIssue[],
 };
 
 export type LibraryContext = {

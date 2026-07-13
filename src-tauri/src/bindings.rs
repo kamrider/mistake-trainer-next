@@ -24,6 +24,7 @@ fn builder_for<R: tauri::Runtime>() -> Builder<R> {
         commands::library::problem_change_status,
         commands::library::problem_list,
         commands::library::problem_update,
+        commands::legacy::legacy_scan,
         commands::review::review_queue,
         commands::review::review_submit,
         commands::insights::report_summary,
