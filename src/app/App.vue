@@ -29,13 +29,19 @@ onMounted(async () => {
         name="page"
         mode="out-in"
       >
-        <component :is="Component" />
+        <div
+          :key="route.fullPath"
+          class="route-page"
+        >
+          <component :is="Component" />
+        </div>
       </Transition>
     </RouterView>
   </AppShell>
 </template>
 
 <style>
+.route-page { min-width: 0; min-height: 100vh; }
 .page-enter-active, .page-leave-active { transition: opacity var(--motion-page) var(--ease-standard), transform var(--motion-page) var(--ease-standard); }
 .page-enter-from { opacity: 0; transform: translateY(8px); }
 .page-leave-to { opacity: 0; transform: translateY(-4px); }
