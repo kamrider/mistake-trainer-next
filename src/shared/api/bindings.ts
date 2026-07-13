@@ -12,6 +12,13 @@ export const commands = {
 	problemUpdate: (input: ProblemUpdateInput) => __TAURI_INVOKE<AppResult<boolean>>("problem_update", { input }),
 	reviewQueue: (problemId: string | null) => __TAURI_INVOKE<AppResult<ReviewQueueItem[]>>("review_queue", { problemId }),
 	reviewSubmit: (input: ReviewSubmitInput) => __TAURI_INVOKE<AppResult<ReviewSubmission>>("review_submit", { input }),
+	reportSummary: () => __TAURI_INVOKE<AppResult<ReportSummary>>("report_summary"),
+	settingsOverview: () => __TAURI_INVOKE<AppResult<SettingsOverview>>("settings_overview"),
+	exportList: () => __TAURI_INVOKE<AppResult<ExportSnapshotSummary[]>>("export_list"),
+	exportTrashList: () => __TAURI_INVOKE<AppResult<DeletedExportSnapshotSummary[]>>("export_trash_list"),
+	exportCreate: (input: ExportCreateInput) => __TAURI_INVOKE<AppResult<ExportSnapshotSummary>>("export_create", { input }),
+	exportDelete: (snapshotId: string) => __TAURI_INVOKE<AppResult<boolean>>("export_delete", { snapshotId }),
+	exportRestore: (snapshotId: string) => __TAURI_INVOKE<AppResult<boolean>>("export_restore", { snapshotId }),
 	captureCommit: (input: CaptureCommitInput) => __TAURI_INVOKE<AppResult<CaptureCommitOutput>>("capture_commit", { input }),
 	captureList: () => __TAURI_INVOKE<AppResult<StagedAsset[]>>("capture_list"),
 	captureRemove: (stagedAssetId: string) => __TAURI_INVOKE<AppResult<boolean>>("capture_remove", { stagedAssetId }),
@@ -36,6 +43,34 @@ export type CaptureCommitInput = {
 
 export type CaptureCommitOutput = {
 	problemId: string,
+};
+
+export type DailyActivity = {
+	dayStartUtcMs: number | null,
+	reviewCount: number,
+	durationMs: number | null,
+};
+
+export type DeletedExportSnapshotSummary = {
+	snapshot: ExportSnapshotSummary,
+	deletedAtUtcMs: number | null,
+	purgeAfterUtcMs: number | null,
+};
+
+export type ExportCreateInput = {
+	title: string,
+	problemIds: string[],
+	layout: ExportLayout,
+};
+
+export type ExportLayout = "question_answer_alternating" | "questions_then_answers" | "original_image_folder";
+
+export type ExportSnapshotSummary = {
+	id: string,
+	title: string,
+	problemCount: number,
+	layout: ExportLayout,
+	createdAtUtcMs: number | null,
 };
 
 export type FsrsRating = "again" | "hard" | "good" | "easy";
@@ -86,6 +121,17 @@ export type ProblemUpdateInput = {
 	note: string,
 };
 
+export type ReportSummary = {
+	activeProblemCount: number,
+	dueProblemCount: number,
+	reviewCount: number,
+	rememberedRate: number | null,
+	totalDurationMs: number | null,
+	currentStreakDays: number,
+	dailyActivity: DailyActivity[],
+	subjectActivity: SubjectActivity[],
+};
+
 export type ReviewQueueItem = {
 	problemId: string,
 	dueAtUtcMs: number | null,
@@ -109,6 +155,17 @@ export type ReviewSubmitInput = {
 	durationMs: number,
 };
 
+export type SettingsOverview = {
+	activeProblemCount: number,
+	archivedProblemCount: number,
+	trashedProblemCount: number,
+	pendingOperationCount: number,
+	failedOperationCount: number,
+	unresolvedConflictCount: number,
+	localEncryptionReady: boolean,
+	cloudSyncConfigured: boolean,
+};
+
 export type StagedAsset = {
 	id: string,
 	fileName: string,
@@ -117,6 +174,12 @@ export type StagedAsset = {
 	byteLength: number | null,
 	width: number,
 	height: number,
+};
+
+export type SubjectActivity = {
+	subject: string,
+	problemCount: number,
+	reviewCount: number,
 };
 
 export type SystemStatus = {

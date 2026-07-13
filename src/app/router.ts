@@ -27,22 +27,12 @@ export function createAppRouter(history: RouterHistory = createWebHashHistory())
       {
         path: '/report',
         name: 'report',
-        component: () => import('./views/PlaceholderView.vue'),
-        props: {
-          eyebrow: '学习报告',
-          title: '学习报告',
-          description: '从节奏和记住率中看见真实进步，而不是制造焦虑。',
-        },
+        component: () => import('./views/ReportView.vue'),
       },
       {
         path: '/settings',
         name: 'settings',
-        component: () => import('./views/PlaceholderView.vue'),
-        props: {
-          eyebrow: '设置',
-          title: '设置',
-          description: '管理档案、存储、同步、备份与可信设备。',
-        },
+        component: () => import('./views/SettingsView.vue'),
       },
     ],
   })
