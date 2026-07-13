@@ -18,6 +18,8 @@ pub fn export_typescript_bindings(path: &Path) -> Result<(), Box<dyn Error>> {
 
 fn builder_for<R: tauri::Runtime>() -> Builder<R> {
     Builder::<R>::new().commands(collect_commands![
+        commands::backup::backup_create,
+        commands::backup::backup_validate,
         commands::system::system_status,
         commands::library::library_context,
         commands::library::problem_detail,

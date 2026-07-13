@@ -4,6 +4,8 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 
 /** Commands */
 export const commands = {
+	backupCreate: () => typedError<AppResult<BackupSummary | null>, null>(__TAURI_INVOKE("backup_create")),
+	backupValidate: () => typedError<AppResult<BackupSummary | null>, null>(__TAURI_INVOKE("backup_validate")),
 	systemStatus: () => __TAURI_INVOKE<AppResult<SystemStatus>>("system_status"),
 	libraryContext: () => __TAURI_INVOKE<AppResult<LibraryContext>>("library_context"),
 	problemDetail: (problemId: string) => __TAURI_INVOKE<AppResult<ProblemDetail>>("problem_detail", { problemId }),
@@ -36,6 +38,15 @@ export type AppError = {
 };
 
 export type AppResult<T> = ({ ok: boolean; data: T }) & { error?: never } | ({ ok: boolean; error: AppError }) & { data?: never };
+
+export type BackupSummary = {
+	formatVersion: number,
+	createdAtUtcMs: number | null,
+	assetCount: number,
+	encryptedBytes: number | null,
+	label: string,
+	readyForRestore: boolean,
+};
 
 export type CaptureCommitInput = {
 	subject: string,
@@ -214,3 +225,13 @@ export type SystemStatus = {
 	storage: string,
 	sync: string,
 };
+
+/* Tauri Specta runtime */
+async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {
+    try {
+        return { status: "ok", data: await result };
+    } catch (e) {
+        if (e instanceof Error) throw e;
+        return { status: "error", error: e as any };
+    }
+}

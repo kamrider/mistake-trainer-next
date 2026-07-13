@@ -6,6 +6,8 @@ import SettingsView from './SettingsView.vue'
 const api = vi.hoisted(() => ({
   settingsOverview: vi.fn(),
   legacyScan: vi.fn(),
+  backupCreate: vi.fn(),
+  backupValidate: vi.fn(),
 }))
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => true }))
 vi.mock('../../shared/api/bindings', () => ({ commands: api }))
@@ -81,5 +83,57 @@ describe('SettingsView', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('原目录未被修改')
     expect(screen.queryByText('referenced image is missing')).not.toBeInTheDocument()
+  })
+
+  it('creates and validates encrypted backups without claiming data was restored', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 1, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    api.backupCreate.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      formatVersion: 1, createdAtUtcMs: 1_725_000_000_000, assetCount: 4,
+      encryptedBytes: 2_097_152, label: 'mistake-trainer-backup-safe', readyForRestore: false,
+    } } })
+    api.backupValidate.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      formatVersion: 1, createdAtUtcMs: 1_725_000_000_000, assetCount: 4,
+      encryptedBytes: 2_097_152, label: 'mistake-trainer-backup-safe', readyForRestore: true,
+    } } })
+    render(SettingsView)
+
+    await userEvent.click(await screen.findByRole('button', { name: /创建加密备份/ }))
+    expect(await screen.findByText('加密备份已创建')).toBeVisible()
+    expect(screen.getByText(/4 个资源 · 2.0 MB/)).toBeVisible()
+
+    await userEvent.click(screen.getByRole('button', { name: /验证恢复包/ }))
+    expect(await screen.findByText('完整性验证通过')).toBeVisible()
+    expect(screen.getByText(/可进入安全恢复暂存，尚未替换当前资料库/)).toBeVisible()
+    expect(screen.queryByText('已恢复')).not.toBeInTheDocument()
+  })
+
+  it('clears stale backup validation when a later package fails integrity checks', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    api.backupValidate
+      .mockResolvedValueOnce({ status: 'ok', data: { ok: true, data: {
+        formatVersion: 1, createdAtUtcMs: 1, assetCount: 1, encryptedBytes: 1024,
+        label: 'valid-package', readyForRestore: true,
+      } } })
+      .mockResolvedValueOnce({ status: 'ok', data: { ok: false, error: {
+        code: 'backup_validate_failed', userMessage: '备份包不完整或校验失败，未对现有资料库做任何修改。',
+        retryable: false, diagnosticId: 'diagnostic-1',
+      } } })
+    render(SettingsView)
+    const validateButton = await screen.findByRole('button', { name: /验证恢复包/ })
+
+    await userEvent.click(validateButton)
+    expect(await screen.findByText('valid-package')).toBeVisible()
+    await userEvent.click(validateButton)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('未对现有资料库做任何修改')
+    expect(screen.queryByText('valid-package')).not.toBeInTheDocument()
   })
 })

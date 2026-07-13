@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { isTauri } from '@tauri-apps/api/core'
-import { Archive, CloudOff, Database, LockKeyhole, RotateCcw, ShieldCheck, Trash2, TriangleAlert } from '@lucide/vue'
+import { Archive, ArchiveRestore, CloudOff, Database, FolderCheck, LockKeyhole, RotateCcw, ShieldCheck, Trash2, TriangleAlert } from '@lucide/vue'
 import { onMounted, ref } from 'vue'
-import { commands, type LegacyScanReport, type SettingsOverview } from '../../shared/api/bindings'
+import { commands, type BackupSummary, type LegacyScanReport, type SettingsOverview } from '../../shared/api/bindings'
 import { normalizeAppResult } from '../../shared/api/normalize-result'
 
 const overview = ref<SettingsOverview>()
@@ -10,6 +10,74 @@ const loading = ref(true)
 const errorMessage = ref('')
 const legacyReport = ref<LegacyScanReport>()
 const scanningLegacy = ref(false)
+const createdBackup = ref<BackupSummary>()
+const validatedBackup = ref<BackupSummary>()
+const creatingBackup = ref(false)
+const validatingBackup = ref(false)
+
+function formatBytes(bytes: number | null) {
+  if (bytes === null) return '未知大小'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
+function formatBackupTime(timestamp: number | null) {
+  if (timestamp === null) return '时间未知'
+  return new Intl.DateTimeFormat('zh-CN', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(timestamp))
+}
+
+async function createBackup() {
+  creatingBackup.value = true
+  errorMessage.value = ''
+  try {
+    const invocation = await commands.backupCreate()
+    if (invocation.status === 'error') throw new Error('backup command rejected')
+    const result = normalizeAppResult(invocation.data)
+    if (result.ok) {
+      if (result.data) createdBackup.value = result.data
+    }
+    else {
+      createdBackup.value = undefined
+      errorMessage.value = result.error.userMessage
+    }
+  }
+  catch {
+    createdBackup.value = undefined
+    errorMessage.value = '加密备份没有完成，现有资料库未被替换，请检查磁盘空间后重试。'
+  }
+  finally {
+    creatingBackup.value = false
+  }
+}
+
+async function validateBackup() {
+  validatingBackup.value = true
+  errorMessage.value = ''
+  try {
+    const invocation = await commands.backupValidate()
+    if (invocation.status === 'error') throw new Error('backup command rejected')
+    const result = normalizeAppResult(invocation.data)
+    if (result.ok) {
+      if (result.data) validatedBackup.value = result.data
+    }
+    else {
+      validatedBackup.value = undefined
+      errorMessage.value = result.error.userMessage
+    }
+  }
+  catch {
+    validatedBackup.value = undefined
+    errorMessage.value = '备份包没有验证成功；现有资料库未被修改，请稍后重试。'
+  }
+  finally {
+    validatingBackup.value = false
+  }
+}
 
 function issueLabel(code: string) {
   return {
@@ -135,6 +203,46 @@ onMounted(load)
       资料库状态没有读取成功，页面不会用默认数字代替真实状态。
     </p>
 
+    <section class="backup-panel">
+      <header>
+        <div><p>备份与恢复 · 本机加密</p><h2>先生成完整快照，再验证恢复资格</h2><span>数据库和原图密文会一起备份；清单仅记录密文哈希与大小，不包含题图明文、本机绝对路径或原始账户标识。</span></div>
+        <div class="backup-actions">
+          <button
+            type="button"
+            :disabled="creatingBackup || validatingBackup"
+            @click="createBackup"
+          >
+            <ArchiveRestore :size="16" />{{ creatingBackup ? '正在创建…' : '创建加密备份' }}
+          </button>
+          <button
+            type="button"
+            :disabled="creatingBackup || validatingBackup"
+            @click="validateBackup"
+          >
+            <FolderCheck :size="16" />{{ validatingBackup ? '正在验证…' : '验证恢复包' }}
+          </button>
+        </div>
+      </header>
+      <p class="backup-boundary">
+        当前备份依赖这台可信 Windows 设备保存的加密凭据；跨设备恢复将在账户同步阶段使用正式密钥封装接入，不使用弱口令派生方案。
+      </p>
+      <div
+        v-if="createdBackup || validatedBackup"
+        class="backup-results"
+      >
+        <article v-if="createdBackup">
+          <strong><ShieldCheck :size="16" />加密备份已创建</strong>
+          <span>{{ createdBackup.label }}</span>
+          <small>{{ formatBackupTime(createdBackup.createdAtUtcMs) }} · {{ createdBackup.assetCount }} 个资源 · {{ formatBytes(createdBackup.encryptedBytes) }}</small>
+        </article>
+        <article v-if="validatedBackup">
+          <strong><FolderCheck :size="16" />完整性验证通过</strong>
+          <span>{{ validatedBackup.label }}</span>
+          <small>{{ validatedBackup.assetCount }} 个资源 · {{ formatBytes(validatedBackup.encryptedBytes) }} · 可进入安全恢复暂存，尚未替换当前资料库</small>
+        </article>
+      </div>
+    </section>
+
     <section class="migration-panel">
       <header>
         <div><p>旧版迁移 · 只读预检</p><h2>先看清旧数据，再决定是否导入</h2><span>扫描只读取 metadata 与图片哈希，不会移动、重命名或删除旧目录中的任何文件。</span></div>
@@ -195,7 +303,7 @@ onMounted(load)
     <section class="roadmap-panel">
       <div><p>下一步接线</p><h2>备份、设备与同步会建立在同一套真实状态上</h2></div>
       <ol>
-        <li><strong>备份恢复</strong><span>加密数据库 + blob 清单，恢复前先完整校验。</span></li>
+        <li><strong>恢复暂存</strong><span>验证通过后复制到隔离区，并在重启前进行最后一次原子切换检查。</span></li>
         <li><strong>可信设备</strong><span>显示设备、最后同步时间，并支持撤销离线解锁。</span></li>
         <li><strong>冲突中心</strong><span>只呈现同字段真冲突；不同字段自动合并。</span></li>
       </ol>
@@ -210,11 +318,12 @@ h1, h2 { margin: 0; font-family: Georgia,'Microsoft YaHei',serif; color: var(--g
 button { display: inline-flex; gap: 7px; align-items: center; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper-raised); cursor: pointer; } button:disabled { opacity: .5; }
 .error-banner { padding: 12px; border-radius: 10px; background: rgba(185,88,63,.08); color: #843d2c; }
 .state-copy { padding: 28px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,253,247,.7); color: var(--ink-muted); text-align: center; }
-.settings-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 15px; }.setting-card, .roadmap-panel, .migration-panel { border: 1px solid var(--line); border-radius: 17px; background: rgba(255,253,247,.78); box-shadow: 0 16px 48px rgba(34,48,43,.05); }
+.settings-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 15px; }.setting-card, .roadmap-panel, .migration-panel, .backup-panel { border: 1px solid var(--line); border-radius: 17px; background: rgba(255,253,247,.78); box-shadow: 0 16px 48px rgba(34,48,43,.05); }
 .setting-card { position: relative; display: grid; grid-template-columns: 48px 1fr; gap: 14px; min-height: 150px; padding: 22px; }.setting-card .icon { display: grid; width: 44px; height: 44px; place-items: center; border-radius: 13px; background: var(--green-soft); color: var(--green-deep); }.setting-card p { margin: 1px 0 8px; color: var(--ink-muted); font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }.setting-card span { display: flex; gap: 5px; align-items: center; margin-top: 10px; color: var(--ink-muted); font-size: 12px; line-height: 1.7; }.setting-card > strong { position: absolute; right: 18px; bottom: 16px; display: flex; gap: 5px; align-items: center; color: #557263; font-size: 10px; }
 .encryption-card { border-color: rgba(33,51,45,.28); }.roadmap-panel { margin-top: 16px; padding: 26px; }.roadmap-panel ol { display: grid; grid-template-columns: repeat(3,1fr); gap: 12px; margin: 22px 0 0; padding: 0; list-style: none; }.roadmap-panel li { padding: 17px; border-radius: 12px; background: rgba(232,221,199,.34); }.roadmap-panel strong, .roadmap-panel span { display: block; }.roadmap-panel span { margin-top: 7px; color: var(--ink-muted); font-size: 12px; line-height: 1.65; }
 .migration-panel { margin-top: 16px; padding: 26px; }.migration-panel header { margin-bottom: 20px; }.migration-panel header span { max-width: 680px; }.migration-panel header button { flex: 0 0 auto; }.migration-stats { display: grid; grid-template-columns: repeat(6,minmax(0,1fr)); gap: 10px; margin: 0; }.migration-stats div { padding: 15px; border-radius: 12px; background: rgba(232,221,199,.34); }.migration-stats dt { color: var(--ink-muted); font-size: 11px; }.migration-stats dd { margin: 6px 0 0; color: var(--green-deep); font-family: Georgia,serif; font-size: 25px; font-weight: 700; }.preflight-note { margin: 16px 0 0; color: var(--ink-muted); font-size: 12px; }.preflight-note.ready { color: #557263; }.issue-list { display: grid; gap: 8px; max-height: 330px; margin: 16px 0 0; padding: 0; overflow: auto; list-style: none; }.issue-list li { display: grid; grid-template-columns: 108px minmax(120px,.6fr) 1fr; gap: 12px; align-items: start; padding: 12px 14px; border-radius: 10px; background: rgba(185,88,63,.06); }.issue-list strong { color: #843d2c; font-size: 12px; }.issue-list span, .issue-list small { color: var(--ink-muted); font-size: 11px; overflow-wrap: anywhere; }
+.backup-panel { margin-top: 16px; padding: 26px; }.backup-panel header { margin-bottom: 16px; }.backup-panel header p { margin: 0 0 8px; color: var(--cinnabar); font-size: 12px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }.backup-panel header span { max-width: 690px; }.backup-actions { display: flex; flex: 0 0 auto; gap: 8px; }.backup-boundary { margin: 0; padding: 13px 15px; border-left: 3px solid var(--cinnabar); border-radius: 7px; background: rgba(232,221,199,.28); color: var(--ink-muted); font-size: 12px; line-height: 1.7; }.backup-results { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; margin-top: 14px; }.backup-results article { display: grid; gap: 6px; padding: 15px; border-radius: 12px; background: rgba(33,51,45,.055); }.backup-results strong { display: flex; gap: 6px; align-items: center; color: #557263; font-size: 13px; }.backup-results span { color: var(--green-deep); font-size: 12px; overflow-wrap: anywhere; }.backup-results small { color: var(--ink-muted); line-height: 1.6; }
 .preflight-note.warning { color: #843d2c; font-weight: 700; }
 @media (max-width: 980px) { .migration-stats { grid-template-columns: repeat(3,minmax(0,1fr)); } }
-@media (max-width: 760px) { .settings-page { padding: 24px 16px 92px; } .settings-grid { grid-template-columns: 1fr; } .roadmap-panel ol, .migration-stats { grid-template-columns: 1fr; } .migration-panel header { flex-direction: column; }.issue-list li { grid-template-columns: 1fr; gap: 4px; } }
+@media (max-width: 760px) { .settings-page { padding: 24px 16px 92px; } .settings-grid { grid-template-columns: 1fr; } .roadmap-panel ol, .migration-stats, .backup-results { grid-template-columns: 1fr; } .migration-panel header, .backup-panel header { flex-direction: column; }.backup-actions { width: 100%; flex-direction: column; }.backup-actions button { justify-content: center; }.issue-list li { grid-template-columns: 1fr; gap: 4px; } }
 </style>

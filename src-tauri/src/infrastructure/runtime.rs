@@ -1,7 +1,7 @@
 use std::{
     fmt::Write as _,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 
 use rusqlite::{Connection, OptionalExtension};
@@ -53,15 +53,31 @@ impl SecretStore for KeyringSecretStore {
     }
 }
 
-#[derive(Debug)]
 pub struct LibraryRuntime {
-    pub connection: Mutex<Connection>,
+    pub connection: Arc<Mutex<Connection>>,
     pub blob_root: PathBuf,
     pub asset_key: [u8; 32],
+    database_key: String,
     account_id: String,
     device_id: String,
     profile_id: String,
     profile_name: String,
+}
+
+impl std::fmt::Debug for LibraryRuntime {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LibraryRuntime")
+            .field("connection", &"<encrypted database>")
+            .field("blob_root", &"<application storage>")
+            .field("asset_key", &"<redacted>")
+            .field("database_key", &"<redacted>")
+            .field("account_id", &"<redacted>")
+            .field("device_id", &"<redacted>")
+            .field("profile_id", &"<redacted>")
+            .field("profile_name", &"<redacted>")
+            .finish()
+    }
 }
 
 impl LibraryRuntime {
@@ -79,6 +95,10 @@ impl LibraryRuntime {
 
     pub fn profile_name(&self) -> &str {
         &self.profile_name
+    }
+
+    pub fn database_key(&self) -> &str {
+        &self.database_key
     }
 }
 
@@ -179,9 +199,10 @@ pub fn initialize_local_library(
     };
 
     Ok(LibraryRuntime {
-        connection: Mutex::new(connection),
+        connection: Arc::new(Mutex::new(connection)),
         blob_root: root.join("assets"),
         asset_key,
+        database_key,
         account_id,
         device_id,
         profile_id,

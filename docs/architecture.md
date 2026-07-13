@@ -39,12 +39,36 @@ Vue feature -> generated typed command client -> Tauri command -> Rust use case
   SQLite transaction.
 - A sign-out revokes remote credentials and locks the local database.
 - User-provided paths never cross a Tauri command boundary.
+- One encrypted local library belongs to exactly one account. Account switching opens a
+  different keyed library; backup creation and validation fail closed if foreign account
+  rows are present.
 
 ## Conflict policy
 
 Non-overlapping fields merge automatically. Review events form a set union. Assets
 deduplicate by hash. Same-field edits with a common base revision create a visible
 conflict. Deletes create tombstones retained for 30 days.
+
+## Backup boundary
+
+- A backup is a new directory containing one consistent SQLCipher snapshot, immutable
+  encrypted asset blobs, and a plaintext manifest of relative paths, sizes, ciphertext
+  hashes, schema version, creation time, and a one-way account hash.
+- Creation holds the database lock while taking the SQLite online backup and collecting
+  the immutable asset set. The package is written to a private temporary sibling and is
+  renamed into place only after the manifest is durable; failures remove only that new
+  temporary directory.
+- Validation opens the snapshot read-only and checks schema/account ownership, bounded
+  paths and sizes, ciphertext hashes, AES-GCM authentication, and plaintext length/hash
+  against the SQLCipher-protected asset rows. It never opens the live library for writes.
+- Version 1 packages rely on the current trusted Windows account/device credentials.
+  Cross-device restore requires the future auth-sync key envelope; it must not be added
+  by deriving encryption keys from a weak user password.
+- Validation means “eligible for restore staging”, not “restored”. Atomic staging and
+  next-start replacement are a separate operation and are not implemented yet.
+- Backup packages cannot be created under the application-owned library root. Validation
+  rejects SQLite journal/WAL sidecars and checks a private temporary copy of `library.db`,
+  so SQL reads are bound to the same bytes whose ciphertext hash was accepted.
 
 ## Performance budgets
 

@@ -33,6 +33,12 @@ fn local_library_reopens_with_the_same_identity_profile_and_encryption_keys() {
     let first_profile = first.profile_id().to_owned();
     let first_device = first.device_id().to_owned();
     assert_eq!(first.profile_name(), "本机学习档案");
+    let debug_output = format!("{first:?}");
+    for secret in secrets.values.lock().unwrap().values() {
+        assert!(!debug_output.contains(secret));
+    }
+    assert!(!debug_output.contains(first.profile_name()));
+    assert!(debug_output.contains("<redacted>"));
     drop(first);
 
     let reopened =

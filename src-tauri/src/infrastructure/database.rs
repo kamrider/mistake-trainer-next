@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -24,6 +24,26 @@ pub fn open_encrypted_database(path: &Path, key: &str) -> Result<Connection, Dat
     connection.pragma_update(None, "cipher_memory_security", "ON")?;
     connection.pragma_update(None, "foreign_keys", "ON")?;
     connection.pragma_update(None, "journal_mode", "WAL")?;
+    connection.busy_timeout(std::time::Duration::from_secs(5))?;
+
+    Ok(connection)
+}
+
+pub fn open_encrypted_database_read_only(
+    path: &Path,
+    key: &str,
+) -> Result<Connection, DatabaseError> {
+    if key.trim().is_empty() {
+        return Err(DatabaseError::EmptyKey);
+    }
+
+    let connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    connection.pragma_update(None, "key", key)?;
+    connection.query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(()))?;
+    connection.pragma_update(None, "cipher_memory_security", "ON")?;
     connection.busy_timeout(std::time::Duration::from_secs(5))?;
 
     Ok(connection)

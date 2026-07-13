@@ -1,3 +1,4 @@
+pub mod backup;
 pub mod capture;
 pub mod exports;
 pub mod insights;
