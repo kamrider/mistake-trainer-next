@@ -1,4 +1,9 @@
-use std::{collections::HashMap, io::Cursor, path::Path, sync::Mutex};
+use std::{
+    collections::HashMap,
+    io::{Cursor, Read},
+    path::Path,
+    sync::Mutex,
+};
 
 use image::ImageReader;
 use serde::Serialize;
@@ -135,6 +140,27 @@ pub enum StageCaptureError {
     NotFound,
     #[error("capture staging capacity has been reached")]
     StageFull,
+}
+
+#[derive(Debug, Error)]
+pub enum CaptureFileReadError {
+    #[error("capture file could not be read")]
+    Unreadable,
+    #[error("capture file exceeds the per-file limit")]
+    TooLarge,
+}
+
+pub fn read_capture_file(path: &Path) -> Result<Vec<u8>, CaptureFileReadError> {
+    let file = std::fs::File::open(path).map_err(|_| CaptureFileReadError::Unreadable)?;
+    let mut reader = file.take(MAX_CAPTURE_FILE_BYTES + 1);
+    let mut bytes = Vec::new();
+    reader
+        .read_to_end(&mut bytes)
+        .map_err(|_| CaptureFileReadError::Unreadable)?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_CAPTURE_FILE_BYTES {
+        return Err(CaptureFileReadError::TooLarge);
+    }
+    Ok(bytes)
 }
 
 pub fn stage_image_bytes(

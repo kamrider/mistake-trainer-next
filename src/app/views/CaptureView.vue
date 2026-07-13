@@ -56,9 +56,10 @@ async function commit(input: CaptureCommitInput) {
   if (!isTauri()) return
   saving.value = true
   errorMessage.value = ''
+  let saved = false
   try {
     const result = normalizeAppResult(await commands.captureCommit(input))
-    if (result.ok) await router.push({ name: 'library' })
+    if (result.ok) saved = true
     else errorMessage.value = result.error.userMessage
   }
   catch {
@@ -66,6 +67,13 @@ async function commit(input: CaptureCommitInput) {
   }
   finally {
     saving.value = false
+  }
+  if (!saved) return
+  try {
+    await router.push({ name: 'library' })
+  }
+  catch {
+    errorMessage.value = '错题已经保存成功，但题库页面没有打开；可以从左侧进入题库查看。'
   }
 }
 

@@ -19,7 +19,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "supabase:test": "supabase test db",
-    "tauri": "tauri"
+    "tauri": ".\\scripts\\tauri-msvc.cmd"
   },
   "dependencies": {
     "@lucide/vue": "^1.24.0",

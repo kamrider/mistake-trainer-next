@@ -17,4 +17,7 @@ corepack pnpm typecheck
 corepack pnpm tauri dev
 ```
 
+The `tauri` script enters the repository-managed MSVC, Perl, and OpenSSL build
+environment automatically; no global Perl installation is required.
+
 See [docs/architecture.md](docs/architecture.md) for boundaries and invariants.

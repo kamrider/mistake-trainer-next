@@ -1,5 +1,6 @@
 use mistake_trainer_next_lib::modules::capture::{
-    CaptureStage, StageCaptureError, stage_image_bytes,
+    CaptureFileReadError, CaptureStage, MAX_CAPTURE_FILE_BYTES, StageCaptureError,
+    read_capture_file, stage_image_bytes,
 };
 
 const VALID_PNG: &[u8] = include_bytes!("../icons/32x32.png");
@@ -73,4 +74,26 @@ fn staging_has_a_process_memory_safety_budget() {
 
     assert!(matches!(error, StageCaptureError::StageFull));
     assert_eq!(stage.len().expect("stage lock"), 40);
+}
+
+#[test]
+fn file_read_is_hard_limited_even_when_the_source_is_larger() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let path = directory.path().join("oversized.png");
+    let file = std::fs::File::create(&path).expect("create sparse file");
+    file.set_len(MAX_CAPTURE_FILE_BYTES + 2)
+        .expect("grow sparse file");
+    drop(file);
+
+    let error = read_capture_file(&path).expect_err("oversized file must not be fully read");
+
+    assert!(matches!(error, CaptureFileReadError::TooLarge));
+}
+
+#[test]
+fn unreadable_capture_file_fails_closed() {
+    let error = read_capture_file(std::path::Path::new("missing-image.png"))
+        .expect_err("missing file must fail");
+
+    assert!(matches!(error, CaptureFileReadError::Unreadable));
 }

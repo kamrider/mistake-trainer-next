@@ -8,8 +8,8 @@ use crate::{
     infrastructure::runtime::LibraryRuntime,
     modules::{
         capture::{
-            CaptureStage, ConsumeError, MAX_CAPTURE_FILE_BYTES, StageCaptureError, StagedAsset,
-            stage_image_bytes,
+            CaptureFileReadError, CaptureStage, ConsumeError, StageCaptureError, StagedAsset,
+            read_capture_file, stage_image_bytes,
         },
         problems::{AssetRole, CaptureAsset, CreateProblem, create_problem},
     },
@@ -204,24 +204,21 @@ pub fn capture_select(stage: State<'_, CaptureStage>, role: String) -> AppResult
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("image");
-        let file_too_large = std::fs::metadata(&path)
-            .map(|metadata| metadata.len() > MAX_CAPTURE_FILE_BYTES)
-            .unwrap_or(false);
-        if file_too_large {
-            let ids = selected
-                .iter()
-                .map(|asset: &StagedAsset| asset.id.clone())
-                .collect::<Vec<_>>();
-            let _ = stage.remove_many(&ids);
-            return capture_error(
-                "capture_image_too_large",
-                "单张图片不能超过 25 MB，请压缩后再选择。",
-                false,
-            );
-        }
-        let bytes = match std::fs::read(&path) {
+        let bytes = match read_capture_file(&path) {
             Ok(bytes) => bytes,
-            Err(_) => {
+            Err(CaptureFileReadError::TooLarge) => {
+                let ids = selected
+                    .iter()
+                    .map(|asset: &StagedAsset| asset.id.clone())
+                    .collect::<Vec<_>>();
+                let _ = stage.remove_many(&ids);
+                return capture_error(
+                    "capture_image_too_large",
+                    "单张图片不能超过 25 MB，请压缩后再选择。",
+                    false,
+                );
+            }
+            Err(CaptureFileReadError::Unreadable) => {
                 let ids = selected
                     .iter()
                     .map(|asset: &StagedAsset| asset.id.clone())
