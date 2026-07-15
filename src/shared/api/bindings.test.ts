@@ -12,6 +12,8 @@ describe('generated Tauri bindings', () => {
     expect(bindings).toContain('captureLanPreflight')
     expect(bindings).toContain('captureLanFirewallRepair')
     expect(bindings).toContain('captureLanOpenNetworkSettings')
+    expect(bindings).toContain('CaptureLanSettingsPage')
+    expect(bindings).toContain('captureLanOpenNetworkSettings: (page: CaptureLanSettingsPage)')
     expect(bindings).toContain('CaptureLanPreflight')
     expect(bindings).toContain('AppResult')
     expect(bindings).toContain('diagnosticId')

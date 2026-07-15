@@ -19,6 +19,24 @@ pub enum CaptureLanProfile {
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Type, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum CaptureLanSettingsPage {
+    Overview,
+    Wifi,
+    Ethernet,
+}
+
+impl CaptureLanSettingsPage {
+    fn uri(self) -> &'static str {
+        match self {
+            Self::Overview => "ms-settings:network-status",
+            Self::Wifi => "ms-settings:network-wifi",
+            Self::Ethernet => "ms-settings:network-ethernet",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum CaptureLanFirewallRuleState {
     Ready,
     Missing,
@@ -125,12 +143,14 @@ pub fn repair_capture_firewall() -> Result<CaptureLanPreflight, CaptureFirewallE
 }
 
 #[cfg(windows)]
-pub fn open_network_settings() -> Result<bool, CaptureFirewallError> {
-    windows_impl::open_network_settings()
+pub fn open_network_settings(page: CaptureLanSettingsPage) -> Result<bool, CaptureFirewallError> {
+    windows_impl::open_network_settings(page)
 }
 
 #[cfg(not(windows))]
-pub fn open_network_settings() -> Result<bool, CaptureFirewallError> {
+pub fn open_network_settings(
+    _page: CaptureLanSettingsPage,
+) -> Result<bool, CaptureFirewallError> {
     Err(CaptureFirewallError::Unsupported)
 }
 
@@ -176,7 +196,7 @@ mod windows_impl {
 
     use super::{
         CAPTURE_FIREWALL_RULE_NAME, CaptureFirewallError, CaptureLanFirewallRuleState,
-        CaptureLanPreflight, CaptureLanProfile, evaluate_preflight,
+        CaptureLanPreflight, CaptureLanProfile, CaptureLanSettingsPage, evaluate_preflight,
         remote_scope_is_exact_local_subnet,
     };
 
@@ -320,11 +340,14 @@ mod windows_impl {
         Ok(())
     }
 
-    pub(super) fn open_network_settings() -> Result<bool, CaptureFirewallError> {
+    pub(super) fn open_network_settings(
+        page: CaptureLanSettingsPage,
+    ) -> Result<bool, CaptureFirewallError> {
+        let settings_uri = wide(OsStr::new(page.uri()));
         let mut execute_info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
         execute_info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
         execute_info.lpVerb = w!("open");
-        execute_info.lpFile = w!("ms-settings:network-status");
+        execute_info.lpFile = PCWSTR(settings_uri.as_ptr());
         execute_info.nShow = 1;
         unsafe { ShellExecuteExW(&mut execute_info) }
             .map(|_| true)
@@ -441,6 +464,13 @@ mod tests {
         assert!(!remote_scope_is_exact_local_subnet("LocalSubnet,203.0.113.7"));
         assert!(!remote_scope_is_exact_local_subnet("*"));
         assert!(!remote_scope_is_exact_local_subnet("LocalSubnet,"));
+    }
+
+    #[test]
+    fn settings_pages_use_documented_windows_uris() {
+        assert_eq!(CaptureLanSettingsPage::Overview.uri(), "ms-settings:network-status");
+        assert_eq!(CaptureLanSettingsPage::Wifi.uri(), "ms-settings:network-wifi");
+        assert_eq!(CaptureLanSettingsPage::Ethernet.uri(), "ms-settings:network-ethernet");
     }
 
     #[test]

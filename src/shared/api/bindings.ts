@@ -40,7 +40,7 @@ export const commands = {
 	captureLanAddresses: () => __TAURI_INVOKE<AppResult<CaptureLanAddress[]>>("capture_lan_addresses"),
 	captureLanPreflight: () => __TAURI_INVOKE<AppResult<CaptureLanPreflight>>("capture_lan_preflight"),
 	captureLanFirewallRepair: () => __TAURI_INVOKE<AppResult<CaptureLanPreflight>>("capture_lan_firewall_repair"),
-	captureLanOpenNetworkSettings: () => __TAURI_INVOKE<AppResult<boolean>>("capture_lan_open_network_settings"),
+	captureLanOpenNetworkSettings: (page: CaptureLanSettingsPage) => __TAURI_INVOKE<AppResult<boolean>>("capture_lan_open_network_settings", { page }),
 	captureLanStart: (input: CaptureLanStartInput) => __TAURI_INVOKE<AppResult<CaptureLanSession>>("capture_lan_start", { input }),
 	captureLanStatus: () => __TAURI_INVOKE<AppResult<CaptureLanSession | null>>("capture_lan_status"),
 	captureLanStop: () => __TAURI_INVOKE<AppResult<boolean>>("capture_lan_stop"),
@@ -190,6 +190,8 @@ export type CaptureLanSession = {
 	receivedItemCount: number,
 	receivedBytes: number | null,
 };
+
+export type CaptureLanSettingsPage = "overview" | "wifi" | "ethernet";
 
 export type CaptureLanStartInput = {
 	batchId: string,

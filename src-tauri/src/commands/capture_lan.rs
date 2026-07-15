@@ -7,7 +7,7 @@ use crate::{
     application::result::AppResult,
     infrastructure::runtime::LibraryRuntime,
     modules::capture_firewall::{
-        CaptureFirewallError, CaptureLanPreflight,
+        CaptureFirewallError, CaptureLanPreflight, CaptureLanSettingsPage,
         capture_lan_preflight as inspect_capture_lan_preflight, open_network_settings,
         repair_capture_firewall,
     },
@@ -38,8 +38,8 @@ pub fn capture_lan_firewall_repair() -> AppResult<CaptureLanPreflight> {
 
 #[tauri::command]
 #[specta::specta]
-pub fn capture_lan_open_network_settings() -> AppResult<bool> {
-    firewall_result_or_error(open_network_settings())
+pub fn capture_lan_open_network_settings(page: CaptureLanSettingsPage) -> AppResult<bool> {
+    firewall_result_or_error(open_network_settings(page))
 }
 
 #[derive(Clone, Debug, Serialize)]
