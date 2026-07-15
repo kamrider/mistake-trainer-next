@@ -38,6 +38,9 @@ export const commands = {
 	captureDraftUpdate: (input: CaptureDraftUpdateInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_draft_update", { input }),
 	captureCommitReady: (batchId: string, expectedRevision: number) => __TAURI_INVOKE<AppResult<CaptureCommitReport>>("capture_commit_ready", { batchId, expectedRevision }),
 	captureLanAddresses: () => __TAURI_INVOKE<AppResult<CaptureLanAddress[]>>("capture_lan_addresses"),
+	captureLanPreflight: () => __TAURI_INVOKE<AppResult<CaptureLanPreflight>>("capture_lan_preflight"),
+	captureLanFirewallRepair: () => __TAURI_INVOKE<AppResult<CaptureLanPreflight>>("capture_lan_firewall_repair"),
+	captureLanOpenNetworkSettings: () => __TAURI_INVOKE<AppResult<boolean>>("capture_lan_open_network_settings"),
 	captureLanStart: (input: CaptureLanStartInput) => __TAURI_INVOKE<AppResult<CaptureLanSession>>("capture_lan_start", { input }),
 	captureLanStatus: () => __TAURI_INVOKE<AppResult<CaptureLanSession | null>>("capture_lan_status"),
 	captureLanStop: () => __TAURI_INVOKE<AppResult<boolean>>("capture_lan_stop"),
@@ -164,6 +167,19 @@ export type CaptureLanAddress = {
 	label: string,
 	address: string,
 };
+
+export type CaptureLanFirewallRuleState = "ready" | "missing" | "invalid" | "unavailable";
+
+export type CaptureLanPreflight = {
+	supported: boolean,
+	activeProfiles: CaptureLanProfile[],
+	firewallRule: CaptureLanFirewallRuleState,
+	canStart: boolean,
+	needsNetworkChange: boolean,
+	needsFirewallRepair: boolean,
+};
+
+export type CaptureLanProfile = "domain" | "private" | "public";
 
 export type CaptureLanSession = {
 	sessionId: string,

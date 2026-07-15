@@ -6,6 +6,11 @@ use uuid::Uuid;
 use crate::{
     application::result::AppResult,
     infrastructure::runtime::LibraryRuntime,
+    modules::capture_firewall::{
+        CaptureFirewallError, CaptureLanPreflight,
+        capture_lan_preflight as inspect_capture_lan_preflight, open_network_settings,
+        repair_capture_firewall,
+    },
     modules::capture_lan::{
         BatchChangeNotifier, CaptureLanAddress, CaptureLanContext, CaptureLanError,
         CaptureLanManager, CaptureLanSession,
@@ -17,6 +22,24 @@ use crate::{
 pub struct CaptureLanStartInput {
     pub batch_id: String,
     pub selected_address: Option<String>,
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn capture_lan_preflight() -> AppResult<CaptureLanPreflight> {
+    firewall_result_or_error(inspect_capture_lan_preflight())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn capture_lan_firewall_repair() -> AppResult<CaptureLanPreflight> {
+    firewall_result_or_error(repair_capture_firewall())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn capture_lan_open_network_settings() -> AppResult<bool> {
+    firewall_result_or_error(open_network_settings())
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -41,6 +64,26 @@ pub fn capture_lan_start(
     manager: State<'_, CaptureLanManager>,
     input: CaptureLanStartInput,
 ) -> AppResult<CaptureLanSession> {
+    let preflight = match inspect_capture_lan_preflight() {
+        Ok(value) => value,
+        Err(error) => return firewall_error(&error),
+    };
+    if preflight.needs_network_change {
+        return AppResult::failure(
+            "capture_lan_public_network",
+            "当前网络被 Windows 标记为公用网络。请切换到个人热点或可信家庭网络，并在系统中设为专用网络。",
+            true,
+            Uuid::now_v7().to_string(),
+        );
+    }
+    if preflight.needs_firewall_repair {
+        return AppResult::failure(
+            "capture_lan_firewall_required",
+            "Windows 尚未允许手机连接。请在手机扫码面板中点击“修复连接”。",
+            true,
+            Uuid::now_v7().to_string(),
+        );
+    }
     let notifier_app = app.clone();
     let notifier: BatchChangeNotifier = std::sync::Arc::new(move |batch_id| {
         let _ = notifier_app.emit(
@@ -84,6 +127,41 @@ fn result_or_error<T>(result: Result<T, CaptureLanError>) -> AppResult<T> {
         Ok(value) => AppResult::success(value),
         Err(error) => lan_error(&error),
     }
+}
+
+fn firewall_result_or_error<T>(result: Result<T, CaptureFirewallError>) -> AppResult<T> {
+    match result {
+        Ok(value) => AppResult::success(value),
+        Err(error) => firewall_error(&error),
+    }
+}
+
+fn firewall_error<T>(error: &CaptureFirewallError) -> AppResult<T> {
+    let (code, user_message, retryable) = match error {
+        CaptureFirewallError::Cancelled => (
+            "capture_lan_firewall_cancelled",
+            "没有更改 Windows 权限；需要时可以再次点击“修复连接”。",
+            true,
+        ),
+        CaptureFirewallError::Unsupported => (
+            "capture_lan_firewall_unsupported",
+            "当前系统不支持 Windows 局域网权限修复。",
+            false,
+        ),
+        CaptureFirewallError::Inspection(_) => (
+            "capture_lan_firewall_inspection_failed",
+            "没有读取到 Windows 网络权限状态，请稍后重试。",
+            true,
+        ),
+        CaptureFirewallError::Repair(_) => (
+            "capture_lan_firewall_repair_failed",
+            "Windows 没有完成连接修复，请确认管理员提示后重试。",
+            true,
+        ),
+    };
+    let diagnostic_id = Uuid::now_v7().to_string();
+    eprintln!("capture firewall error [{diagnostic_id}] {code}: {error}");
+    AppResult::failure(code, user_message, retryable, diagnostic_id)
 }
 
 fn lan_error<T>(error: &CaptureLanError) -> AppResult<T> {

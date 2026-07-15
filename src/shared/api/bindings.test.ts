@@ -9,6 +9,10 @@ describe('generated Tauri bindings', () => {
 
     expect(bindings).toContain('export const commands')
     expect(bindings).toContain('systemStatus')
+    expect(bindings).toContain('captureLanPreflight')
+    expect(bindings).toContain('captureLanFirewallRepair')
+    expect(bindings).toContain('captureLanOpenNetworkSettings')
+    expect(bindings).toContain('CaptureLanPreflight')
     expect(bindings).toContain('AppResult')
     expect(bindings).toContain('diagnosticId')
     expect(bindings).not.toMatch(/\n\n$/)
