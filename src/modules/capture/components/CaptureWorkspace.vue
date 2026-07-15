@@ -1,62 +1,169 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { Check, FileImage, ImagePlus, LockKeyhole, Trash2 } from '@lucide/vue'
-import type { CaptureCommitInput, StagedAsset } from '../../../shared/api/bindings'
+import {
+  ArrowLeft, Check, ChevronLeft, ChevronRight, ClipboardPaste, FolderOpen,
+  Images, LayoutGrid, ListPlus, LockKeyhole, Plus, QrCode, Save, Smartphone,
+  Sparkles, Trash2, UploadCloud, X,
+} from '@lucide/vue'
+import { computed, reactive, ref, watch } from 'vue'
+import type {
+  CaptureBatchDetail, CaptureBatchSummary, CaptureDraftSummary, CaptureItemSummary,
+  CaptureLayoutMode,
+} from '../../../shared/api/bindings'
+import CaptureThumbnail from './CaptureThumbnail.vue'
+
+type MoveTarget = {
+  itemId: string
+  targetDraftId: string | null
+  targetRole: 'question' | 'answer' | null
+  targetPosition: number
+}
 
 const props = defineProps<{
-  assets: StagedAsset[]
-  saving: boolean
-  errorMessage?: string
+  batches: CaptureBatchSummary[]
+  detail: CaptureBatchDetail | undefined
+  previews: Record<string, string>
+  busy: boolean
+  errorMessage: string
+  desktopAvailable: boolean
 }>()
 
 const emit = defineEmits<{
-  select: [role: 'question' | 'answer']
-  remove: [stagedAssetId: string]
-  commit: [input: CaptureCommitInput]
+  createBatch: [subject: string]
+  openBatch: [batchId: string]
+  back: []
+  discardBatch: [batchId: string]
+  importSelect: []
+  importFiles: [files: File[]]
+  finishCollecting: [subject: string]
+  applyLayout: [mode: CaptureLayoutMode, questions: number, answers: number, splitIndex: number | null]
+  createDraft: []
+  moveItem: [target: MoveTarget]
+  updateDraft: [draft: CaptureDraftSummary, subject: string, tags: string[], note: string]
+  removeItem: [itemId: string]
+  commitReady: []
+  preview: [itemId: string]
+  mobileCapture: []
 }>()
 
-const subject = ref('')
-const note = ref('')
-const questions = computed(() => props.assets.filter(asset => asset.role === 'question'))
-const answers = computed(() => props.assets.filter(asset => asset.role === 'answer'))
-const ready = computed(() => questions.value.length > 0 && answers.value.length > 0)
+const newSubject = ref('')
+const batchSubject = ref('')
+const layoutMode = ref<CaptureLayoutMode>('alternating')
+const questionImages = ref(1)
+const answerImages = ref(1)
+const splitIndex = ref<number | null>(null)
+const dropActive = ref(false)
+const draftEdits = reactive<Record<string, { subject: string, tags: string, note: string }>>({})
 
-function submit() {
-  if (!ready.value || props.saving) return
-  emit('commit', {
-    subject: subject.value.trim(),
-    note: note.value.trim(),
-    stagedAssetIds: props.assets.map(asset => asset.id),
+const itemById = computed(() => new Map(props.detail?.items.map(item => [item.id, item]) ?? []))
+const activeBatches = computed(() => props.batches.filter(batch => batch.state !== 'completed'))
+const completedBatches = computed(() => props.batches.filter(batch => batch.state === 'completed'))
+const readyCount = computed(() => props.detail?.drafts.filter(draft => draft.ready).length ?? 0)
+const isCollecting = computed(() => props.detail?.batch.state === 'collecting')
+const unassignedItems = computed(() => props.detail?.unassignedItemIds
+  .map(id => itemById.value.get(id))
+  .filter((item): item is CaptureItemSummary => Boolean(item)) ?? [])
+
+watch(() => props.detail, (detail) => {
+  if (!detail) return
+  batchSubject.value = detail.batch.subject
+  splitIndex.value = Math.ceil(detail.items.length / 2)
+  for (const draft of detail.drafts) {
+    const current = draftEdits[draft.id]
+    if (!current) {
+      draftEdits[draft.id] = {
+        subject: draft.subject,
+        tags: draft.tags.join('，'),
+        note: draft.note,
+      }
+    }
+  }
+}, { immediate: true })
+
+function createBatch() {
+  emit('createBatch', newSubject.value.trim())
+  newSubject.value = ''
+}
+
+function requestLayout() {
+  if (props.detail?.drafts.length && !window.confirm('重新应用模板会清空当前分组与逐题笔记，但不会删除任何图片。继续吗？')) return
+  emit('applyLayout', layoutMode.value, questionImages.value, answerImages.value, layoutMode.value === 'split' ? splitIndex.value : null)
+}
+
+function requestDiscard(batch: CaptureBatchSummary) {
+  if (window.confirm(`删除“${batch.subject || '未命名批次'}”？只会清理未被其他草稿或题库引用的图片。`)) {
+    emit('discardBatch', batch.id)
+  }
+}
+
+function importDrop(event: DragEvent) {
+  dropActive.value = false
+  const files = [...(event.dataTransfer?.files ?? [])].filter(file => file.type.startsWith('image/'))
+  if (files.length) emit('importFiles', files)
+}
+
+function draggedItemId(event: DragEvent) {
+  return event.dataTransfer?.getData('application/x-mistake-capture-item')
+    || event.dataTransfer?.getData('text/plain')
+    || ''
+}
+
+function dropItem(event: DragEvent, targetDraftId: string | null, targetRole: 'question' | 'answer' | null, targetPosition: number) {
+  const itemId = draggedItemId(event)
+  if (!itemId || !itemById.value.has(itemId)) return
+  emit('moveItem', { itemId, targetDraftId, targetRole, targetPosition })
+}
+
+function itemsFor(draft: CaptureDraftSummary, role: 'question' | 'answer') {
+  const ids = role === 'question' ? draft.questionItemIds : draft.answerItemIds
+  return ids.map(id => itemById.value.get(id)).filter((item): item is CaptureItemSummary => Boolean(item))
+}
+
+function saveDraft(draft: CaptureDraftSummary) {
+  const edit = draftEdits[draft.id]
+  if (!edit) return
+  emit(
+    'updateDraft',
+    draft,
+    edit.subject.trim(),
+    edit.tags.split(/[，,]/).map(tag => tag.trim()).filter(Boolean),
+    edit.note.trim(),
+  )
+}
+
+function moveAcrossDrafts(item: CaptureItemSummary, draftIndex: number, role: 'question' | 'answer', delta: number) {
+  const target = props.detail?.drafts[draftIndex + delta]
+  if (!target) return
+  emit('moveItem', {
+    itemId: item.id,
+    targetDraftId: target.id,
+    targetRole: role,
+    targetPosition: itemsFor(target, role).length,
   })
+}
+
+function moveWithin(item: CaptureItemSummary, draft: CaptureDraftSummary, role: 'question' | 'answer', delta: number) {
+  const items = itemsFor(draft, role)
+  const index = items.findIndex(candidate => candidate.id === item.id)
+  emit('moveItem', {
+    itemId: item.id,
+    targetDraftId: draft.id,
+    targetRole: role,
+    targetPosition: Math.max(0, Math.min(items.length - 1, index + delta)),
+  })
+}
+
+function statusLabel(batch: CaptureBatchSummary) {
+  if (batch.state === 'collecting') return '采集中'
+  if (batch.state === 'organizing') return '待整理'
+  return '已完成'
 }
 </script>
 
 <template>
   <main
-    class="capture-workspace"
+    class="capture-next"
     aria-labelledby="capture-title"
   >
-    <header class="capture-header">
-      <div>
-        <p class="eyebrow">
-          采集整理 · 本机加密暂存
-        </p>
-        <h1 id="capture-title">
-          录入错题
-        </h1>
-        <p class="intro">
-          先放下题目，再放下答案。保存时它们才会成为题库里完整的一道题。
-        </p>
-      </div>
-      <div class="privacy-note">
-        <LockKeyhole
-          :size="17"
-          aria-hidden="true"
-        />
-        文件路径不会交给页面
-      </div>
-    </header>
-
     <p
       v-if="errorMessage"
       class="error-banner"
@@ -65,224 +172,535 @@ function submit() {
       {{ errorMessage }}
     </p>
 
-    <form @submit.prevent="submit">
-      <section
-        class="asset-columns"
-        aria-label="题目与答案图片"
-      >
-        <article class="asset-panel question-panel">
-          <div class="panel-heading">
-            <span class="step-mark">一</span>
-            <div>
-              <h2>题目</h2>
-              <p>可一次选择多张，按选择顺序组成题目。</p>
-            </div>
-          </div>
-          <ul
-            v-if="questions.length"
-            class="asset-list"
-          >
-            <li
-              v-for="asset in questions"
-              :key="asset.id"
-            >
-              <FileImage
-                :size="19"
-                aria-hidden="true"
-              />
-              <span>
-                <strong>{{ asset.fileName }}</strong>
-                <small>{{ asset.width }} × {{ asset.height }}</small>
-              </span>
-              <button
-                type="button"
-                :aria-label="`移除 ${asset.fileName}`"
-                @click="emit('remove', asset.id)"
-              >
-                <Trash2
-                  :size="16"
-                  aria-hidden="true"
-                />
-              </button>
-            </li>
-          </ul>
-          <div
-            v-else
-            class="panel-empty"
-          >
-            <ImagePlus
-              :size="30"
-              aria-hidden="true"
-            />
-            <span>还没有题图</span>
-          </div>
-          <button
-            class="select-button"
-            type="button"
-            @click="emit('select', 'question')"
-          >
-            <ImagePlus
-              :size="18"
-              aria-hidden="true"
-            />
-            选择题图
-          </button>
-        </article>
-
-        <article class="asset-panel answer-panel">
-          <div class="panel-heading">
-            <span class="step-mark">二</span>
-            <div>
-              <h2>答案</h2>
-              <p>解析、订正过程和标准答案都可以放在这里。</p>
-            </div>
-          </div>
-          <ul
-            v-if="answers.length"
-            class="asset-list"
-          >
-            <li
-              v-for="asset in answers"
-              :key="asset.id"
-            >
-              <FileImage
-                :size="19"
-                aria-hidden="true"
-              />
-              <span>
-                <strong>{{ asset.fileName }}</strong>
-                <small>{{ asset.width }} × {{ asset.height }}</small>
-              </span>
-              <button
-                type="button"
-                :aria-label="`移除 ${asset.fileName}`"
-                @click="emit('remove', asset.id)"
-              >
-                <Trash2
-                  :size="16"
-                  aria-hidden="true"
-                />
-              </button>
-            </li>
-          </ul>
-          <div
-            v-else
-            class="panel-empty"
-          >
-            <ImagePlus
-              :size="30"
-              aria-hidden="true"
-            />
-            <span>还没有答案图</span>
-          </div>
-          <button
-            class="select-button"
-            type="button"
-            @click="emit('select', 'answer')"
-          >
-            <ImagePlus
-              :size="18"
-              aria-hidden="true"
-            />
-            选择答案图
-          </button>
-        </article>
-      </section>
-
-      <section class="details-card">
-        <div class="details-heading">
-          <span class="step-mark">三</span>
-          <div>
-            <h2>整理线索</h2>
-            <p>留下下次复习时真正有用的一句话。</p>
-          </div>
+    <template v-if="!detail">
+      <header class="inbox-hero">
+        <div>
+          <p class="eyebrow">
+            采集整理 · 本地加密草稿
+          </p>
+          <h1 id="capture-title">
+            采集箱
+          </h1>
+          <p class="intro">
+            先快速收下图片，再在电脑上分题、配答案。中途退出也不会丢。
+          </p>
         </div>
-        <div class="form-grid">
-          <label>
-            <span>科目</span>
-            <input
-              v-model="subject"
-              required
-              maxlength="40"
-              placeholder="例如：数学"
-            >
-          </label>
-          <label>
-            <span>错因或笔记</span>
-            <textarea
-              v-model="note"
-              maxlength="500"
-              rows="3"
-              placeholder="我在哪里绕远了？下次看见什么信号要停一下？"
-            />
-          </label>
-        </div>
-      </section>
-
-      <footer class="capture-footer">
-        <p v-if="!ready">
-          {{ questions.length === 0 ? '还需要至少一张题图' : '还需要至少一张答案图' }}
-        </p>
-        <p
-          v-else
-          class="ready-copy"
-        >
-          <Check
+        <div class="capacity-note">
+          <LockKeyhole
             :size="17"
             aria-hidden="true"
           />
-          题目与答案已经配齐
-        </p>
-        <button
-          class="save-button"
-          type="submit"
-          :disabled="!ready || saving"
+          每批最多 150 张 · 1 GB
+        </div>
+      </header>
+
+      <section class="new-batch-card">
+        <div class="new-batch-copy">
+          <span class="round-icon"><ListPlus :size="20" /></span>
+          <div><h2>开始一批新采集</h2><p>科目可以先留空，手机或整理时再补。</p></div>
+        </div>
+        <form @submit.prevent="createBatch">
+          <input
+            v-model="newSubject"
+            maxlength="40"
+            placeholder="科目，例如：数学（可选）"
+          >
+          <button
+            type="submit"
+            :disabled="busy"
+          >
+            <Plus :size="17" />新建批次
+          </button>
+        </form>
+      </section>
+
+      <section class="batch-section">
+        <div class="section-heading">
+          <div><p>正在进行</p><h2>未完成批次</h2></div><span>{{ activeBatches.length }} 批</span>
+        </div>
+        <div
+          v-if="activeBatches.length"
+          class="batch-grid"
         >
-          {{ saving ? '正在加密保存…' : '保存到题库' }}
+          <article
+            v-for="batch in activeBatches"
+            :key="batch.id"
+            class="batch-card"
+          >
+            <button
+              class="batch-open"
+              type="button"
+              @click="emit('openBatch', batch.id)"
+            >
+              <span class="batch-state">{{ statusLabel(batch) }}</span>
+              <h3>{{ batch.subject || '未命名批次' }}</h3>
+              <p>{{ batch.itemCount }} 张图片 · {{ batch.draftCount }} 道草稿</p>
+              <strong>{{ batch.readyCount ? `${batch.readyCount} 道可入库` : '继续整理' }} <ChevronRight :size="16" /></strong>
+            </button>
+            <button
+              class="batch-delete"
+              type="button"
+              :aria-label="`删除 ${batch.subject || '未命名批次'}`"
+              @click="requestDiscard(batch)"
+            >
+              <Trash2 :size="15" />
+            </button>
+          </article>
+        </div>
+        <div
+          v-else
+          class="empty-inbox"
+        >
+          <Images :size="34" /><p>还没有未完成批次。新建一批，先把今天的错题收进来。</p>
+        </div>
+      </section>
+
+      <details
+        v-if="completedBatches.length"
+        class="completed-section"
+      >
+        <summary>已完成批次（{{ completedBatches.length }}）</summary>
+        <button
+          v-for="batch in completedBatches"
+          :key="batch.id"
+          type="button"
+          @click="emit('openBatch', batch.id)"
+        >
+          {{ batch.subject || '未命名批次' }}
         </button>
-      </footer>
-    </form>
+      </details>
+    </template>
+
+    <template v-else>
+      <header class="workbench-header">
+        <button
+          class="back-button"
+          type="button"
+          @click="emit('back')"
+        >
+          <ArrowLeft :size="17" />返回采集箱
+        </button>
+        <div class="batch-title">
+          <p>{{ isCollecting ? '正在采集' : detail.batch.state === 'completed' ? '批次已完成' : '桌面整理台' }}</p>
+          <h1 id="capture-title">
+            {{ detail.batch.subject || '未命名批次' }}
+          </h1>
+        </div>
+        <div class="workbench-stats">
+          <span><strong>{{ detail.items.length }}</strong> 张</span><span><strong>{{ detail.drafts.length }}</strong> 题</span><span class="ready"><strong>{{ readyCount }}</strong> 就绪</span>
+        </div>
+      </header>
+
+      <section
+        v-if="detail.batch.state !== 'completed'"
+        class="capture-toolbar"
+      >
+        <button
+          type="button"
+          class="primary-tool"
+          :disabled="busy || !desktopAvailable"
+          @click="emit('mobileCapture')"
+        >
+          <QrCode :size="18" /><span><strong>手机扫码</strong><small>同一 Wi‑Fi 连拍</small></span>
+        </button>
+        <button
+          type="button"
+          :disabled="busy || !desktopAvailable"
+          @click="emit('importSelect')"
+        >
+          <FolderOpen :size="18" /><span><strong>电脑批量选择</strong><small>PNG · JPEG · WebP</small></span>
+        </button>
+        <div class="tool-hint">
+          <ClipboardPaste :size="17" /><span><strong>Ctrl + V 粘贴</strong><small>也可把图片拖到窗口</small></span>
+        </div>
+      </section>
+
+      <section
+        v-if="detail.batch.state !== 'completed'"
+        class="external-drop"
+        :class="{ 'is-active': dropActive }"
+        @dragenter.prevent="dropActive = true"
+        @dragover.prevent="dropActive = true"
+        @dragleave.self="dropActive = false"
+        @drop.prevent="importDrop"
+      >
+        <UploadCloud :size="20" /><span>拖入一组图片，按文件顺序进入当前批次</span>
+      </section>
+
+      <section
+        v-if="isCollecting"
+        class="collecting-panel"
+      >
+        <div class="collecting-copy">
+          <Smartphone :size="25" /><div><h2>采集阶段</h2><p>手机和电脑新图片会继续进入末尾；结束采集后才开放自动分组和拖拽。</p></div>
+        </div>
+        <label>批次科目<input
+          v-model="batchSubject"
+          maxlength="40"
+          placeholder="例如：数学"
+        ></label>
+        <button
+          type="button"
+          :disabled="busy || !detail.items.length"
+          @click="emit('finishCollecting', batchSubject.trim())"
+        >
+          结束采集，开始整理 <ChevronRight :size="17" />
+        </button>
+      </section>
+
+      <template v-else-if="detail.batch.state === 'organizing'">
+        <section class="layout-bar">
+          <div class="layout-heading">
+            <Sparkles :size="19" /><div><h2>顺序模板</h2><p>模板只按图片顺序分组，可撤销重做，不识别图片内容。</p></div>
+          </div>
+          <select
+            v-model="layoutMode"
+            aria-label="整理模板"
+          >
+            <option value="alternating">
+              题1、答1、题2、答2
+            </option>
+            <option value="split">
+              前半题图、后半答案
+            </option>
+            <option value="questions_only">
+              每张图是一道题
+            </option>
+            <option value="manual">
+              全部手工整理
+            </option>
+          </select>
+          <label v-if="layoutMode === 'alternating'">题图/题<input
+            v-model.number="questionImages"
+            type="number"
+            min="1"
+            max="10"
+          ></label>
+          <label v-if="layoutMode === 'alternating'">答案/题<input
+            v-model.number="answerImages"
+            type="number"
+            min="1"
+            max="10"
+          ></label>
+          <label v-if="layoutMode === 'split'">从第几张分开<input
+            v-model.number="splitIndex"
+            type="number"
+            min="0"
+            :max="detail.items.length"
+          ></label>
+          <button
+            type="button"
+            :disabled="busy || !detail.items.length"
+            @click="requestLayout"
+          >
+            <LayoutGrid :size="16" />应用模板
+          </button>
+        </section>
+
+        <section
+          class="unassigned-strip"
+          @dragover.prevent
+          @drop.prevent="dropItem($event, null, null, 0)"
+        >
+          <div class="strip-heading">
+            <div><p>未分配图片</p><span>拖到下方题图或答案区</span></div><strong>{{ unassignedItems.length }}</strong>
+          </div>
+          <div
+            v-if="unassignedItems.length"
+            class="thumbnail-row"
+          >
+            <div
+              v-for="item in unassignedItems"
+              :key="item.id"
+              class="unassigned-item"
+            >
+              <CaptureThumbnail
+                :item="item"
+                :data-url="previews[item.id]"
+                removable
+                @preview="emit('preview', $event)"
+                @remove="emit('removeItem', $event)"
+              />
+              <div
+                v-if="detail.drafts.length"
+                class="quick-assign"
+              >
+                <button
+                  type="button"
+                  @click="emit('moveItem', { itemId: item.id, targetDraftId: detail.drafts[0]!.id, targetRole: 'question', targetPosition: detail.drafts[0]!.questionItemIds.length })"
+                >
+                  设为题图
+                </button>
+                <button
+                  type="button"
+                  @click="emit('moveItem', { itemId: item.id, targetDraftId: detail.drafts[0]!.id, targetRole: 'answer', targetPosition: detail.drafts[0]!.answerItemIds.length })"
+                >
+                  设为答案
+                </button>
+              </div>
+            </div>
+          </div>
+          <p
+            v-else
+            class="strip-empty"
+          >
+            <Check :size="16" />所有图片都已分配
+          </p>
+        </section>
+
+        <section class="draft-stack">
+          <article
+            v-for="(draft, draftIndex) in detail.drafts"
+            :key="draft.id"
+            class="draft-card"
+            :class="{ 'is-ready': draft.ready }"
+          >
+            <header class="draft-header">
+              <span class="draft-number">{{ String(draftIndex + 1).padStart(2, '0') }}</span><div><h3>错题草稿</h3><p>{{ draft.ready ? '题答齐全，可加入题库' : '还需要题图、答案与科目' }}</p></div><span class="ready-mark">{{ draft.ready ? '就绪' : '未完成' }}</span>
+            </header>
+            <div class="draft-zones">
+              <section
+                class="draft-zone question-zone"
+                @dragover.prevent
+                @drop.prevent="dropItem($event, draft.id, 'question', draft.questionItemIds.length)"
+              >
+                <div class="zone-title">
+                  <span>题图</span><small>{{ draft.questionItemIds.length }} 张</small>
+                </div>
+                <div
+                  v-if="itemsFor(draft, 'question').length"
+                  class="zone-items"
+                >
+                  <div
+                    v-for="item in itemsFor(draft, 'question')"
+                    :key="item.id"
+                    class="assigned-item"
+                  >
+                    <CaptureThumbnail
+                      :item="item"
+                      :data-url="previews[item.id]"
+                      @preview="emit('preview', $event)"
+                    />
+                    <div class="item-actions">
+                      <button
+                        type="button"
+                        title="移到上一题"
+                        :disabled="draftIndex === 0"
+                        @click="moveAcrossDrafts(item, draftIndex, 'question', -1)"
+                      >
+                        <ChevronLeft :size="13" />
+                      </button>
+                      <button
+                        type="button"
+                        title="前移"
+                        @click="moveWithin(item, draft, 'question', -1)"
+                      >
+                        前
+                      </button>
+                      <button
+                        type="button"
+                        title="后移"
+                        @click="moveWithin(item, draft, 'question', 1)"
+                      >
+                        后
+                      </button>
+                      <button
+                        type="button"
+                        title="改为答案"
+                        @click="emit('moveItem', { itemId: item.id, targetDraftId: draft.id, targetRole: 'answer', targetPosition: draft.answerItemIds.length })"
+                      >
+                        答
+                      </button>
+                      <button
+                        type="button"
+                        title="移回未分配"
+                        @click="emit('moveItem', { itemId: item.id, targetDraftId: null, targetRole: null, targetPosition: 0 })"
+                      >
+                        <X :size="13" />
+                      </button>
+                      <button
+                        type="button"
+                        title="移到下一题"
+                        :disabled="draftIndex === detail.drafts.length - 1"
+                        @click="moveAcrossDrafts(item, draftIndex, 'question', 1)"
+                      >
+                        <ChevronRight :size="13" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <p
+                  v-else
+                  class="zone-empty"
+                >
+                  拖入题目图片
+                </p>
+              </section>
+              <section
+                class="draft-zone answer-zone"
+                @dragover.prevent
+                @drop.prevent="dropItem($event, draft.id, 'answer', draft.answerItemIds.length)"
+              >
+                <div class="zone-title">
+                  <span>答案</span><small>{{ draft.answerItemIds.length }} 张</small>
+                </div>
+                <div
+                  v-if="itemsFor(draft, 'answer').length"
+                  class="zone-items"
+                >
+                  <div
+                    v-for="item in itemsFor(draft, 'answer')"
+                    :key="item.id"
+                    class="assigned-item"
+                  >
+                    <CaptureThumbnail
+                      :item="item"
+                      :data-url="previews[item.id]"
+                      @preview="emit('preview', $event)"
+                    />
+                    <div class="item-actions">
+                      <button
+                        type="button"
+                        title="移到上一题"
+                        :disabled="draftIndex === 0"
+                        @click="moveAcrossDrafts(item, draftIndex, 'answer', -1)"
+                      >
+                        <ChevronLeft :size="13" />
+                      </button>
+                      <button
+                        type="button"
+                        title="前移"
+                        @click="moveWithin(item, draft, 'answer', -1)"
+                      >
+                        前
+                      </button>
+                      <button
+                        type="button"
+                        title="后移"
+                        @click="moveWithin(item, draft, 'answer', 1)"
+                      >
+                        后
+                      </button>
+                      <button
+                        type="button"
+                        title="改为题图"
+                        @click="emit('moveItem', { itemId: item.id, targetDraftId: draft.id, targetRole: 'question', targetPosition: draft.questionItemIds.length })"
+                      >
+                        题
+                      </button>
+                      <button
+                        type="button"
+                        title="移回未分配"
+                        @click="emit('moveItem', { itemId: item.id, targetDraftId: null, targetRole: null, targetPosition: 0 })"
+                      >
+                        <X :size="13" />
+                      </button>
+                      <button
+                        type="button"
+                        title="移到下一题"
+                        :disabled="draftIndex === detail.drafts.length - 1"
+                        @click="moveAcrossDrafts(item, draftIndex, 'answer', 1)"
+                      >
+                        <ChevronRight :size="13" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <p
+                  v-else
+                  class="zone-empty"
+                >
+                  拖入答案图片
+                </p>
+              </section>
+            </div>
+            <div
+              v-if="draftEdits[draft.id]"
+              class="draft-fields"
+            >
+              <label><span>科目</span><input
+                v-model="draftEdits[draft.id]!.subject"
+                maxlength="40"
+                @change="saveDraft(draft)"
+              ></label>
+              <label><span>标签</span><input
+                v-model="draftEdits[draft.id]!.tags"
+                maxlength="200"
+                placeholder="函数，粗心"
+                @change="saveDraft(draft)"
+              ></label>
+              <label class="note-field"><span>笔记</span><textarea
+                v-model="draftEdits[draft.id]!.note"
+                maxlength="500"
+                rows="2"
+                placeholder="错因或下次提醒"
+                @change="saveDraft(draft)"
+              /></label>
+            </div>
+          </article>
+          <button
+            class="add-draft"
+            type="button"
+            :disabled="busy"
+            @click="emit('createDraft')"
+          >
+            <Plus :size="17" />添加空白草稿
+          </button>
+        </section>
+
+        <footer class="commit-dock">
+          <div><p>原子批量入库</p><strong>{{ readyCount ? `${readyCount} 道已就绪` : '还没有可入库的题目' }}</strong><span>未完成草稿会继续留在采集箱</span></div>
+          <button
+            type="button"
+            :disabled="busy || readyCount === 0"
+            @click="emit('commitReady')"
+          >
+            <Save :size="18" />保存全部就绪题
+          </button>
+        </footer>
+      </template>
+
+      <section
+        v-else
+        class="completed-panel"
+      >
+        <Check :size="31" /><h2>这个批次已经整理完成</h2><p>历史记录会保留；正式题目已经进入题库。</p><button
+          type="button"
+          @click="emit('back')"
+        >
+          返回采集箱
+        </button>
+      </section>
+    </template>
   </main>
 </template>
 
 <style scoped>
-.capture-workspace { max-width: 1120px; margin: 0 auto; padding: 54px 50px 76px; }
-.capture-header { display: flex; justify-content: space-between; gap: 30px; align-items: flex-end; }
-.eyebrow { margin: 0 0 8px; color: var(--cinnabar); font-size: 12px; font-weight: 760; letter-spacing: .13em; }
+.capture-next { max-width: 1240px; min-height: 100vh; margin: 0 auto; padding: 44px 46px 120px; box-sizing: border-box; }
+.error-banner { position: sticky; z-index: 20; top: 14px; margin: 0 0 18px; padding: 12px 15px; color: #7f3829; border: 1px solid rgba(185,88,63,.28); border-radius: 11px; background: rgba(255,245,238,.96); box-shadow: var(--shadow-soft); }
+.inbox-hero, .workbench-header { display: flex; justify-content: space-between; gap: 28px; align-items: flex-end; }
+.eyebrow, .batch-title p { margin: 0 0 8px; color: var(--cinnabar); font-size: 12px; font-weight: 780; letter-spacing: .13em; }
 h1 { margin: 0; font-size: clamp(42px,5vw,64px); letter-spacing: -.055em; line-height: 1; }
-.intro { margin: 15px 0 0; color: var(--ink-muted); font-size: 16px; }
-.privacy-note { display: inline-flex; gap: 8px; align-items: center; padding: 10px 13px; color: #50665d; border: 1px solid rgba(33,51,45,.13); border-radius: 999px; background: rgba(255,253,247,.55); font-size: 12px; }
-.error-banner { margin: 24px 0 0; padding: 12px 15px; color: #7f3829; border: 1px solid rgba(185,88,63,.28); border-radius: 10px; background: rgba(185,88,63,.08); }
-.asset-columns { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 18px; margin-top: 40px; }
-.asset-panel, .details-card { border: 1px solid var(--line); background: rgba(255,253,247,.72); box-shadow: var(--shadow-soft); }
-.asset-panel { display: flex; min-height: 390px; padding: 26px; border-radius: 5px 22px 22px; flex-direction: column; }
-.answer-panel { background: linear-gradient(145deg,rgba(255,253,247,.72),rgba(232,221,199,.28)); }
-.panel-heading, .details-heading { display: flex; gap: 13px; align-items: flex-start; }
-.step-mark { display: grid; width: 31px; height: 31px; flex: 0 0 auto; place-items: center; color: var(--paper); border-radius: 50%; background: var(--green-deep); font-family: serif; font-weight: 700; }
-h2 { margin: 0; font-size: 22px; letter-spacing: -.025em; }
-.panel-heading p, .details-heading p { margin: 5px 0 0; color: var(--ink-muted); font-size: 12px; line-height: 1.5; }
-.panel-empty { display: grid; flex: 1; min-height: 155px; place-content: center; justify-items: center; gap: 12px; color: #73847d; }
-.asset-list { display: grid; gap: 9px; margin: 25px 0; padding: 0; list-style: none; }
-.asset-list li { display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 11px; align-items: center; padding: 13px; border: 1px solid rgba(33,51,45,.1); border-radius: 12px; background: rgba(246,241,231,.72); }
-.asset-list span { display: grid; min-width: 0; }
-.asset-list strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
-.asset-list small { margin-top: 3px; color: var(--ink-muted); }
-.asset-list button { display: grid; width: 32px; height: 32px; place-items: center; color: var(--ink-muted); border: 0; border-radius: 50%; background: transparent; cursor: pointer; }
-.asset-list button:hover { color: var(--cinnabar); background: rgba(185,88,63,.09); }
-.select-button { display: inline-flex; gap: 8px; align-items: center; justify-content: center; min-height: 43px; margin-top: auto; color: var(--green-deep); border: 1px solid rgba(33,51,45,.2); border-radius: 999px; background: transparent; font-weight: 720; cursor: pointer; transition: transform var(--motion-feedback) var(--ease-standard), background var(--motion-standard) var(--ease-standard); }
-.select-button:hover { background: var(--green-soft); }
-.select-button:active { transform: scale(.985); }
-.details-card { margin-top: 18px; padding: 27px; border-radius: 5px 20px 20px; }
-.form-grid { display: grid; grid-template-columns: minmax(180px,.6fr) minmax(300px,1.4fr); gap: 18px; margin-top: 23px; }
-label { display: grid; gap: 8px; color: var(--ink-muted); font-size: 12px; font-weight: 700; }
-input, textarea { width: 100%; box-sizing: border-box; padding: 12px 14px; color: var(--ink); border: 1px solid var(--line); border-radius: 11px; outline: none; background: rgba(246,241,231,.62); font: inherit; font-size: 14px; resize: vertical; transition: border-color var(--motion-feedback), box-shadow var(--motion-feedback); }
-input:focus, textarea:focus { border-color: rgba(33,51,45,.55); box-shadow: 0 0 0 3px rgba(33,51,45,.08); }
-.capture-footer { display: flex; justify-content: flex-end; gap: 22px; align-items: center; margin-top: 24px; }
-.capture-footer p { margin: 0; color: var(--cinnabar); font-size: 12px; }
-.capture-footer .ready-copy { display: inline-flex; gap: 6px; align-items: center; color: #506e61; }
-.save-button { min-width: 166px; min-height: 46px; padding: 0 20px; color: var(--paper); border: 0; border-radius: 999px; background: var(--green-deep); font-weight: 760; cursor: pointer; transition: transform var(--motion-feedback) var(--ease-standard), opacity var(--motion-standard); }
-.save-button:active:not(:disabled) { transform: scale(.985); }
-.save-button:disabled { cursor: not-allowed; opacity: .38; }
-@media (max-width: 820px) { .capture-workspace { padding: 34px 22px 96px; } .capture-header { align-items: flex-start; flex-direction: column; } .asset-columns, .form-grid { grid-template-columns: 1fr; } .capture-footer { align-items: stretch; flex-direction: column; } }
-@media (prefers-reduced-motion: reduce) { .select-button, .save-button { transition: none; } }
+.intro { max-width: 650px; margin: 15px 0 0; color: var(--ink-muted); font-size: 15px; }
+.capacity-note { display: inline-flex; gap: 8px; align-items: center; padding: 10px 14px; color: #50665d; border: 1px solid rgba(33,51,45,.13); border-radius: 999px; background: rgba(255,253,247,.62); font-size: 12px; }
+.new-batch-card { display: flex; justify-content: space-between; gap: 28px; align-items: center; margin-top: 38px; padding: 24px 25px; border: 1px solid var(--line); border-radius: 5px 20px 20px; background: rgba(255,253,247,.72); box-shadow: var(--shadow-soft); }
+.new-batch-copy { display: flex; gap: 13px; align-items: center; }.round-icon { display: grid; width: 42px; height: 42px; place-items: center; color: var(--paper); border-radius: 50%; background: var(--green-deep); }.new-batch-card h2, .new-batch-card p { margin: 0; }.new-batch-card h2 { font-size: 19px; }.new-batch-card p { margin-top: 4px; color: var(--ink-muted); font-size: 12px; }
+.new-batch-card form { display: flex; gap: 9px; }.new-batch-card input { width: 240px; }.new-batch-card button, .capture-toolbar button, .collecting-panel>button, .layout-bar>button, .commit-dock button { display: inline-flex; gap: 8px; align-items: center; justify-content: center; min-height: 43px; padding: 0 17px; color: var(--paper); border: 0; border-radius: 999px; background: var(--green-deep); font-weight: 740; cursor: pointer; }
+input, textarea, select { box-sizing: border-box; padding: 10px 12px; color: var(--ink); border: 1px solid var(--line); border-radius: 10px; outline: none; background: rgba(246,241,231,.66); font: inherit; }.new-batch-card button:disabled, button:disabled { cursor: not-allowed; opacity: .4; }
+.batch-section { margin-top: 42px; }.section-heading { display: flex; justify-content: space-between; align-items: flex-end; }.section-heading p, .section-heading h2 { margin: 0; }.section-heading p { color: var(--cinnabar); font-size: 11px; font-weight: 760; letter-spacing: .12em; }.section-heading h2 { margin-top: 3px; font-size: 24px; }.section-heading>span { color: var(--ink-muted); font-size: 12px; }
+.batch-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 15px; margin-top: 17px; }.batch-card { position: relative; min-width: 0; border: 1px solid var(--line); border-radius: 4px 18px 18px; background: rgba(255,253,247,.7); box-shadow: var(--shadow-soft); transition: transform var(--motion-standard) var(--ease-standard), box-shadow var(--motion-standard); }.batch-card:hover { transform: translateY(-3px); box-shadow: 0 18px 36px rgba(34,48,43,.11); }.batch-open { width: 100%; padding: 24px; text-align: left; border: 0; background: transparent; cursor: pointer; }.batch-state { color: var(--cinnabar); font-size: 10px; font-weight: 800; letter-spacing: .1em; }.batch-card h3 { margin: 11px 0 6px; font-size: 22px; }.batch-card p { margin: 0; color: var(--ink-muted); font-size: 12px; }.batch-card strong { display: flex; gap: 4px; align-items: center; margin-top: 26px; color: var(--green-deep); font-size: 12px; }.batch-delete { position: absolute; top: 15px; right: 15px; display: grid; width: 32px; height: 32px; place-items: center; color: var(--ink-muted); border: 0; border-radius: 50%; background: transparent; cursor: pointer; }.batch-delete:hover { color: var(--cinnabar); background: rgba(185,88,63,.1); }
+.empty-inbox { display: grid; min-height: 210px; margin-top: 17px; place-content: center; justify-items: center; gap: 13px; color: var(--ink-muted); border: 1px dashed rgba(33,51,45,.2); border-radius: 16px; }.empty-inbox p { max-width: 380px; margin: 0; text-align: center; }.completed-section { margin-top: 30px; color: var(--ink-muted); }.completed-section button { margin: 10px 8px 0 0; padding: 8px 12px; color: inherit; border: 1px solid var(--line); border-radius: 9px; background: transparent; }
+.workbench-header { align-items: center; }.back-button { display: inline-flex; gap: 7px; align-items: center; padding: 9px 12px; color: var(--ink-muted); border: 1px solid var(--line); border-radius: 999px; background: rgba(255,253,247,.5); cursor: pointer; }.batch-title { flex: 1; }.batch-title h1 { font-size: clamp(32px,4vw,50px); }.workbench-stats { display: flex; gap: 7px; }.workbench-stats span { display: grid; min-width: 58px; padding: 9px; text-align: center; color: var(--ink-muted); border-radius: 10px; background: rgba(232,221,199,.48); font-size: 10px; }.workbench-stats strong { color: var(--ink); font-family: serif; font-size: 20px; }.workbench-stats .ready strong { color: var(--cinnabar); }
+.capture-toolbar { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)) minmax(180px,.75fr); gap: 10px; margin-top: 31px; }.capture-toolbar button, .tool-hint { display: flex; gap: 11px; align-items: center; min-height: 60px; padding: 0 17px; color: var(--ink); border: 1px solid var(--line); border-radius: 13px; background: rgba(255,253,247,.67); text-align: left; }.capture-toolbar button { justify-content: flex-start; cursor: pointer; }.capture-toolbar .primary-tool { color: var(--paper); border-color: var(--green-deep); background: var(--green-deep); }.capture-toolbar span, .tool-hint span { display: grid; gap: 2px; }.capture-toolbar strong, .tool-hint strong { font-size: 13px; }.capture-toolbar small, .tool-hint small { opacity: .68; font-size: 10px; }
+.external-drop { display: flex; gap: 9px; align-items: center; justify-content: center; min-height: 44px; margin-top: 10px; color: var(--ink-muted); border: 1px dashed rgba(33,51,45,.24); border-radius: 11px; font-size: 11px; transition: background var(--motion-feedback), border-color var(--motion-feedback); }.external-drop.is-active { color: var(--green-deep); border-color: var(--green-deep); background: var(--green-soft); }
+.collecting-panel { display: grid; grid-template-columns: minmax(0,1fr) 240px auto; gap: 20px; align-items: end; margin-top: 24px; padding: 26px; border: 1px solid var(--line); border-radius: 5px 20px 20px; background: rgba(255,253,247,.73); box-shadow: var(--shadow-soft); }.collecting-copy { display: flex; gap: 13px; align-items: flex-start; }.collecting-panel h2,.collecting-panel p { margin: 0; }.collecting-panel p { max-width: 550px; margin-top: 5px; color: var(--ink-muted); font-size: 12px; }.collecting-panel label,.layout-bar label,.draft-fields label { display: grid; gap: 6px; color: var(--ink-muted); font-size: 10px; font-weight: 720; }
+.layout-bar { display: flex; gap: 11px; align-items: end; margin-top: 25px; padding: 17px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,253,247,.66); }.layout-heading { display: flex; flex: 1; gap: 10px; align-items: flex-start; }.layout-heading h2,.layout-heading p { margin: 0; }.layout-heading h2 { font-size: 16px; }.layout-heading p { margin-top: 3px; color: var(--ink-muted); font-size: 10px; }.layout-bar select { min-width: 210px; }.layout-bar input { width: 78px; }
+.unassigned-strip { margin-top: 17px; padding: 17px; border: 1px dashed rgba(33,51,45,.22); border-radius: 14px; background: rgba(232,221,199,.18); }.strip-heading { display: flex; justify-content: space-between; align-items: center; }.strip-heading div { display: flex; gap: 9px; align-items: baseline; }.strip-heading p { margin: 0; font-weight: 760; }.strip-heading span { color: var(--ink-muted); font-size: 10px; }.strip-heading strong { color: var(--cinnabar); }.thumbnail-row { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; max-height: 290px; margin-top: 12px; overflow: auto; }.quick-assign { display: flex; gap: 5px; margin-top: 4px; }.quick-assign button,.item-actions button { min-height: 25px; padding: 0 7px; color: var(--ink-muted); border: 1px solid rgba(33,51,45,.13); border-radius: 7px; background: rgba(255,253,247,.7); font-size: 9px; cursor: pointer; }.strip-empty { display: flex; gap: 6px; align-items: center; margin: 12px 0 0; color: #537064; font-size: 11px; }
+.draft-stack { display: grid; gap: 14px; margin-top: 18px; }.draft-card { padding: 19px; border: 1px solid var(--line); border-radius: 5px 18px 18px; background: rgba(255,253,247,.75); box-shadow: var(--shadow-soft); }.draft-card.is-ready { border-color: rgba(75,111,94,.33); }.draft-header { display: flex; gap: 10px; align-items: center; }.draft-number { color: var(--cinnabar); font-family: serif; font-size: 21px; }.draft-header div { flex: 1; }.draft-header h3,.draft-header p { margin: 0; }.draft-header h3 { font-size: 16px; }.draft-header p { margin-top: 2px; color: var(--ink-muted); font-size: 10px; }.ready-mark { padding: 5px 8px; color: #4e6f61; border-radius: 999px; background: var(--green-soft); font-size: 9px; font-weight: 800; }
+.draft-zones { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; margin-top: 14px; }.draft-zone { min-height: 118px; padding: 11px; border: 1px dashed rgba(33,51,45,.18); border-radius: 12px; background: rgba(246,241,231,.5); }.answer-zone { background: rgba(232,221,199,.3); }.zone-title { display: flex; justify-content: space-between; margin-bottom: 8px; }.zone-title span { font-size: 11px; font-weight: 800; }.zone-title small { color: var(--ink-muted); }.zone-items { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 7px; }.assigned-item { min-width: 0; }.item-actions { display: flex; gap: 3px; justify-content: center; margin-top: 4px; }.item-actions button { display: grid; flex: 1; padding: 0 3px; place-items: center; }.zone-empty { display: grid; min-height: 70px; margin: 0; place-items: center; color: var(--ink-muted); font-size: 11px; }.draft-fields { display: grid; grid-template-columns: .55fr .75fr 1.7fr; gap: 10px; margin-top: 13px; }.draft-fields textarea { width: 100%; resize: vertical; }.add-draft { display: inline-flex; gap: 7px; align-items: center; justify-content: center; min-height: 43px; color: var(--green-deep); border: 1px dashed rgba(33,51,45,.26); border-radius: 12px; background: transparent; cursor: pointer; }
+.commit-dock { position: sticky; z-index: 12; bottom: 14px; display: flex; justify-content: space-between; gap: 20px; align-items: center; margin-top: 22px; padding: 15px 17px; border: 1px solid rgba(33,51,45,.15); border-radius: 15px; background: rgba(246,241,231,.94); box-shadow: 0 16px 45px rgba(34,48,43,.18); backdrop-filter: blur(16px); }.commit-dock div { display: grid; grid-template-columns: auto auto; gap: 2px 9px; }.commit-dock p,.commit-dock strong,.commit-dock span { margin: 0; }.commit-dock p { color: var(--cinnabar); font-size: 9px; font-weight: 800; letter-spacing: .1em; }.commit-dock strong { font-size: 16px; }.commit-dock span { grid-column: 1/-1; color: var(--ink-muted); font-size: 10px; }
+.completed-panel { display: grid; min-height: 420px; place-content: center; justify-items: center; text-align: center; }.completed-panel h2 { margin: 14px 0 5px; }.completed-panel p { margin: 0; color: var(--ink-muted); }.completed-panel button { margin-top: 18px; padding: 10px 16px; color: var(--paper); border: 0; border-radius: 999px; background: var(--green-deep); }
+@media (max-width: 980px) { .batch-grid,.thumbnail-row { grid-template-columns: repeat(2,minmax(0,1fr)); }.collecting-panel { grid-template-columns: 1fr; }.layout-bar { align-items: stretch; flex-wrap: wrap; }.draft-fields { grid-template-columns: 1fr 1fr; }.note-field { grid-column: 1/-1; } }
+@media (max-width: 720px) { .capture-next { padding: 30px 20px 110px; }.inbox-hero,.workbench-header,.new-batch-card { align-items: stretch; flex-direction: column; }.new-batch-card form,.capture-toolbar { grid-template-columns: 1fr; flex-direction: column; }.new-batch-card input { width: 100%; }.batch-grid,.thumbnail-row,.draft-zones,.zone-items,.draft-fields { grid-template-columns: 1fr; }.capture-toolbar { display: grid; }.workbench-stats { align-self: stretch; }.workbench-stats span { flex: 1; }.layout-bar select { min-width: 100%; }.commit-dock { align-items: stretch; flex-direction: column; }.commit-dock button { width: 100%; } }
+@media (prefers-reduced-motion: reduce) { .batch-card,.external-drop { transition: none; } }
 </style>

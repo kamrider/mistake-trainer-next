@@ -1,5 +1,5 @@
 pub mod backup;
-pub mod capture;
+pub mod capture_inbox;
 pub mod exports;
 pub mod insights;
 pub mod library;

@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::{
     infrastructure::assets::{decrypt_asset, encrypt_asset, plaintext_sha256},
-    modules::capture::{StageCaptureError, inspect_capture_image},
+    modules::capture::{CaptureImageError, inspect_capture_image},
 };
 
 pub const MAX_CAPTURE_BATCH_ITEMS: i64 = 150;
@@ -54,11 +54,11 @@ pub struct CaptureBatchSummary {
     pub id: String,
     pub subject: String,
     pub state: CaptureBatchState,
-    pub item_count: i64,
-    pub draft_count: i64,
-    pub ready_count: i64,
+    pub item_count: u32,
+    pub draft_count: u32,
+    pub ready_count: u32,
     pub updated_at_utc_ms: f64,
-    pub revision: i64,
+    pub revision: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Type)]
@@ -66,21 +66,21 @@ pub struct CaptureBatchSummary {
 pub struct CaptureItemSummary {
     pub id: String,
     pub source_name: String,
-    pub source_sequence: i64,
+    pub source_sequence: u32,
     pub media_type: String,
     pub byte_length: f64,
     pub width: u32,
     pub height: u32,
     pub draft_id: Option<String>,
     pub role: Option<String>,
-    pub position: Option<i64>,
+    pub position: Option<u32>,
 }
 
 #[derive(Clone, Debug, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct CaptureDraftSummary {
     pub id: String,
-    pub position: i64,
+    pub position: u32,
     pub subject: String,
     pub tags: Vec<String>,
     pub note: String,
@@ -110,8 +110,8 @@ pub struct CaptureItemPreview {
 #[serde(rename_all = "camelCase")]
 pub struct CaptureCommitReport {
     pub committed_problem_ids: Vec<String>,
-    pub committed_count: i64,
-    pub remaining_draft_count: i64,
+    pub committed_count: u32,
+    pub remaining_draft_count: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -140,7 +140,7 @@ pub struct ApplyCaptureLayout {
     pub account_id: String,
     pub profile_id: String,
     pub batch_id: String,
-    pub expected_revision: i64,
+    pub expected_revision: u32,
     pub mode: CaptureLayoutMode,
     pub question_images_per_draft: u32,
     pub answer_images_per_draft: u32,
@@ -153,11 +153,11 @@ pub struct MoveCaptureItem {
     pub account_id: String,
     pub profile_id: String,
     pub batch_id: String,
-    pub expected_revision: i64,
+    pub expected_revision: u32,
     pub item_id: String,
     pub target_draft_id: Option<String>,
     pub target_role: Option<String>,
-    pub target_position: i64,
+    pub target_position: u32,
     pub now_utc_ms: i64,
 }
 
@@ -166,7 +166,7 @@ pub struct UpdateCaptureDraft {
     pub account_id: String,
     pub profile_id: String,
     pub batch_id: String,
-    pub expected_revision: i64,
+    pub expected_revision: u32,
     pub draft_id: String,
     pub subject: String,
     pub tags: Vec<String>,
@@ -204,8 +204,8 @@ pub enum CaptureInboxError {
     Crypto,
 }
 
-impl From<StageCaptureError> for CaptureInboxError {
-    fn from(_: StageCaptureError) -> Self {
+impl From<CaptureImageError> for CaptureInboxError {
+    fn from(_: CaptureImageError) -> Self {
         Self::InvalidImage
     }
 }
@@ -579,7 +579,7 @@ pub fn update_capture_batch(
     account_id: &str,
     profile_id: &str,
     batch_id: &str,
-    expected_revision: i64,
+    expected_revision: u32,
     subject: &str,
     finish_collecting: bool,
     now_utc_ms: i64,
@@ -746,7 +746,7 @@ pub fn create_capture_draft(
     account_id: &str,
     profile_id: &str,
     batch_id: &str,
-    expected_revision: i64,
+    expected_revision: u32,
     now_utc_ms: i64,
 ) -> Result<CaptureBatchDetail, CaptureInboxError> {
     let batch = query_batch(connection, account_id, profile_id, batch_id)?;
@@ -772,9 +772,6 @@ pub fn move_capture_item(
     connection: &mut Connection,
     input: MoveCaptureItem,
 ) -> Result<CaptureBatchDetail, CaptureInboxError> {
-    if input.target_position < 0 {
-        return Err(CaptureInboxError::InvalidInput);
-    }
     let target_role = match (&input.target_draft_id, input.target_role.as_deref()) {
         (None, None) => None,
         (Some(_), Some("question")) => Some("question"),
@@ -825,7 +822,7 @@ pub fn move_capture_item(
             params![target_draft_id, role],
             |row| row.get(0),
         )?;
-        let position = input.target_position.min(count);
+        let position = i64::from(input.target_position).min(count);
         transaction.execute(
             "UPDATE capture_draft_items SET position = position + 1
              WHERE draft_id = ?1 AND role = ?2 AND position >= ?3",
@@ -913,7 +910,7 @@ pub fn remove_capture_item(
     account_id: &str,
     profile_id: &str,
     batch_id: &str,
-    expected_revision: i64,
+    expected_revision: u32,
     item_id: &str,
     now_utc_ms: i64,
 ) -> Result<CaptureBatchDetail, CaptureInboxError> {
@@ -1032,7 +1029,7 @@ pub fn commit_ready_capture_drafts(
     account_id: &str,
     profile_id: &str,
     batch_id: &str,
-    expected_revision: i64,
+    expected_revision: u32,
     now_utc_ms: i64,
 ) -> Result<CaptureCommitReport, CaptureInboxError> {
     let batch = query_batch(connection, account_id, profile_id, batch_id)?;
@@ -1147,15 +1144,15 @@ pub fn commit_ready_capture_drafts(
     )?;
     transaction.commit()?;
     Ok(CaptureCommitReport {
-        committed_count: i64::try_from(committed_problem_ids.len()).unwrap_or(i64::MAX),
+        committed_count: u32::try_from(committed_problem_ids.len()).unwrap_or(u32::MAX),
         committed_problem_ids,
-        remaining_draft_count,
+        remaining_draft_count: u32::try_from(remaining_draft_count).unwrap_or(u32::MAX),
     })
 }
 
 fn ensure_organizing_revision(
     batch: &CaptureBatchSummary,
-    expected_revision: i64,
+    expected_revision: u32,
 ) -> Result<(), CaptureInboxError> {
     if batch.state != CaptureBatchState::Organizing {
         return Err(CaptureInboxError::InvalidState);

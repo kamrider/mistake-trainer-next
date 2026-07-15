@@ -20,7 +20,7 @@ use crate::infrastructure::{
 };
 
 const FORMAT_VERSION: i32 = 1;
-const CURRENT_SCHEMA_VERSION: i64 = 2;
+const CURRENT_SCHEMA_VERSION: i64 = 3;
 const DATABASE_FILE: &str = "library.db";
 const MANIFEST_FILE: &str = "manifest.json";
 const ASSETS_DIRECTORY: &str = "assets";
@@ -505,6 +505,37 @@ fn ensure_single_account(
             |row| row.get(0),
         )?;
         if has_foreign_session != 0 {
+            return Err(BackupError::ForeignAccountData);
+        }
+    }
+
+    let capture_tables = [
+        "capture_batches",
+        "capture_drafts",
+        "capture_items",
+        "capture_draft_items",
+    ];
+    let capture_table_count = capture_tables
+        .iter()
+        .map(|table| table_exists(connection, table))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|exists| *exists)
+        .count();
+    if (schema_version < 3 && capture_table_count != 0)
+        || (schema_version >= 3 && capture_table_count != capture_tables.len())
+    {
+        return Err(BackupError::Integrity);
+    }
+    if capture_table_count == capture_tables.len() {
+        let has_foreign_capture_batch: i64 = connection.query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM capture_batches WHERE account_id <> ?1 LIMIT 1
+             )",
+            [account_id],
+            |row| row.get(0),
+        )?;
+        if has_foreign_capture_batch != 0 {
             return Err(BackupError::ForeignAccountData);
         }
     }

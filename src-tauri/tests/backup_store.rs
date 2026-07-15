@@ -3,7 +3,7 @@ use std::{fs, sync::Mutex};
 use mistake_trainer_next_lib::{
     infrastructure::{
         assets::{encrypt_asset, plaintext_sha256},
-        database::{open_encrypted_database, run_migrations},
+        database::{open_encrypted_database, open_encrypted_database_read_only, run_migrations},
     },
     modules::backup::{BackupError, create_backup, validate_backup},
 };
@@ -99,6 +99,43 @@ fn refresh_database_manifest(package: &std::path::Path, schema_version: i64) {
 #[test]
 fn encrypted_backup_round_trips_without_leaking_identity_or_plaintext() {
     let fixture = fixture();
+    {
+        let connection = fixture.connection.lock().unwrap();
+        connection
+            .execute(
+                "INSERT INTO capture_batches(
+                   id, account_id, profile_id, subject, state, revision,
+                   created_at_utc_ms, updated_at_utc_ms
+                 ) VALUES('capture-batch-1', ?1, ?2, '数学', 'organizing', 1, 1, 1)",
+                params![ACCOUNT_ID, PROFILE_ID],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO capture_drafts(
+                   id, batch_id, position, subject_override, tags_json, note,
+                   created_at_utc_ms, updated_at_utc_ms
+                 ) VALUES('capture-draft-1', 'capture-batch-1', 0, NULL, '[]', '', 1, 1)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO capture_items(
+                   id, batch_id, asset_id, client_upload_id, source_sequence,
+                   width, height, source_name, created_at_utc_ms
+                 ) VALUES('capture-item-1', 'capture-batch-1', 'asset-1', 'client-1', 0, 100, 100, 'question.png', 1)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO capture_draft_items(draft_id, item_id, role, position)
+                 VALUES('capture-draft-1', 'capture-item-1', 'question', 0)",
+                [],
+            )
+            .unwrap();
+    }
     let source_asset_before = fs::read(fixture.blob_root.join("aa/question.enc")).unwrap();
 
     let (created, package) = created_package(&fixture);
@@ -130,6 +167,16 @@ fn encrypted_backup_round_trips_without_leaking_identity_or_plaintext() {
             .is_err(),
         "backup database must remain unreadable without the SQLCipher key"
     );
+    let encrypted =
+        open_encrypted_database_read_only(&package.join("library.db"), DATABASE_KEY).unwrap();
+    let captured_draft_count: i64 = encrypted
+        .query_row("SELECT COUNT(*) FROM capture_drafts", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(
+        captured_draft_count, 1,
+        "unfinished capture drafts are backed up"
+    );
+    drop(encrypted);
     let validated =
         validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID).expect("backup validates");
     assert_eq!(validated.asset_count, 1);
@@ -234,6 +281,16 @@ fn validation_requires_review_sessions_exactly_when_the_schema_requires_it() {
 
     {
         let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        for table in [
+            "capture_draft_items",
+            "capture_items",
+            "capture_drafts",
+            "capture_batches",
+        ] {
+            database
+                .execute(&format!("DROP TABLE {table}"), [])
+                .unwrap();
+        }
         database.pragma_update(None, "user_version", 1).unwrap();
         database
             .pragma_update(None, "journal_mode", "DELETE")
@@ -244,6 +301,27 @@ fn validation_requires_review_sessions_exactly_when_the_schema_requires_it() {
         validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID).is_ok(),
         "schema v1 remains supported when the v2-only table is absent"
     );
+}
+
+#[test]
+fn validation_requires_all_capture_tables_for_schema_v3() {
+    let fixture = fixture();
+    let (_, package) = created_package(&fixture);
+    {
+        let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        database
+            .execute("DROP TABLE capture_draft_items", [])
+            .unwrap();
+        database
+            .pragma_update(None, "journal_mode", "DELETE")
+            .unwrap();
+    }
+    refresh_database_manifest(&package, 3);
+
+    assert!(matches!(
+        validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID),
+        Err(BackupError::Integrity)
+    ));
 }
 
 #[test]

@@ -23,10 +23,20 @@ export const commands = {
 	exportGenerate: (snapshotId: string) => __TAURI_INVOKE<AppResult<GeneratedExportSummary | null>>("export_generate", { snapshotId }),
 	exportDelete: (snapshotId: string) => __TAURI_INVOKE<AppResult<boolean>>("export_delete", { snapshotId }),
 	exportRestore: (snapshotId: string) => __TAURI_INVOKE<AppResult<boolean>>("export_restore", { snapshotId }),
-	captureCommit: (input: CaptureCommitInput) => __TAURI_INVOKE<AppResult<CaptureCommitOutput>>("capture_commit", { input }),
-	captureList: () => __TAURI_INVOKE<AppResult<StagedAsset[]>>("capture_list"),
-	captureRemove: (stagedAssetId: string) => __TAURI_INVOKE<AppResult<boolean>>("capture_remove", { stagedAssetId }),
-	captureSelect: (role: string) => __TAURI_INVOKE<AppResult<StagedAsset[]>>("capture_select", { role }),
+	captureBatchCreate: (input: CaptureBatchCreateInput) => __TAURI_INVOKE<AppResult<CaptureBatchSummary>>("capture_batch_create", { input }),
+	captureBatchList: () => __TAURI_INVOKE<AppResult<CaptureBatchSummary[]>>("capture_batch_list"),
+	captureBatchDetail: (batchId: string) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_batch_detail", { batchId }),
+	captureBatchUpdate: (input: CaptureBatchUpdateInput) => __TAURI_INVOKE<AppResult<CaptureBatchSummary>>("capture_batch_update", { input }),
+	captureBatchDiscard: (batchId: string) => __TAURI_INVOKE<AppResult<boolean>>("capture_batch_discard", { batchId }),
+	captureImportSelect: (batchId: string) => __TAURI_INVOKE<AppResult<CaptureImportReport>>("capture_import_select", { batchId }),
+	captureImportBytes: (input: CaptureImportBytesInput) => __TAURI_INVOKE<AppResult<CaptureItemSummary>>("capture_import_bytes", { input }),
+	captureItemPreview: (batchId: string, itemId: string) => __TAURI_INVOKE<AppResult<CaptureItemPreview>>("capture_item_preview", { batchId, itemId }),
+	captureItemRemove: (batchId: string, expectedRevision: number, itemId: string) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_item_remove", { batchId, expectedRevision, itemId }),
+	captureLayoutApply: (input: CaptureLayoutInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_layout_apply", { input }),
+	captureDraftCreate: (batchId: string, expectedRevision: number) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_draft_create", { batchId, expectedRevision }),
+	captureItemMove: (input: CaptureItemMoveInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_item_move", { input }),
+	captureDraftUpdate: (input: CaptureDraftUpdateInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_draft_update", { input }),
+	captureCommitReady: (batchId: string, expectedRevision: number) => __TAURI_INVOKE<AppResult<CaptureCommitReport>>("capture_commit_ready", { batchId, expectedRevision }),
 };
 
 /* Types */
@@ -48,15 +58,114 @@ export type BackupSummary = {
 	readyForRestore: boolean,
 };
 
-export type CaptureCommitInput = {
+export type CaptureBatchCreateInput = {
 	subject: string,
-	note: string,
-	stagedAssetIds: string[],
 };
 
-export type CaptureCommitOutput = {
-	problemId: string,
+export type CaptureBatchDetail = {
+	batch: CaptureBatchSummary,
+	items: CaptureItemSummary[],
+	drafts: CaptureDraftSummary[],
+	unassignedItemIds: string[],
 };
+
+export type CaptureBatchState = "collecting" | "organizing" | "completed";
+
+export type CaptureBatchSummary = {
+	id: string,
+	subject: string,
+	state: CaptureBatchState,
+	itemCount: number,
+	draftCount: number,
+	readyCount: number,
+	updatedAtUtcMs: number | null,
+	revision: number,
+};
+
+export type CaptureBatchUpdateInput = {
+	batchId: string,
+	expectedRevision: number,
+	subject: string,
+	finishCollecting: boolean,
+};
+
+export type CaptureCommitReport = {
+	committedProblemIds: string[],
+	committedCount: number,
+	remainingDraftCount: number,
+};
+
+export type CaptureDraftSummary = {
+	id: string,
+	position: number,
+	subject: string,
+	tags: string[],
+	note: string,
+	questionItemIds: string[],
+	answerItemIds: string[],
+	ready: boolean,
+};
+
+export type CaptureDraftUpdateInput = {
+	batchId: string,
+	expectedRevision: number,
+	draftId: string,
+	subject: string,
+	tags: string[],
+	note: string,
+};
+
+export type CaptureImportBytesInput = {
+	batchId: string,
+	clientUploadId: string,
+	sourceName: string,
+	sourceSequence: number | null,
+	bytes: number[],
+};
+
+export type CaptureImportReport = {
+	importedItems: CaptureItemSummary[],
+	importedCount: number,
+};
+
+export type CaptureItemMoveInput = {
+	batchId: string,
+	expectedRevision: number,
+	itemId: string,
+	targetDraftId: string | null,
+	targetRole: string | null,
+	targetPosition: number,
+};
+
+export type CaptureItemPreview = {
+	itemId: string,
+	mediaType: string,
+	dataUrl: string,
+};
+
+export type CaptureItemSummary = {
+	id: string,
+	sourceName: string,
+	sourceSequence: number,
+	mediaType: string,
+	byteLength: number | null,
+	width: number,
+	height: number,
+	draftId: string | null,
+	role: string | null,
+	position: number | null,
+};
+
+export type CaptureLayoutInput = {
+	batchId: string,
+	expectedRevision: number,
+	mode: CaptureLayoutMode,
+	questionImagesPerDraft: number,
+	answerImagesPerDraft: number,
+	splitIndex: number | null,
+};
+
+export type CaptureLayoutMode = "alternating" | "split" | "questions_only" | "manual";
 
 export type DailyActivity = {
 	dayStartUtcMs: number | null,
@@ -202,16 +311,6 @@ export type SettingsOverview = {
 	unresolvedConflictCount: number,
 	localEncryptionReady: boolean,
 	cloudSyncConfigured: boolean,
-};
-
-export type StagedAsset = {
-	id: string,
-	fileName: string,
-	role: string,
-	mediaType: string,
-	byteLength: number | null,
-	width: number,
-	height: number,
 };
 
 export type SubjectActivity = {

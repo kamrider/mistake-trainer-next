@@ -120,8 +120,8 @@ fn organize(
     library: &TestLibrary,
     connection: &mut rusqlite::Connection,
     batch_id: &str,
-    revision: i64,
-) -> i64 {
+    revision: u32,
+) -> u32 {
     update_capture_batch(
         connection,
         ACCOUNT,
