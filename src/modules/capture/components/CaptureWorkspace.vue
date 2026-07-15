@@ -7,7 +7,7 @@ import {
 import { computed, reactive, ref, watch } from 'vue'
 import type {
   CaptureBatchDetail, CaptureBatchSummary, CaptureDraftSummary, CaptureItemSummary,
-  CaptureLayoutMode,
+  CaptureLanAddress, CaptureLanSession, CaptureLayoutMode,
 } from '../../../shared/api/bindings'
 import CaptureThumbnail from './CaptureThumbnail.vue'
 
@@ -25,6 +25,8 @@ const props = defineProps<{
   busy: boolean
   errorMessage: string
   desktopAvailable: boolean
+  lanAddresses: CaptureLanAddress[]
+  lanSession: CaptureLanSession | undefined
 }>()
 
 const emit = defineEmits<{
@@ -42,7 +44,9 @@ const emit = defineEmits<{
   removeItem: [itemId: string]
   commitReady: []
   preview: [itemId: string]
-  mobileCapture: []
+  mobileCapture: [selectedAddress: string | null]
+  refreshLanAddresses: []
+  stopMobileCapture: []
 }>()
 
 const newSubject = ref('')
@@ -52,6 +56,8 @@ const questionImages = ref(1)
 const answerImages = ref(1)
 const splitIndex = ref<number | null>(null)
 const dropActive = ref(false)
+const showLanPanel = ref(false)
+const selectedLanAddress = ref('')
 const draftEdits = reactive<Record<string, { subject: string, tags: string, note: string }>>({})
 
 const itemById = computed(() => new Map(props.detail?.items.map(item => [item.id, item]) ?? []))
@@ -62,6 +68,9 @@ const isCollecting = computed(() => props.detail?.batch.state === 'collecting')
 const unassignedItems = computed(() => props.detail?.unassignedItemIds
   .map(id => itemById.value.get(id))
   .filter((item): item is CaptureItemSummary => Boolean(item)) ?? [])
+const lanMinutesRemaining = computed(() => props.lanSession
+  ? Math.max(0, Math.ceil(((props.lanSession.expiresAtUtcMs ?? Date.now()) - Date.now()) / 60_000))
+  : 0)
 
 watch(() => props.detail, (detail) => {
   if (!detail) return
@@ -79,9 +88,29 @@ watch(() => props.detail, (detail) => {
   }
 }, { immediate: true })
 
+watch(() => props.lanAddresses, (addresses) => {
+  if (!addresses.some(address => address.address === selectedLanAddress.value)) {
+    selectedLanAddress.value = addresses[0]?.address ?? ''
+  }
+}, { immediate: true })
+
+watch(() => props.lanSession, (session) => {
+  if (session) showLanPanel.value = true
+})
+
 function createBatch() {
   emit('createBatch', newSubject.value.trim())
   newSubject.value = ''
+}
+
+function startMobileCapture() {
+  const address = selectedLanAddress.value || props.lanAddresses[0]?.address || null
+  emit('mobileCapture', address)
+}
+
+function formatLanBytes(value: number) {
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`
 }
 
 function requestLayout() {
@@ -298,10 +327,10 @@ function statusLabel(batch: CaptureBatchSummary) {
         <button
           type="button"
           class="primary-tool"
-          :disabled="busy || !desktopAvailable"
-          @click="emit('mobileCapture')"
+          :disabled="busy || !desktopAvailable || !isCollecting"
+          @click="showLanPanel = true; emit('refreshLanAddresses')"
         >
-          <QrCode :size="18" /><span><strong>手机扫码</strong><small>同一 Wi‑Fi 连拍</small></span>
+          <QrCode :size="18" /><span><strong>{{ lanSession ? '手机采集中' : '手机扫码' }}</strong><small>{{ lanSession ? `已收到 ${lanSession.receivedItemCount} 张` : '同一 Wi‑Fi 连拍' }}</small></span>
         </button>
         <button
           type="button"
@@ -314,6 +343,108 @@ function statusLabel(batch: CaptureBatchSummary) {
           <ClipboardPaste :size="17" /><span><strong>Ctrl + V 粘贴</strong><small>也可把图片拖到窗口</small></span>
         </div>
       </section>
+
+      <div
+        v-if="showLanPanel"
+        class="lan-overlay"
+        role="presentation"
+        @click.self="showLanPanel = false"
+      >
+        <section
+          class="lan-dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="lan-dialog-title"
+        >
+          <button
+            class="lan-close"
+            type="button"
+            aria-label="关闭"
+            @click="showLanPanel = false"
+          >
+            <X :size="18" />
+          </button>
+          <template v-if="lanSession">
+            <p class="eyebrow">
+              手机局域网采集
+            </p>
+            <h2 id="lan-dialog-title">
+              扫码开始连拍
+            </h2>
+            <p class="lan-intro">
+              手机与电脑需要在同一个家庭 Wi‑Fi 或个人热点中。
+            </p>
+            <div class="lan-session-grid">
+              <div class="qr-paper">
+                <img
+                  :src="lanSession.qrSvgDataUrl"
+                  alt="手机采集二维码"
+                >
+              </div>
+              <div class="lan-session-copy">
+                <div><span>网络地址</span><strong>{{ lanSession.selectedAddress }}</strong></div>
+                <div><span>电脑已收到</span><strong>{{ lanSession.receivedItemCount }} 张 · {{ formatLanBytes(lanSession.receivedBytes ?? 0) }}</strong></div>
+                <div><span>自动过期</span><strong>约 {{ lanMinutesRemaining }} 分钟后</strong></div>
+                <p>上传时请保持 Windows 应用运行。结束或退出应用会立即关闭端口。</p>
+                <button
+                  class="lan-stop"
+                  type="button"
+                  :disabled="busy"
+                  @click="emit('stopMobileCapture')"
+                >
+                  停止手机采集
+                </button>
+              </div>
+            </div>
+          </template>
+          <template v-else>
+            <p class="eyebrow">
+              手机局域网采集
+            </p>
+            <h2 id="lan-dialog-title">
+              选择手机所在的网络
+            </h2>
+            <p class="lan-intro">
+              只适用于可信的家庭 Wi‑Fi 或手机个人热点。不要在公共 Wi‑Fi 上使用。
+            </p>
+            <label class="lan-address-label">网络接口
+              <select
+                v-model="selectedLanAddress"
+                :disabled="busy || !lanAddresses.length"
+              >
+                <option
+                  v-for="address in lanAddresses"
+                  :key="address.address"
+                  :value="address.address"
+                >{{ address.label }} · {{ address.address }}</option>
+              </select>
+            </label>
+            <p
+              v-if="!lanAddresses.length"
+              class="lan-empty"
+            >
+              没有检测到家庭网络地址，请先连接 Wi‑Fi 或个人热点。
+            </p>
+            <button
+              v-if="!lanAddresses.length"
+              class="lan-refresh"
+              type="button"
+              :disabled="busy"
+              @click="emit('refreshLanAddresses')"
+            >
+              重新检测网络
+            </button>
+            <button
+              class="lan-start"
+              type="button"
+              :disabled="busy || !lanAddresses.length"
+              @click="startMobileCapture"
+            >
+              <QrCode :size="17" /> 生成二维码
+            </button>
+          </template>
+        </section>
+      </div>
 
       <section
         v-if="detail.batch.state !== 'completed'"
@@ -346,6 +477,12 @@ function statusLabel(batch: CaptureBatchSummary) {
         >
           结束采集，开始整理 <ChevronRight :size="17" />
         </button>
+        <p
+          v-if="lanSession"
+          class="lan-live"
+        >
+          <span />手机会话正在接收 · {{ lanSession.receivedItemCount }} 张
+        </p>
       </section>
 
       <template v-else-if="detail.batch.state === 'organizing'">
@@ -693,14 +830,15 @@ input, textarea, select { box-sizing: border-box; padding: 10px 12px; color: var
 .workbench-header { align-items: center; }.back-button { display: inline-flex; gap: 7px; align-items: center; padding: 9px 12px; color: var(--ink-muted); border: 1px solid var(--line); border-radius: 999px; background: rgba(255,253,247,.5); cursor: pointer; }.batch-title { flex: 1; }.batch-title h1 { font-size: clamp(32px,4vw,50px); }.workbench-stats { display: flex; gap: 7px; }.workbench-stats span { display: grid; min-width: 58px; padding: 9px; text-align: center; color: var(--ink-muted); border-radius: 10px; background: rgba(232,221,199,.48); font-size: 10px; }.workbench-stats strong { color: var(--ink); font-family: serif; font-size: 20px; }.workbench-stats .ready strong { color: var(--cinnabar); }
 .capture-toolbar { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)) minmax(180px,.75fr); gap: 10px; margin-top: 31px; }.capture-toolbar button, .tool-hint { display: flex; gap: 11px; align-items: center; min-height: 60px; padding: 0 17px; color: var(--ink); border: 1px solid var(--line); border-radius: 13px; background: rgba(255,253,247,.67); text-align: left; }.capture-toolbar button { justify-content: flex-start; cursor: pointer; }.capture-toolbar .primary-tool { color: var(--paper); border-color: var(--green-deep); background: var(--green-deep); }.capture-toolbar span, .tool-hint span { display: grid; gap: 2px; }.capture-toolbar strong, .tool-hint strong { font-size: 13px; }.capture-toolbar small, .tool-hint small { opacity: .68; font-size: 10px; }
 .external-drop { display: flex; gap: 9px; align-items: center; justify-content: center; min-height: 44px; margin-top: 10px; color: var(--ink-muted); border: 1px dashed rgba(33,51,45,.24); border-radius: 11px; font-size: 11px; transition: background var(--motion-feedback), border-color var(--motion-feedback); }.external-drop.is-active { color: var(--green-deep); border-color: var(--green-deep); background: var(--green-soft); }
-.collecting-panel { display: grid; grid-template-columns: minmax(0,1fr) 240px auto; gap: 20px; align-items: end; margin-top: 24px; padding: 26px; border: 1px solid var(--line); border-radius: 5px 20px 20px; background: rgba(255,253,247,.73); box-shadow: var(--shadow-soft); }.collecting-copy { display: flex; gap: 13px; align-items: flex-start; }.collecting-panel h2,.collecting-panel p { margin: 0; }.collecting-panel p { max-width: 550px; margin-top: 5px; color: var(--ink-muted); font-size: 12px; }.collecting-panel label,.layout-bar label,.draft-fields label { display: grid; gap: 6px; color: var(--ink-muted); font-size: 10px; font-weight: 720; }
+.collecting-panel { display: grid; grid-template-columns: minmax(0,1fr) 240px auto; gap: 20px; align-items: end; margin-top: 24px; padding: 26px; border: 1px solid var(--line); border-radius: 5px 20px 20px; background: rgba(255,253,247,.73); box-shadow: var(--shadow-soft); }.collecting-copy { display: flex; gap: 13px; align-items: flex-start; }.collecting-panel h2,.collecting-panel p { margin: 0; }.collecting-panel p { max-width: 550px; margin-top: 5px; color: var(--ink-muted); font-size: 12px; }.collecting-panel label,.layout-bar label,.draft-fields label { display: grid; gap: 6px; color: var(--ink-muted); font-size: 10px; font-weight: 720; }.collecting-panel .lan-live { grid-column: 1/-1; display: flex; align-items: center; gap: 8px; color: var(--green-deep); font-weight: 720; }.lan-live span { width: 8px; height: 8px; border-radius: 50%; background: #4f806e; box-shadow: 0 0 0 4px rgba(79,128,110,.14); }
+.lan-overlay { position: fixed; z-index: 80; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(28,38,34,.46); backdrop-filter: blur(9px); }.lan-dialog { position: relative; width: min(760px,100%); max-height: min(780px,calc(100vh - 48px)); overflow: auto; padding: 34px; border: 1px solid rgba(33,51,45,.14); border-radius: 8px 30px 30px; background: var(--paper); box-shadow: 0 30px 90px rgba(20,30,26,.28); }.lan-dialog h2 { margin: 4px 0 0; font-family: var(--font-serif); font-size: 34px; }.lan-intro { margin: 10px 0 24px; color: var(--ink-muted); }.lan-close { position: absolute; top: 17px; right: 17px; display: grid; place-items: center; width: 38px; height: 38px; padding: 0; border: 0; border-radius: 50%; color: var(--ink); background: var(--sand); cursor: pointer; }.lan-session-grid { display: grid; grid-template-columns: minmax(250px,320px) 1fr; gap: 30px; align-items: center; }.qr-paper { padding: 18px; border: 1px solid var(--line); border-radius: 18px; background: #fff; }.qr-paper img { display: block; width: 100%; aspect-ratio: 1; }.lan-session-copy { display: grid; gap: 13px; }.lan-session-copy div { display: grid; gap: 3px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }.lan-session-copy span,.lan-address-label { color: var(--ink-muted); font-size: 11px; font-weight: 720; }.lan-session-copy strong { font-size: 16px; }.lan-session-copy p,.lan-empty { margin: 2px 0; color: var(--ink-muted); font-size: 12px; line-height: 1.65; }.lan-stop,.lan-start { display: inline-flex; gap: 8px; align-items: center; justify-content: center; min-height: 44px; padding: 0 18px; border: 0; border-radius: 999px; color: var(--paper); background: var(--vermillion); font-weight: 760; cursor: pointer; }.lan-stop { justify-self: start; }.lan-start { margin-top: 20px; background: var(--green-deep); }.lan-refresh { min-height: 38px; margin-top: 12px; padding: 0 14px; color: var(--green-deep); border: 1px solid var(--line-strong); border-radius: 999px; background: transparent; font-weight: 720; cursor: pointer; }.lan-address-label { display: grid; gap: 8px; }.lan-address-label select { min-height: 48px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 13px; color: var(--ink); background: #fffdf8; }
 .layout-bar { display: flex; gap: 11px; align-items: end; margin-top: 25px; padding: 17px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,253,247,.66); }.layout-heading { display: flex; flex: 1; gap: 10px; align-items: flex-start; }.layout-heading h2,.layout-heading p { margin: 0; }.layout-heading h2 { font-size: 16px; }.layout-heading p { margin-top: 3px; color: var(--ink-muted); font-size: 10px; }.layout-bar select { min-width: 210px; }.layout-bar input { width: 78px; }
 .unassigned-strip { margin-top: 17px; padding: 17px; border: 1px dashed rgba(33,51,45,.22); border-radius: 14px; background: rgba(232,221,199,.18); }.strip-heading { display: flex; justify-content: space-between; align-items: center; }.strip-heading div { display: flex; gap: 9px; align-items: baseline; }.strip-heading p { margin: 0; font-weight: 760; }.strip-heading span { color: var(--ink-muted); font-size: 10px; }.strip-heading strong { color: var(--cinnabar); }.thumbnail-row { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; max-height: 290px; margin-top: 12px; overflow: auto; }.quick-assign { display: flex; gap: 5px; margin-top: 4px; }.quick-assign button,.item-actions button { min-height: 25px; padding: 0 7px; color: var(--ink-muted); border: 1px solid rgba(33,51,45,.13); border-radius: 7px; background: rgba(255,253,247,.7); font-size: 9px; cursor: pointer; }.strip-empty { display: flex; gap: 6px; align-items: center; margin: 12px 0 0; color: #537064; font-size: 11px; }
 .draft-stack { display: grid; gap: 14px; margin-top: 18px; }.draft-card { padding: 19px; border: 1px solid var(--line); border-radius: 5px 18px 18px; background: rgba(255,253,247,.75); box-shadow: var(--shadow-soft); }.draft-card.is-ready { border-color: rgba(75,111,94,.33); }.draft-header { display: flex; gap: 10px; align-items: center; }.draft-number { color: var(--cinnabar); font-family: serif; font-size: 21px; }.draft-header div { flex: 1; }.draft-header h3,.draft-header p { margin: 0; }.draft-header h3 { font-size: 16px; }.draft-header p { margin-top: 2px; color: var(--ink-muted); font-size: 10px; }.ready-mark { padding: 5px 8px; color: #4e6f61; border-radius: 999px; background: var(--green-soft); font-size: 9px; font-weight: 800; }
 .draft-zones { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; margin-top: 14px; }.draft-zone { min-height: 118px; padding: 11px; border: 1px dashed rgba(33,51,45,.18); border-radius: 12px; background: rgba(246,241,231,.5); }.answer-zone { background: rgba(232,221,199,.3); }.zone-title { display: flex; justify-content: space-between; margin-bottom: 8px; }.zone-title span { font-size: 11px; font-weight: 800; }.zone-title small { color: var(--ink-muted); }.zone-items { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 7px; }.assigned-item { min-width: 0; }.item-actions { display: flex; gap: 3px; justify-content: center; margin-top: 4px; }.item-actions button { display: grid; flex: 1; padding: 0 3px; place-items: center; }.zone-empty { display: grid; min-height: 70px; margin: 0; place-items: center; color: var(--ink-muted); font-size: 11px; }.draft-fields { display: grid; grid-template-columns: .55fr .75fr 1.7fr; gap: 10px; margin-top: 13px; }.draft-fields textarea { width: 100%; resize: vertical; }.add-draft { display: inline-flex; gap: 7px; align-items: center; justify-content: center; min-height: 43px; color: var(--green-deep); border: 1px dashed rgba(33,51,45,.26); border-radius: 12px; background: transparent; cursor: pointer; }
 .commit-dock { position: sticky; z-index: 12; bottom: 14px; display: flex; justify-content: space-between; gap: 20px; align-items: center; margin-top: 22px; padding: 15px 17px; border: 1px solid rgba(33,51,45,.15); border-radius: 15px; background: rgba(246,241,231,.94); box-shadow: 0 16px 45px rgba(34,48,43,.18); backdrop-filter: blur(16px); }.commit-dock div { display: grid; grid-template-columns: auto auto; gap: 2px 9px; }.commit-dock p,.commit-dock strong,.commit-dock span { margin: 0; }.commit-dock p { color: var(--cinnabar); font-size: 9px; font-weight: 800; letter-spacing: .1em; }.commit-dock strong { font-size: 16px; }.commit-dock span { grid-column: 1/-1; color: var(--ink-muted); font-size: 10px; }
 .completed-panel { display: grid; min-height: 420px; place-content: center; justify-items: center; text-align: center; }.completed-panel h2 { margin: 14px 0 5px; }.completed-panel p { margin: 0; color: var(--ink-muted); }.completed-panel button { margin-top: 18px; padding: 10px 16px; color: var(--paper); border: 0; border-radius: 999px; background: var(--green-deep); }
-@media (max-width: 980px) { .batch-grid,.thumbnail-row { grid-template-columns: repeat(2,minmax(0,1fr)); }.collecting-panel { grid-template-columns: 1fr; }.layout-bar { align-items: stretch; flex-wrap: wrap; }.draft-fields { grid-template-columns: 1fr 1fr; }.note-field { grid-column: 1/-1; } }
+@media (max-width: 980px) { .batch-grid,.thumbnail-row { grid-template-columns: repeat(2,minmax(0,1fr)); }.collecting-panel { grid-template-columns: 1fr; }.layout-bar { align-items: stretch; flex-wrap: wrap; }.draft-fields { grid-template-columns: 1fr 1fr; }.note-field { grid-column: 1/-1; }.lan-session-grid { grid-template-columns: 1fr; }.qr-paper { width: min(320px,100%); margin: auto; } }
 @media (max-width: 720px) { .capture-next { padding: 30px 20px 110px; }.inbox-hero,.workbench-header,.new-batch-card { align-items: stretch; flex-direction: column; }.new-batch-card form,.capture-toolbar { grid-template-columns: 1fr; flex-direction: column; }.new-batch-card input { width: 100%; }.batch-grid,.thumbnail-row,.draft-zones,.zone-items,.draft-fields { grid-template-columns: 1fr; }.capture-toolbar { display: grid; }.workbench-stats { align-self: stretch; }.workbench-stats span { flex: 1; }.layout-bar select { min-width: 100%; }.commit-dock { align-items: stretch; flex-direction: column; }.commit-dock button { width: 100%; } }
 @media (prefers-reduced-motion: reduce) { .batch-card,.external-drop { transition: none; } }
 </style>

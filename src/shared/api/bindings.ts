@@ -37,6 +37,10 @@ export const commands = {
 	captureItemMove: (input: CaptureItemMoveInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_item_move", { input }),
 	captureDraftUpdate: (input: CaptureDraftUpdateInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_draft_update", { input }),
 	captureCommitReady: (batchId: string, expectedRevision: number) => __TAURI_INVOKE<AppResult<CaptureCommitReport>>("capture_commit_ready", { batchId, expectedRevision }),
+	captureLanAddresses: () => __TAURI_INVOKE<AppResult<CaptureLanAddress[]>>("capture_lan_addresses"),
+	captureLanStart: (input: CaptureLanStartInput) => __TAURI_INVOKE<AppResult<CaptureLanSession>>("capture_lan_start", { input }),
+	captureLanStatus: () => __TAURI_INVOKE<AppResult<CaptureLanSession | null>>("capture_lan_status"),
+	captureLanStop: () => __TAURI_INVOKE<AppResult<boolean>>("capture_lan_stop"),
 };
 
 /* Types */
@@ -154,6 +158,26 @@ export type CaptureItemSummary = {
 	draftId: string | null,
 	role: string | null,
 	position: number | null,
+};
+
+export type CaptureLanAddress = {
+	label: string,
+	address: string,
+};
+
+export type CaptureLanSession = {
+	sessionId: string,
+	batchId: string,
+	qrSvgDataUrl: string,
+	selectedAddress: string,
+	expiresAtUtcMs: number | null,
+	receivedItemCount: number,
+	receivedBytes: number | null,
+};
+
+export type CaptureLanStartInput = {
+	batchId: string,
+	selectedAddress: string | null,
 };
 
 export type CaptureLayoutInput = {

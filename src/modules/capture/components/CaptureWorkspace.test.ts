@@ -24,6 +24,8 @@ function renderWorkspace(detail?: CaptureBatchDetail) {
       busy: false,
       errorMessage: '',
       desktopAvailable: true,
+      lanAddresses: [{ label: 'Wi-Fi', address: '192.168.1.2' }],
+      lanSession: undefined,
     },
   })
 }
@@ -72,10 +74,11 @@ describe('CaptureWorkspace Next', () => {
     const view = renderWorkspace(detail)
 
     await user.click(screen.getByRole('button', { name: /手机扫码/ }))
+    await user.click(screen.getByRole('button', { name: /生成二维码/ }))
     await user.click(screen.getByRole('button', { name: /电脑批量选择/ }))
     await user.click(screen.getByRole('button', { name: /结束采集/ }))
 
-    expect(view.emitted('mobileCapture')).toHaveLength(1)
+    expect(view.emitted('mobileCapture')).toEqual([['192.168.1.2']])
     expect(view.emitted('importSelect')).toHaveLength(1)
     expect(view.emitted('finishCollecting')).toEqual([['数学']])
   })

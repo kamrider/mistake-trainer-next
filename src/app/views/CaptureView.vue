@@ -8,6 +8,8 @@ import {
   type CaptureBatchDetail,
   type CaptureBatchSummary,
   type CaptureDraftSummary,
+  type CaptureLanAddress,
+  type CaptureLanSession,
   type CaptureLayoutMode,
 } from '../../shared/api/bindings'
 import { normalizeAppResult } from '../../shared/api/normalize-result'
@@ -17,10 +19,13 @@ const detail = ref<CaptureBatchDetail>()
 const busy = ref(false)
 const errorMessage = ref('')
 const previews = reactive<Record<string, string>>({})
+const lanAddresses = ref<CaptureLanAddress[]>([])
+const lanSession = ref<CaptureLanSession>()
 const previewOrder: string[] = []
 const desktopAvailable = isTauri()
 let unlisten: UnlistenFn | undefined
 let refreshTimer: ReturnType<typeof setTimeout> | undefined
+let lanPollTimer: ReturnType<typeof setInterval> | undefined
 
 function showError(message: string) {
   errorMessage.value = message
@@ -72,6 +77,7 @@ async function createBatch(subject: string) {
 
 async function discardBatch(batchId: string) {
   if (!desktopAvailable || busy.value) return
+  if (lanSession.value?.batchId === batchId) await stopMobileCapture(true)
   busy.value = true
   try {
     const result = normalizeAppResult(await commands.captureBatchDiscard(batchId))
@@ -141,6 +147,7 @@ async function importFiles(files: File[]) {
 async function finishCollecting(subject: string) {
   const current = detail.value
   if (!desktopAvailable || !current || busy.value) return
+  if (lanSession.value?.batchId === current.batch.id) await stopMobileCapture(true)
   busy.value = true
   try {
     const result = normalizeAppResult(await commands.captureBatchUpdate({
@@ -308,6 +315,61 @@ async function loadPreview(itemId: string) {
   }
 }
 
+async function loadLanAddresses() {
+  if (!desktopAvailable) return
+  try {
+    const result = normalizeAppResult(await commands.captureLanAddresses())
+    if (result.ok) lanAddresses.value = result.data
+  }
+  catch {
+    lanAddresses.value = []
+  }
+}
+
+async function loadLanStatus() {
+  if (!desktopAvailable) return
+  try {
+    const result = normalizeAppResult(await commands.captureLanStatus())
+    if (result.ok) lanSession.value = result.data ?? undefined
+  }
+  catch {
+    lanSession.value = undefined
+  }
+}
+
+async function startMobileCapture(selectedAddress: string | null) {
+  const current = detail.value
+  if (!desktopAvailable || !current || busy.value) return
+  busy.value = true
+  errorMessage.value = ''
+  try {
+    const result = normalizeAppResult(await commands.captureLanStart({
+      batchId: current.batch.id,
+      selectedAddress,
+    }))
+    if (result.ok) lanSession.value = result.data
+    else showError(result.error.userMessage)
+  }
+  catch {
+    showError('手机采集服务没有启动成功，请检查 Wi‑Fi 后重试。')
+  }
+  finally {
+    busy.value = false
+  }
+}
+
+async function stopMobileCapture(silent = false) {
+  if (!desktopAvailable) return
+  try {
+    const result = normalizeAppResult(await commands.captureLanStop())
+    if (result.ok) lanSession.value = undefined
+    else if (!silent) showError(result.error.userMessage)
+  }
+  catch {
+    if (!silent) showError('手机采集服务没有停止成功；退出应用会强制关闭端口。')
+  }
+}
+
 function handlePaste(event: ClipboardEvent) {
   if (!detail.value || detail.value.batch.state === 'completed') return
   if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return
@@ -325,6 +387,7 @@ function scheduleRefresh(batchId: string) {
   refreshTimer = setTimeout(() => {
     if (detail.value?.batch.id === batchId) void loadDetail(batchId)
     else void loadBatches()
+    void loadLanStatus()
   }, 120)
 }
 
@@ -335,12 +398,15 @@ onMounted(async () => {
     return
   }
   await loadBatches()
+  await Promise.all([loadLanAddresses(), loadLanStatus()])
+  lanPollTimer = setInterval(() => void loadLanStatus(), 5_000)
   unlisten = await listen<{ batchId: string }>('capture_batch_changed', event => scheduleRefresh(event.payload.batchId))
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('paste', handlePaste)
   if (refreshTimer) clearTimeout(refreshTimer)
+  if (lanPollTimer) clearInterval(lanPollTimer)
   unlisten?.()
 })
 </script>
@@ -353,6 +419,8 @@ onBeforeUnmount(() => {
     :busy="busy"
     :error-message="errorMessage"
     :desktop-available="desktopAvailable"
+    :lan-addresses="lanAddresses"
+    :lan-session="lanSession"
     @create-batch="createBatch"
     @open-batch="loadDetail"
     @back="detail = undefined; loadBatches()"
@@ -367,6 +435,8 @@ onBeforeUnmount(() => {
     @remove-item="removeItem"
     @commit-ready="commitReady"
     @preview="loadPreview"
-    @mobile-capture="showError('手机扫码服务将在下一阶段接入；当前可先用电脑批量选择、拖入或 Ctrl + V。')"
+    @mobile-capture="startMobileCapture"
+    @refresh-lan-addresses="loadLanAddresses"
+    @stop-mobile-capture="stopMobileCapture()"
   />
 </template>

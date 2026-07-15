@@ -40,6 +40,10 @@ pub fn builder() -> Builder<tauri::Wry> {
         commands::capture_inbox::capture_item_move,
         commands::capture_inbox::capture_draft_update,
         commands::capture_inbox::capture_commit_ready,
+        commands::capture_lan::capture_lan_addresses,
+        commands::capture_lan::capture_lan_start,
+        commands::capture_lan::capture_lan_status,
+        commands::capture_lan::capture_lan_stop,
     ])
 }
 

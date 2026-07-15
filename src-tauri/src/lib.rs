@@ -30,6 +30,7 @@ pub fn run() {
                 current_utc_millis(),
             )?;
             app.manage(runtime);
+            app.manage(modules::capture_lan::CaptureLanManager::default());
             specta.mount_events(app);
             Ok(())
         })
