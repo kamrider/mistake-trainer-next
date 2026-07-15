@@ -1,5 +1,6 @@
 pub mod backup;
 pub mod capture;
+pub mod capture_firewall;
 pub mod capture_inbox;
 pub mod capture_lan;
 pub mod exports;
