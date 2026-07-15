@@ -1321,6 +1321,10 @@ mod tests {
         );
         assert!(page.headers().contains_key("content-security-policy"));
         assert!(!MOBILE_PAGE.contains("<script src=\"/mobile/vendor/heic2any.js\""));
+        assert!(MOBILE_PAGE.contains("const createClientId="));
+        assert!(MOBILE_PAGE.contains("crypto.getRandomValues"));
+        assert!(MOBILE_PAGE.contains("Array.from(input.files||[])"));
+        assert!(MOBILE_PAGE.contains("已选中，正在处理图片"));
 
         let decoder = runtime
             .block_on(
