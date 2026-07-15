@@ -1,7 +1,9 @@
 import { render, screen } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
-import type { CaptureBatchDetail, CaptureBatchSummary } from '../../../shared/api/bindings'
+import type {
+  CaptureBatchDetail, CaptureBatchSummary, CaptureLanPreflight,
+} from '../../../shared/api/bindings'
 import CaptureWorkspace from './CaptureWorkspace.vue'
 
 const batch: CaptureBatchSummary = {
@@ -15,7 +17,19 @@ const batch: CaptureBatchSummary = {
   revision: 3,
 }
 
-function renderWorkspace(detail?: CaptureBatchDetail) {
+const readyPreflight: CaptureLanPreflight = {
+  supported: true,
+  activeProfiles: ['private'],
+  firewallRule: 'ready',
+  canStart: true,
+  needsNetworkChange: false,
+  needsFirewallRepair: false,
+}
+
+function renderWorkspace(
+  detail?: CaptureBatchDetail,
+  preflight: CaptureLanPreflight | undefined = readyPreflight,
+) {
   return render(CaptureWorkspace, {
     props: {
       batches: detail ? [detail.batch] : [batch],
@@ -25,6 +39,8 @@ function renderWorkspace(detail?: CaptureBatchDetail) {
       errorMessage: '',
       desktopAvailable: true,
       lanAddresses: [{ label: 'Wi-Fi', address: '192.168.1.2' }],
+      lanPreflight: preflight,
+      lanPreflightBusy: false,
       lanSession: undefined,
     },
   })
@@ -81,6 +97,62 @@ describe('CaptureWorkspace Next', () => {
     expect(view.emitted('mobileCapture')).toEqual([['192.168.1.2']])
     expect(view.emitted('importSelect')).toHaveLength(1)
     expect(view.emitted('finishCollecting')).toEqual([['数学']])
+  })
+
+  it('blocks QR generation on a public network and opens Windows settings', async () => {
+    const user = userEvent.setup()
+    const publicNetwork: CaptureLanPreflight = {
+      supported: true,
+      activeProfiles: ['public'],
+      firewallRule: 'ready',
+      canStart: false,
+      needsNetworkChange: true,
+      needsFirewallRepair: false,
+    }
+    const detail: CaptureBatchDetail = {
+      batch,
+      items: [],
+      drafts: [],
+      unassignedItemIds: [],
+    }
+    const view = renderWorkspace(detail, publicNetwork)
+
+    await user.click(screen.getByRole('button', { name: /手机扫码/ }))
+    expect(screen.getByRole('heading', { name: '先把可信网络设为专用' })).toBeVisible()
+    expect(screen.queryByRole('button', { name: /生成二维码/ })).not.toBeInTheDocument()
+    expect(screen.getByText(/不会开放公用网络/)).toBeVisible()
+
+    await user.click(screen.getByRole('button', { name: '打开 Windows 网络设置' }))
+    expect(view.emitted('openLanNetworkSettings')).toHaveLength(1)
+    expect(view.emitted('mobileCapture')).toBeUndefined()
+  })
+
+  it('offers one-click repair without exposing commands', async () => {
+    const user = userEvent.setup()
+    const missingRule: CaptureLanPreflight = {
+      supported: true,
+      activeProfiles: ['private'],
+      firewallRule: 'missing',
+      canStart: false,
+      needsNetworkChange: false,
+      needsFirewallRepair: true,
+    }
+    const detail: CaptureBatchDetail = {
+      batch,
+      items: [],
+      drafts: [],
+      unassignedItemIds: [],
+    }
+    const view = renderWorkspace(detail, missingRule)
+
+    await user.click(screen.getByRole('button', { name: /手机扫码/ }))
+    expect(screen.getByRole('heading', { name: '允许手机连接这台电脑' })).toBeVisible()
+    expect(screen.queryByRole('button', { name: /生成二维码/ })).not.toBeInTheDocument()
+    expect(screen.queryByText(/netsh|PowerShell|命令提示符/i)).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '修复手机连接' }))
+    expect(view.emitted('repairLanFirewall')).toHaveLength(1)
+    expect(view.emitted('mobileCapture')).toBeUndefined()
   })
 
   it('enables atomic commit only for ready drafts', async () => {

@@ -7,7 +7,7 @@ import {
 import { computed, reactive, ref, watch } from 'vue'
 import type {
   CaptureBatchDetail, CaptureBatchSummary, CaptureDraftSummary, CaptureItemSummary,
-  CaptureLanAddress, CaptureLanSession, CaptureLayoutMode,
+  CaptureLanAddress, CaptureLanPreflight, CaptureLanSession, CaptureLayoutMode,
 } from '../../../shared/api/bindings'
 import CaptureThumbnail from './CaptureThumbnail.vue'
 
@@ -26,6 +26,8 @@ const props = defineProps<{
   errorMessage: string
   desktopAvailable: boolean
   lanAddresses: CaptureLanAddress[]
+  lanPreflight: CaptureLanPreflight | undefined
+  lanPreflightBusy: boolean
   lanSession: CaptureLanSession | undefined
 }>()
 
@@ -46,6 +48,9 @@ const emit = defineEmits<{
   preview: [itemId: string]
   mobileCapture: [selectedAddress: string | null]
   refreshLanAddresses: []
+  refreshLanPreflight: []
+  repairLanFirewall: []
+  openLanNetworkSettings: []
   stopMobileCapture: []
 }>()
 
@@ -71,6 +76,9 @@ const unassignedItems = computed(() => props.detail?.unassignedItemIds
 const lanMinutesRemaining = computed(() => props.lanSession
   ? Math.max(0, Math.ceil(((props.lanSession.expiresAtUtcMs ?? Date.now()) - Date.now()) / 60_000))
   : 0)
+const lanNeedsNetworkChange = computed(() => props.lanPreflight?.needsNetworkChange === true)
+const lanNeedsRepair = computed(() => props.lanPreflight?.needsFirewallRepair === true)
+const lanReady = computed(() => props.lanPreflight?.canStart === true)
 
 watch(() => props.detail, (detail) => {
   if (!detail) return
@@ -106,6 +114,12 @@ function createBatch() {
 function startMobileCapture() {
   const address = selectedLanAddress.value || props.lanAddresses[0]?.address || null
   emit('mobileCapture', address)
+}
+
+function openLanPanel() {
+  showLanPanel.value = true
+  emit('refreshLanAddresses')
+  emit('refreshLanPreflight')
 }
 
 function formatLanBytes(value: number) {
@@ -328,7 +342,7 @@ function statusLabel(batch: CaptureBatchSummary) {
           type="button"
           class="primary-tool"
           :disabled="busy || !desktopAvailable || !isCollecting"
-          @click="showLanPanel = true; emit('refreshLanAddresses')"
+          @click="openLanPanel"
         >
           <QrCode :size="18" /><span><strong>{{ lanSession ? '手机采集中' : '手机扫码' }}</strong><small>{{ lanSession ? `已收到 ${lanSession.receivedItemCount} 张` : '同一 Wi‑Fi 连拍' }}</small></span>
         </button>
@@ -401,47 +415,168 @@ function statusLabel(batch: CaptureBatchSummary) {
             <p class="eyebrow">
               手机局域网采集
             </p>
-            <h2 id="lan-dialog-title">
-              选择手机所在的网络
-            </h2>
-            <p class="lan-intro">
-              只适用于可信的家庭 Wi‑Fi 或手机个人热点。不要在公共 Wi‑Fi 上使用。
-            </p>
-            <label class="lan-address-label">网络接口
-              <select
-                v-model="selectedLanAddress"
-                :disabled="busy || !lanAddresses.length"
-              >
-                <option
-                  v-for="address in lanAddresses"
-                  :key="address.address"
-                  :value="address.address"
-                >{{ address.label }} · {{ address.address }}</option>
-              </select>
-            </label>
-            <p
-              v-if="!lanAddresses.length"
-              class="lan-empty"
+            <div
+              class="lan-preflight"
+              aria-live="polite"
             >
-              没有检测到家庭网络地址，请先连接 Wi‑Fi 或个人热点。
-            </p>
-            <button
-              v-if="!lanAddresses.length"
-              class="lan-refresh"
-              type="button"
-              :disabled="busy"
-              @click="emit('refreshLanAddresses')"
-            >
-              重新检测网络
-            </button>
-            <button
-              class="lan-start"
-              type="button"
-              :disabled="busy || !lanAddresses.length"
-              @click="startMobileCapture"
-            >
-              <QrCode :size="17" /> 生成二维码
-            </button>
+              <template v-if="lanPreflightBusy">
+                <h2 id="lan-dialog-title">
+                  正在检查连接条件
+                </h2>
+                <p class="lan-intro">
+                  正在确认 Windows 网络类型与手机连接权限……
+                </p>
+                <div class="lan-progress">
+                  <span />检查专用网络与防火墙
+                </div>
+              </template>
+
+              <template v-else-if="!lanPreflight">
+                <h2 id="lan-dialog-title">
+                  暂时没有读到连接状态
+                </h2>
+                <p class="lan-intro">
+                  应用没有修改任何系统设置。重新检测后仍可继续。
+                </p>
+                <button
+                  class="lan-secondary"
+                  type="button"
+                  @click="emit('refreshLanPreflight')"
+                >
+                  重新检测
+                </button>
+              </template>
+
+              <template v-else-if="!lanPreflight.supported">
+                <h2 id="lan-dialog-title">
+                  当前系统暂不支持自动修复
+                </h2>
+                <p class="lan-intro">
+                  手机扫码采集的权限引导目前只支持 Windows 桌面版。
+                </p>
+              </template>
+
+              <template v-else-if="lanNeedsNetworkChange">
+                <span class="lan-state is-attention">当前没有可用的专用网络</span>
+                <h2 id="lan-dialog-title">
+                  先把可信网络设为专用
+                </h2>
+                <p class="lan-intro">
+                  Windows 当前没有可供手机采集使用的“专用网络”（常见情况是 Wi‑Fi 被标记为“公用”），因此连接会被安全拦截。请连接个人热点或可信家庭 Wi‑Fi，并把它设为“专用网络”。
+                </p>
+                <div class="lan-actions">
+                  <button
+                    class="lan-primary"
+                    type="button"
+                    @click="emit('openLanNetworkSettings')"
+                  >
+                    打开 Windows 网络设置
+                  </button>
+                  <button
+                    class="lan-secondary"
+                    type="button"
+                    @click="emit('refreshLanPreflight')"
+                  >
+                    我已设置，重新检测
+                  </button>
+                </div>
+                <p class="lan-safety">
+                  应用不会开放公用网络，也不会自动更改你的网络类型。
+                </p>
+              </template>
+
+              <template v-else-if="lanNeedsRepair">
+                <span class="lan-state is-attention">需要一次 Windows 授权</span>
+                <h2 id="lan-dialog-title">
+                  允许手机连接这台电脑
+                </h2>
+                <p class="lan-intro">
+                  点击后 Windows 会显示一次管理员确认。授权只允许本应用接收同一专用局域网内的手机图片；公用网络仍然保持拦截。
+                </p>
+                <div class="lan-actions">
+                  <button
+                    class="lan-primary"
+                    type="button"
+                    :disabled="busy"
+                    @click="emit('repairLanFirewall')"
+                  >
+                    {{ busy ? '等待 Windows 确认…' : '修复手机连接' }}
+                  </button>
+                  <button
+                    class="lan-secondary"
+                    type="button"
+                    :disabled="busy"
+                    @click="emit('refreshLanPreflight')"
+                  >
+                    重新检测
+                  </button>
+                </div>
+                <p class="lan-safety">
+                  如果取消管理员确认，不会做任何更改，之后可再次点击修复。
+                </p>
+              </template>
+
+              <template v-else-if="lanReady">
+                <span class="lan-state is-ready">专用网络与连接权限已就绪</span>
+                <h2 id="lan-dialog-title">
+                  选择手机所在的网络
+                </h2>
+                <p class="lan-intro">
+                  仅适用于可信的家庭 Wi‑Fi 或手机个人热点。不要在公共 Wi‑Fi 上使用。
+                </p>
+                <label class="lan-address-label">网络接口
+                  <select
+                    v-model="selectedLanAddress"
+                    :disabled="busy || !lanAddresses.length"
+                  >
+                    <option
+                      v-for="address in lanAddresses"
+                      :key="address.address"
+                      :value="address.address"
+                    >{{ address.label }} · {{ address.address }}</option>
+                  </select>
+                </label>
+                <p
+                  v-if="!lanAddresses.length"
+                  class="lan-empty"
+                >
+                  没有检测到家庭网络地址，请先连接 Wi‑Fi 或个人热点。
+                </p>
+                <button
+                  v-if="!lanAddresses.length"
+                  class="lan-secondary"
+                  type="button"
+                  :disabled="busy"
+                  @click="emit('refreshLanAddresses')"
+                >
+                  重新检测网络
+                </button>
+                <button
+                  class="lan-start"
+                  type="button"
+                  :disabled="busy || !lanAddresses.length"
+                  @click="startMobileCapture"
+                >
+                  <QrCode :size="17" /> 生成二维码
+                </button>
+              </template>
+
+              <template v-else>
+                <h2 id="lan-dialog-title">
+                  连接权限状态异常
+                </h2>
+                <p class="lan-intro">
+                  二维码尚未生成，应用也没有开放端口。请重新检测后再试。
+                </p>
+                <button
+                  class="lan-secondary"
+                  type="button"
+                  @click="emit('refreshLanPreflight')"
+                >
+                  重新检测
+                </button>
+              </template>
+            </div>
           </template>
         </section>
       </div>
@@ -832,6 +967,8 @@ input, textarea, select { box-sizing: border-box; padding: 10px 12px; color: var
 .external-drop { display: flex; gap: 9px; align-items: center; justify-content: center; min-height: 44px; margin-top: 10px; color: var(--ink-muted); border: 1px dashed rgba(33,51,45,.24); border-radius: 11px; font-size: 11px; transition: background var(--motion-feedback), border-color var(--motion-feedback); }.external-drop.is-active { color: var(--green-deep); border-color: var(--green-deep); background: var(--green-soft); }
 .collecting-panel { display: grid; grid-template-columns: minmax(0,1fr) 240px auto; gap: 20px; align-items: end; margin-top: 24px; padding: 26px; border: 1px solid var(--line); border-radius: 5px 20px 20px; background: rgba(255,253,247,.73); box-shadow: var(--shadow-soft); }.collecting-copy { display: flex; gap: 13px; align-items: flex-start; }.collecting-panel h2,.collecting-panel p { margin: 0; }.collecting-panel p { max-width: 550px; margin-top: 5px; color: var(--ink-muted); font-size: 12px; }.collecting-panel label,.layout-bar label,.draft-fields label { display: grid; gap: 6px; color: var(--ink-muted); font-size: 10px; font-weight: 720; }.collecting-panel .lan-live { grid-column: 1/-1; display: flex; align-items: center; gap: 8px; color: var(--green-deep); font-weight: 720; }.lan-live span { width: 8px; height: 8px; border-radius: 50%; background: #4f806e; box-shadow: 0 0 0 4px rgba(79,128,110,.14); }
 .lan-overlay { position: fixed; z-index: 80; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(28,38,34,.46); backdrop-filter: blur(9px); }.lan-dialog { position: relative; width: min(760px,100%); max-height: min(780px,calc(100vh - 48px)); overflow: auto; padding: 34px; border: 1px solid rgba(33,51,45,.14); border-radius: 8px 30px 30px; background: var(--paper); box-shadow: 0 30px 90px rgba(20,30,26,.28); }.lan-dialog h2 { margin: 4px 0 0; font-family: var(--font-serif); font-size: 34px; }.lan-intro { margin: 10px 0 24px; color: var(--ink-muted); }.lan-close { position: absolute; top: 17px; right: 17px; display: grid; place-items: center; width: 38px; height: 38px; padding: 0; border: 0; border-radius: 50%; color: var(--ink); background: var(--sand); cursor: pointer; }.lan-session-grid { display: grid; grid-template-columns: minmax(250px,320px) 1fr; gap: 30px; align-items: center; }.qr-paper { padding: 18px; border: 1px solid var(--line); border-radius: 18px; background: #fff; }.qr-paper img { display: block; width: 100%; aspect-ratio: 1; }.lan-session-copy { display: grid; gap: 13px; }.lan-session-copy div { display: grid; gap: 3px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }.lan-session-copy span,.lan-address-label { color: var(--ink-muted); font-size: 11px; font-weight: 720; }.lan-session-copy strong { font-size: 16px; }.lan-session-copy p,.lan-empty { margin: 2px 0; color: var(--ink-muted); font-size: 12px; line-height: 1.65; }.lan-stop,.lan-start { display: inline-flex; gap: 8px; align-items: center; justify-content: center; min-height: 44px; padding: 0 18px; border: 0; border-radius: 999px; color: var(--paper); background: var(--vermillion); font-weight: 760; cursor: pointer; }.lan-stop { justify-self: start; }.lan-start { margin-top: 20px; background: var(--green-deep); }.lan-refresh { min-height: 38px; margin-top: 12px; padding: 0 14px; color: var(--green-deep); border: 1px solid var(--line-strong); border-radius: 999px; background: transparent; font-weight: 720; cursor: pointer; }.lan-address-label { display: grid; gap: 8px; }.lan-address-label select { min-height: 48px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 13px; color: var(--ink); background: #fffdf8; }
+.lan-preflight { min-height: 240px; }.lan-progress { display: flex; gap: 10px; align-items: center; color: var(--ink-muted); font-size: 12px; }.lan-progress span { width: 9px; height: 9px; border-radius: 50%; background: var(--cinnabar); animation: lan-pulse 1.1s ease-in-out infinite alternate; }.lan-state { display: inline-flex; margin-bottom: 11px; padding: 6px 10px; border-radius: 999px; font-size: 10px; font-weight: 800; letter-spacing: .04em; }.lan-state.is-attention { color: #87402f; background: rgba(185,88,63,.12); }.lan-state.is-ready { color: #3f6857; background: var(--green-soft); }.lan-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }.lan-primary,.lan-secondary { min-height: 44px; padding: 0 17px; border-radius: 999px; font-weight: 760; cursor: pointer; }.lan-primary { color: var(--paper); border: 1px solid var(--green-deep); background: var(--green-deep); }.lan-secondary { color: var(--green-deep); border: 1px solid var(--line-strong); background: transparent; }.lan-safety { max-width: 620px; margin: 16px 0 0; padding-left: 12px; color: var(--ink-muted); border-left: 2px solid var(--sand); font-size: 11px; line-height: 1.6; }
+@keyframes lan-pulse { to { transform: scale(1.35); opacity: .45; } }
 .layout-bar { display: flex; gap: 11px; align-items: end; margin-top: 25px; padding: 17px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,253,247,.66); }.layout-heading { display: flex; flex: 1; gap: 10px; align-items: flex-start; }.layout-heading h2,.layout-heading p { margin: 0; }.layout-heading h2 { font-size: 16px; }.layout-heading p { margin-top: 3px; color: var(--ink-muted); font-size: 10px; }.layout-bar select { min-width: 210px; }.layout-bar input { width: 78px; }
 .unassigned-strip { margin-top: 17px; padding: 17px; border: 1px dashed rgba(33,51,45,.22); border-radius: 14px; background: rgba(232,221,199,.18); }.strip-heading { display: flex; justify-content: space-between; align-items: center; }.strip-heading div { display: flex; gap: 9px; align-items: baseline; }.strip-heading p { margin: 0; font-weight: 760; }.strip-heading span { color: var(--ink-muted); font-size: 10px; }.strip-heading strong { color: var(--cinnabar); }.thumbnail-row { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; max-height: 290px; margin-top: 12px; overflow: auto; }.quick-assign { display: flex; gap: 5px; margin-top: 4px; }.quick-assign button,.item-actions button { min-height: 25px; padding: 0 7px; color: var(--ink-muted); border: 1px solid rgba(33,51,45,.13); border-radius: 7px; background: rgba(255,253,247,.7); font-size: 9px; cursor: pointer; }.strip-empty { display: flex; gap: 6px; align-items: center; margin: 12px 0 0; color: #537064; font-size: 11px; }
 .draft-stack { display: grid; gap: 14px; margin-top: 18px; }.draft-card { padding: 19px; border: 1px solid var(--line); border-radius: 5px 18px 18px; background: rgba(255,253,247,.75); box-shadow: var(--shadow-soft); }.draft-card.is-ready { border-color: rgba(75,111,94,.33); }.draft-header { display: flex; gap: 10px; align-items: center; }.draft-number { color: var(--cinnabar); font-family: serif; font-size: 21px; }.draft-header div { flex: 1; }.draft-header h3,.draft-header p { margin: 0; }.draft-header h3 { font-size: 16px; }.draft-header p { margin-top: 2px; color: var(--ink-muted); font-size: 10px; }.ready-mark { padding: 5px 8px; color: #4e6f61; border-radius: 999px; background: var(--green-soft); font-size: 9px; font-weight: 800; }
@@ -840,5 +977,5 @@ input, textarea, select { box-sizing: border-box; padding: 10px 12px; color: var
 .completed-panel { display: grid; min-height: 420px; place-content: center; justify-items: center; text-align: center; }.completed-panel h2 { margin: 14px 0 5px; }.completed-panel p { margin: 0; color: var(--ink-muted); }.completed-panel button { margin-top: 18px; padding: 10px 16px; color: var(--paper); border: 0; border-radius: 999px; background: var(--green-deep); }
 @media (max-width: 980px) { .batch-grid,.thumbnail-row { grid-template-columns: repeat(2,minmax(0,1fr)); }.collecting-panel { grid-template-columns: 1fr; }.layout-bar { align-items: stretch; flex-wrap: wrap; }.draft-fields { grid-template-columns: 1fr 1fr; }.note-field { grid-column: 1/-1; }.lan-session-grid { grid-template-columns: 1fr; }.qr-paper { width: min(320px,100%); margin: auto; } }
 @media (max-width: 720px) { .capture-next { padding: 30px 20px 110px; }.inbox-hero,.workbench-header,.new-batch-card { align-items: stretch; flex-direction: column; }.new-batch-card form,.capture-toolbar { grid-template-columns: 1fr; flex-direction: column; }.new-batch-card input { width: 100%; }.batch-grid,.thumbnail-row,.draft-zones,.zone-items,.draft-fields { grid-template-columns: 1fr; }.capture-toolbar { display: grid; }.workbench-stats { align-self: stretch; }.workbench-stats span { flex: 1; }.layout-bar select { min-width: 100%; }.commit-dock { align-items: stretch; flex-direction: column; }.commit-dock button { width: 100%; } }
-@media (prefers-reduced-motion: reduce) { .batch-card,.external-drop { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .batch-card,.external-drop { transition: none; }.lan-progress span { animation: none; } }
 </style>

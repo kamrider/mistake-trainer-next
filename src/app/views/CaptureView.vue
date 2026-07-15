@@ -9,6 +9,7 @@ import {
   type CaptureBatchSummary,
   type CaptureDraftSummary,
   type CaptureLanAddress,
+  type CaptureLanPreflight,
   type CaptureLanSession,
   type CaptureLayoutMode,
 } from '../../shared/api/bindings'
@@ -20,6 +21,8 @@ const busy = ref(false)
 const errorMessage = ref('')
 const previews = reactive<Record<string, string>>({})
 const lanAddresses = ref<CaptureLanAddress[]>([])
+const lanPreflight = ref<CaptureLanPreflight>()
+const lanPreflightBusy = ref(false)
 const lanSession = ref<CaptureLanSession>()
 const previewOrder: string[] = []
 const desktopAvailable = isTauri()
@@ -326,6 +329,63 @@ async function loadLanAddresses() {
   }
 }
 
+async function loadLanPreflight(): Promise<CaptureLanPreflight | undefined> {
+  if (!desktopAvailable || lanPreflightBusy.value) return lanPreflight.value
+  lanPreflightBusy.value = true
+  try {
+    const result = normalizeAppResult(await commands.captureLanPreflight())
+    if (result.ok) {
+      lanPreflight.value = result.data
+      return result.data
+    }
+    lanPreflight.value = undefined
+    showError(result.error.userMessage)
+  }
+  catch {
+    lanPreflight.value = undefined
+    showError('没有读取到 Windows 手机连接权限，请重新检测。')
+  }
+  finally {
+    lanPreflightBusy.value = false
+  }
+  return undefined
+}
+
+async function repairLanFirewall() {
+  if (!desktopAvailable || busy.value) return
+  busy.value = true
+  lanPreflightBusy.value = true
+  errorMessage.value = ''
+  try {
+    const result = normalizeAppResult(await commands.captureLanFirewallRepair())
+    if (result.ok) {
+      lanPreflight.value = result.data
+      await loadLanAddresses()
+    }
+    else {
+      showError(result.error.userMessage)
+    }
+  }
+  catch {
+    showError('Windows 没有完成手机连接修复，请稍后再试。')
+  }
+  finally {
+    lanPreflightBusy.value = false
+    busy.value = false
+  }
+}
+
+async function openLanNetworkSettings() {
+  if (!desktopAvailable) return
+  try {
+    const result = normalizeAppResult(await commands.captureLanOpenNetworkSettings())
+    if (!result.ok) showError(result.error.userMessage)
+  }
+  catch {
+    showError('没有打开 Windows 网络设置，请从系统设置中进入“网络和 Internet”。')
+  }
+}
+
 async function loadLanStatus() {
   if (!desktopAvailable) return
   try {
@@ -338,8 +398,11 @@ async function loadLanStatus() {
 }
 
 async function startMobileCapture(selectedAddress: string | null) {
+  const requestedBatchId = detail.value?.batch.id
+  if (!desktopAvailable || !requestedBatchId || busy.value) return
+  const preflight = await loadLanPreflight()
   const current = detail.value
-  if (!desktopAvailable || !current || busy.value) return
+  if (!preflight?.canStart || !current || current.batch.id !== requestedBatchId || busy.value) return
   busy.value = true
   errorMessage.value = ''
   try {
@@ -398,7 +461,7 @@ onMounted(async () => {
     return
   }
   await loadBatches()
-  await Promise.all([loadLanAddresses(), loadLanStatus()])
+  await Promise.all([loadLanAddresses(), loadLanPreflight(), loadLanStatus()])
   lanPollTimer = setInterval(() => void loadLanStatus(), 5_000)
   unlisten = await listen<{ batchId: string }>('capture_batch_changed', event => scheduleRefresh(event.payload.batchId))
 })
@@ -420,6 +483,8 @@ onBeforeUnmount(() => {
     :error-message="errorMessage"
     :desktop-available="desktopAvailable"
     :lan-addresses="lanAddresses"
+    :lan-preflight="lanPreflight"
+    :lan-preflight-busy="lanPreflightBusy"
     :lan-session="lanSession"
     @create-batch="createBatch"
     @open-batch="loadDetail"
@@ -437,6 +502,9 @@ onBeforeUnmount(() => {
     @preview="loadPreview"
     @mobile-capture="startMobileCapture"
     @refresh-lan-addresses="loadLanAddresses"
+    @refresh-lan-preflight="loadLanPreflight"
+    @repair-lan-firewall="repairLanFirewall"
+    @open-lan-network-settings="openLanNetworkSettings"
     @stop-mobile-capture="stopMobileCapture()"
   />
 </template>

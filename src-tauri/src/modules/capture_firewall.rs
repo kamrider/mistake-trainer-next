@@ -50,9 +50,12 @@ pub fn evaluate_preflight(
     active_profiles: &[CaptureLanProfile],
     firewall_rule: CaptureLanFirewallRuleState,
 ) -> CaptureLanPreflight {
+    // The repair rule is deliberately scoped to NET_FW_PROFILE2_PRIVATE only.
+    // Never claim the listener is reachable on a profile where Windows will
+    // not apply that rule.
     let has_trusted_profile = active_profiles
         .iter()
-        .any(|profile| matches!(profile, CaptureLanProfile::Domain | CaptureLanProfile::Private));
+        .any(|profile| matches!(profile, CaptureLanProfile::Private));
     let needs_network_change = supported && !has_trusted_profile;
     let needs_firewall_repair = supported
         && !matches!(firewall_rule, CaptureLanFirewallRuleState::Ready);
@@ -390,6 +393,17 @@ mod tests {
         assert!(!value.can_start);
         assert!(value.needs_network_change);
         assert!(!value.needs_firewall_repair);
+    }
+
+    #[test]
+    fn domain_only_profile_does_not_bypass_private_only_rule() {
+        let value = evaluate_preflight(
+            true,
+            &[CaptureLanProfile::Domain],
+            CaptureLanFirewallRuleState::Ready,
+        );
+        assert!(!value.can_start);
+        assert!(value.needs_network_change);
     }
 
     #[test]
