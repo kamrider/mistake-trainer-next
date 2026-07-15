@@ -49,6 +49,25 @@ Non-overlapping fields merge automatically. Review events form a set union. Asse
 deduplicate by hash. Same-field edits with a common base revision create a visible
 conflict. Deletes create tombstones retained for 30 days.
 
+## Capture inbox boundary
+
+- Capture batches, drafts, and their item assignments live in the encrypted local
+  library. They survive restart, but never enter the sync outbox before a draft is
+  atomically committed as a `Problem`.
+- Imported images pass through Rust validation, plaintext SHA-256 deduplication, and
+  AES-GCM blob encryption. Discard only removes assets proven to be orphaned from both
+  capture drafts and formal problems.
+- The phone collector is an explicitly started, single-session HTTP server bound to a
+  selected RFC1918 address. Its 256-bit bearer token stays in the QR URL fragment and
+  memory; it is removed from browser history and is never logged or persisted.
+- LAN capture is for a trusted home Wi-Fi or personal hotspot only. The app does not
+  modify Windows Firewall and does not present ordinary HTTP as protection on public
+  networks. Sessions expire after 30 minutes idle or two hours absolute time.
+- HEIC/HEIF conversion is a separate same-origin decoder loaded only after such a file
+  is selected. The mobile page has no CDN or third-party requests. The decoder is a
+  codec exception to the Vue feature-chunk budget and does not enter the desktop's
+  initial JavaScript bundle.
+
 ## Backup boundary
 
 - A backup is a new directory containing one consistent SQLCipher snapshot, immutable

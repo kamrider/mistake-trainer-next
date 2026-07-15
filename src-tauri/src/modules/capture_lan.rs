@@ -11,7 +11,7 @@ use axum::{
     body::Body,
     extract::{DefaultBodyLimit, Path, State},
     http::{HeaderMap, StatusCode, header},
-    response::{Html, IntoResponse, Response},
+    response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -34,6 +34,7 @@ use crate::modules::capture_inbox::{
 };
 
 const MOBILE_PAGE: &str = include_str!("../../mobile/capture.html");
+const HEIC2ANY_SCRIPT: &str = include_str!("../../mobile/vendor/heic2any.js");
 const MAX_ORIGINAL_UPLOAD_BYTES: u64 = 50 * 1024 * 1024;
 const IDLE_TIMEOUT_MS: i64 = 30 * 60 * 1000;
 const ABSOLUTE_TIMEOUT_MS: i64 = 2 * 60 * 60 * 1000;
@@ -418,12 +419,39 @@ fn build_router(state: Arc<ServerState>) -> Router {
         ));
     Router::new()
         .route("/mobile/", get(mobile_page))
+        .route("/mobile/vendor/heic2any.js", get(heic2any_script))
         .nest("/api/v1", api)
         .with_state(state)
 }
 
-async fn mobile_page() -> Html<&'static str> {
-    Html(MOBILE_PAGE)
+async fn mobile_page() -> Response {
+    (
+        [
+            ("content-type", "text/html; charset=utf-8"),
+            ("cache-control", "no-store"),
+            ("referrer-policy", "no-referrer"),
+            ("x-content-type-options", "nosniff"),
+            (
+                "content-security-policy",
+                "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self'; worker-src blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+            ),
+        ],
+        MOBILE_PAGE,
+    )
+        .into_response()
+}
+
+async fn heic2any_script() -> Response {
+    (
+        [
+            ("content-type", "application/javascript; charset=utf-8"),
+            ("cache-control", "private, max-age=86400"),
+            ("referrer-policy", "no-referrer"),
+            ("x-content-type-options", "nosniff"),
+        ],
+        HEIC2ANY_SCRIPT,
+    )
+        .into_response()
 }
 
 #[derive(Serialize)]
@@ -517,6 +545,14 @@ async fn upload_item(
     let client_upload_id = Uuid::parse_str(&client_upload_id)
         .map_err(|_| ApiError::bad_request("upload_id_invalid", "上传编号无效。"))?
         .to_string();
+    let media_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .map(str::trim);
+    if !matches!(media_type, Some("image/jpeg" | "image/png" | "image/webp")) {
+        return Err(ApiError::unsupported_media_type());
+    }
     let client_source_sequence = headers
         .get("x-source-sequence")
         .and_then(|value| value.to_str().ok())
@@ -928,6 +964,15 @@ impl ApiError {
         )
     }
 
+    fn unsupported_media_type() -> Self {
+        Self::new(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "media_type_unsupported",
+            "手机只能上传 JPEG、PNG 或 WebP 图片。",
+            false,
+        )
+    }
+
     fn bad_request(code: &'static str, message: &'static str) -> Self {
         Self::new(StatusCode::BAD_REQUEST, code, message, false)
     }
@@ -1192,6 +1237,112 @@ mod tests {
     }
 
     #[test]
+    fn api_rejects_wrong_origin_expired_sessions_and_forged_media_types() {
+        let server = TestServer::new();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let wrong_origin = Request::builder()
+            .uri("/api/v1/session")
+            .header(header::HOST, "127.0.0.1:3210")
+            .header(header::ORIGIN, "http://192.168.1.9:3210")
+            .header(header::AUTHORIZATION, format!("Bearer {TEST_TOKEN}"))
+            .body(Body::empty())
+            .expect("request");
+        let response = runtime
+            .block_on(server.router.clone().oneshot(wrong_origin))
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let mut forged = server.request(
+            Method::PUT,
+            &format!("/api/v1/uploads/{}", Uuid::now_v7()),
+            Body::from(png(9)),
+        );
+        forged.headers_mut().insert(
+            header::CONTENT_TYPE,
+            "application/octet-stream".parse().expect("header"),
+        );
+        forged
+            .headers_mut()
+            .insert("x-source-sequence", "0".parse().expect("header"));
+        let response = runtime
+            .block_on(server.router.clone().oneshot(forged))
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+        server
+            .state
+            .activity
+            .lock()
+            .expect("activity")
+            .last_activity_utc_ms = current_utc_millis() - IDLE_TIMEOUT_MS - 1;
+        let expired = server.request(Method::GET, "/api/v1/session", Body::empty());
+        let response = runtime
+            .block_on(server.router.clone().oneshot(expired))
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::GONE);
+
+        let connection = server.state.context.connection.lock().expect("connection");
+        let item_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM capture_items WHERE batch_id = ?1",
+                [&server.state.context.batch_id],
+                |row| row.get(0),
+            )
+            .expect("item count");
+        assert_eq!(item_count, 0);
+    }
+
+    #[test]
+    fn mobile_page_hardens_headers_and_keeps_heic_decoder_lazy() {
+        let server = TestServer::new();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let page = runtime
+            .block_on(
+                server.router.clone().oneshot(
+                    Request::builder()
+                        .uri("/mobile/")
+                        .body(Body::empty())
+                        .expect("page request"),
+                ),
+            )
+            .expect("page response");
+        assert_eq!(page.status(), StatusCode::OK);
+        assert_eq!(
+            page.headers()
+                .get("x-content-type-options")
+                .and_then(|value| value.to_str().ok()),
+            Some("nosniff")
+        );
+        assert!(page.headers().contains_key("content-security-policy"));
+        assert!(!MOBILE_PAGE.contains("<script src=\"/mobile/vendor/heic2any.js\""));
+
+        let decoder = runtime
+            .block_on(
+                server.router.oneshot(
+                    Request::builder()
+                        .uri("/mobile/vendor/heic2any.js")
+                        .body(Body::empty())
+                        .expect("decoder request"),
+                ),
+            )
+            .expect("decoder response");
+        assert_eq!(decoder.status(), StatusCode::OK);
+        assert_eq!(
+            decoder
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/javascript; charset=utf-8")
+        );
+    }
+
+    #[test]
     fn duplicate_upload_is_idempotent_and_finish_organizes_batch() {
         let server = TestServer::new();
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1208,6 +1359,9 @@ mod tests {
             request
                 .headers_mut()
                 .insert("x-source-sequence", "0".parse().expect("header"));
+            request
+                .headers_mut()
+                .insert(header::CONTENT_TYPE, "image/png".parse().expect("header"));
             request
                 .headers_mut()
                 .insert("x-source-name", "photo.png".parse().expect("header"));
