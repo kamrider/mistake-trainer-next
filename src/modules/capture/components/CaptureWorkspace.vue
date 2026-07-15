@@ -7,7 +7,8 @@ import {
 import { computed, reactive, ref, watch } from 'vue'
 import type {
   CaptureBatchDetail, CaptureBatchSummary, CaptureDraftSummary, CaptureItemSummary,
-  CaptureLanAddress, CaptureLanPreflight, CaptureLanSession, CaptureLayoutMode,
+  CaptureLanAddress, CaptureLanPreflight, CaptureLanSession, CaptureLanSettingsPage,
+  CaptureLayoutMode,
 } from '../../../shared/api/bindings'
 import CaptureThumbnail from './CaptureThumbnail.vue'
 
@@ -50,7 +51,7 @@ const emit = defineEmits<{
   refreshLanAddresses: []
   refreshLanPreflight: []
   repairLanFirewall: []
-  openLanNetworkSettings: []
+  openLanNetworkSettings: [page: CaptureLanSettingsPage]
   stopMobileCapture: []
 }>()
 
@@ -63,6 +64,7 @@ const splitIndex = ref<number | null>(null)
 const dropActive = ref(false)
 const showLanPanel = ref(false)
 const selectedLanAddress = ref('')
+const networkGuideKind = ref<Extract<CaptureLanSettingsPage, 'wifi' | 'ethernet'>>('wifi')
 const draftEdits = reactive<Record<string, { subject: string, tags: string, note: string }>>({})
 
 const itemById = computed(() => new Map(props.detail?.items.map(item => [item.id, item]) ?? []))
@@ -459,27 +461,96 @@ function statusLabel(batch: CaptureBatchSummary) {
               <template v-else-if="lanNeedsNetworkChange">
                 <span class="lan-state is-attention">活动网络中含有非专用连接</span>
                 <h2 id="lan-dialog-title">
-                  先把可信网络设为专用
+                  跟着 4 步，把可信网络设为专用
                 </h2>
                 <p class="lan-intro">
-                  Windows 当前没有形成仅含“专用网络”的安全连接状态（常见情况是 Wi‑Fi 被标记为“公用”），因此手机连接会被拦截。请断开无关网络，连接个人热点或可信家庭 Wi‑Fi，并把它设为“专用网络”。
+                  只对你自己的家庭 Wi‑Fi 或个人热点这样设置。学校、商场、咖啡店等公共网络请保持“公用”，改用手机热点。
                 </p>
-                <div class="lan-actions">
+
+                <div
+                  class="network-kind"
+                  aria-label="选择电脑的联网方式"
+                >
+                  <button
+                    type="button"
+                    aria-label="Wi‑Fi"
+                    :class="{ 'is-selected': networkGuideKind === 'wifi' }"
+                    :aria-pressed="networkGuideKind === 'wifi'"
+                    @click="networkGuideKind = 'wifi'"
+                  >
+                    <strong>Wi‑Fi</strong><span>无线网络</span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="网线 / 扩展坞"
+                    :class="{ 'is-selected': networkGuideKind === 'ethernet' }"
+                    :aria-pressed="networkGuideKind === 'ethernet'"
+                    @click="networkGuideKind = 'ethernet'"
+                  >
+                    <strong>网线 / 扩展坞</strong><span>以太网</span>
+                  </button>
+                </div>
+
+                <ol class="setup-steps">
+                  <li>
+                    <span>1</span>
+                    <div>
+                      <strong>打开对应的 Windows 设置页</strong>
+                      <p>点击下面的“打开{{ networkGuideKind === 'wifi' ? ' Wi‑Fi ' : '以太网' }}设置”，会在应用旁边弹出系统设置。</p>
+                    </div>
+                  </li>
+                  <li>
+                    <span>2</span>
+                    <div v-if="networkGuideKind === 'wifi'">
+                      <strong>点击当前已连接的 Wi‑Fi 名称</strong>
+                      <p>在 Wi‑Fi 页面顶部找到正在使用的网络；点击它，或点击旁边的“属性”。不要点“管理已知网络”。</p>
+                    </div>
+                    <div v-else>
+                      <strong>打开当前以太网连接的属性</strong>
+                      <p>如果设置页显示多个网口，点击状态为“已连接”的那个；通常名称是“以太网”。</p>
+                    </div>
+                  </li>
+                  <li>
+                    <span>3</span>
+                    <div>
+                      <strong>进入“网络配置文件类型”</strong>
+                      <p>找到“网络配置文件类型”，选择“专用网络”。不要修改 IP、DNS、代理或防火墙开关。</p>
+                    </div>
+                  </li>
+                  <li>
+                    <span>4</span>
+                    <div>
+                      <strong>回到这里完成检测</strong>
+                      <p>设置成功后本窗口会自动进入下一步；如果没有变化，点击“设置完成，立即检测”。</p>
+                    </div>
+                  </li>
+                </ol>
+
+                <div class="lan-actions guide-actions">
                   <button
                     class="lan-primary"
                     type="button"
-                    @click="emit('openLanNetworkSettings')"
+                    @click="emit('openLanNetworkSettings', networkGuideKind)"
                   >
-                    打开 Windows 网络设置
+                    打开{{ networkGuideKind === 'wifi' ? ' Wi‑Fi ' : '以太网' }}设置
                   </button>
                   <button
                     class="lan-secondary"
                     type="button"
                     @click="emit('refreshLanPreflight')"
                   >
-                    我已设置，重新检测
+                    设置完成，立即检测
                   </button>
                 </div>
+
+                <details class="lan-troubleshooting">
+                  <summary>还是检测不过？按这里逐项排查</summary>
+                  <ul>
+                    <li><strong>先断开不需要的连接：</strong>VPN、公司网络、虚拟机网卡或另一根网线可能仍被 Windows 标记为公用。</li>
+                    <li><strong>找不到“专用网络”：</strong>电脑可能受学校或公司管理。请不要绕过限制，改用个人电脑或手机热点。</li>
+                    <li><strong>正在使用公共 Wi‑Fi：</strong>不要把它改成专用；打开手机热点，让电脑和拍照手机都连接该热点后再试。</li>
+                  </ul>
+                </details>
                 <p class="lan-safety">
                   应用不会开放公用网络，也不会自动更改你的网络类型。
                 </p>
@@ -491,8 +562,13 @@ function statusLabel(batch: CaptureBatchSummary) {
                   允许手机连接这台电脑
                 </h2>
                 <p class="lan-intro">
-                  点击后 Windows 会显示一次管理员确认。授权只允许本应用接收同一专用局域网内的手机图片；公用网络仍然保持拦截。
+                  网络已经设置正确。最后需要让 Windows 防火墙认识本应用，这一步通常只做一次。
                 </p>
+                <ol class="setup-steps firewall-steps">
+                  <li><span>1</span><div><strong>点击“修复手机连接”</strong><p>应用会请求创建一条仅用于本机手机采集的专用网络规则。</p></div></li>
+                  <li><span>2</span><div><strong>Windows 弹窗中点击“是”</strong><p>看到“是否允许此应用对你的设备进行更改”时，确认应用是 Mistake Trainer Next，然后点击“是”。</p></div></li>
+                  <li><span>3</span><div><strong>回到应用等待自动检测</strong><p>通过后会直接显示“连接权限已就绪”；不会要求重启，也不需要输入命令。</p></div></li>
+                </ol>
                 <div class="lan-actions">
                   <button
                     class="lan-primary"
@@ -511,9 +587,14 @@ function statusLabel(batch: CaptureBatchSummary) {
                     重新检测
                   </button>
                 </div>
-                <p class="lan-safety">
-                  如果取消管理员确认，不会做任何更改，之后可再次点击修复。
-                </p>
+                <details class="lan-troubleshooting">
+                  <summary>没有弹窗，或者我没有管理员权限</summary>
+                  <ul>
+                    <li>如果弹窗要求管理员密码，请输入这台电脑管理员账户的密码；不知道密码时请让电脑管理员协助。</li>
+                    <li>如果点了“否”或关闭弹窗，不会做任何更改，回到这里可以再次点击“修复手机连接”。</li>
+                    <li>修复不会开放公用网络，也不会关闭 Windows 防火墙。</li>
+                  </ul>
+                </details>
               </template>
 
               <template v-else-if="lanReady">
@@ -968,6 +1049,7 @@ input, textarea, select { box-sizing: border-box; padding: 10px 12px; color: var
 .collecting-panel { display: grid; grid-template-columns: minmax(0,1fr) 240px auto; gap: 20px; align-items: end; margin-top: 24px; padding: 26px; border: 1px solid var(--line); border-radius: 5px 20px 20px; background: rgba(255,253,247,.73); box-shadow: var(--shadow-soft); }.collecting-copy { display: flex; gap: 13px; align-items: flex-start; }.collecting-panel h2,.collecting-panel p { margin: 0; }.collecting-panel p { max-width: 550px; margin-top: 5px; color: var(--ink-muted); font-size: 12px; }.collecting-panel label,.layout-bar label,.draft-fields label { display: grid; gap: 6px; color: var(--ink-muted); font-size: 10px; font-weight: 720; }.collecting-panel .lan-live { grid-column: 1/-1; display: flex; align-items: center; gap: 8px; color: var(--green-deep); font-weight: 720; }.lan-live span { width: 8px; height: 8px; border-radius: 50%; background: #4f806e; box-shadow: 0 0 0 4px rgba(79,128,110,.14); }
 .lan-overlay { position: fixed; z-index: 80; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(28,38,34,.46); backdrop-filter: blur(9px); }.lan-dialog { position: relative; width: min(760px,100%); max-height: min(780px,calc(100vh - 48px)); overflow: auto; padding: 34px; border: 1px solid rgba(33,51,45,.14); border-radius: 8px 30px 30px; background: var(--paper); box-shadow: 0 30px 90px rgba(20,30,26,.28); }.lan-dialog h2 { margin: 4px 0 0; font-family: var(--font-serif); font-size: 34px; }.lan-intro { margin: 10px 0 24px; color: var(--ink-muted); }.lan-close { position: absolute; top: 17px; right: 17px; display: grid; place-items: center; width: 38px; height: 38px; padding: 0; border: 0; border-radius: 50%; color: var(--ink); background: var(--sand); cursor: pointer; }.lan-session-grid { display: grid; grid-template-columns: minmax(250px,320px) 1fr; gap: 30px; align-items: center; }.qr-paper { padding: 18px; border: 1px solid var(--line); border-radius: 18px; background: #fff; }.qr-paper img { display: block; width: 100%; aspect-ratio: 1; }.lan-session-copy { display: grid; gap: 13px; }.lan-session-copy div { display: grid; gap: 3px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }.lan-session-copy span,.lan-address-label { color: var(--ink-muted); font-size: 11px; font-weight: 720; }.lan-session-copy strong { font-size: 16px; }.lan-session-copy p,.lan-empty { margin: 2px 0; color: var(--ink-muted); font-size: 12px; line-height: 1.65; }.lan-stop,.lan-start { display: inline-flex; gap: 8px; align-items: center; justify-content: center; min-height: 44px; padding: 0 18px; border: 0; border-radius: 999px; color: var(--paper); background: var(--vermillion); font-weight: 760; cursor: pointer; }.lan-stop { justify-self: start; }.lan-start { margin-top: 20px; background: var(--green-deep); }.lan-refresh { min-height: 38px; margin-top: 12px; padding: 0 14px; color: var(--green-deep); border: 1px solid var(--line-strong); border-radius: 999px; background: transparent; font-weight: 720; cursor: pointer; }.lan-address-label { display: grid; gap: 8px; }.lan-address-label select { min-height: 48px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 13px; color: var(--ink); background: #fffdf8; }
 .lan-preflight { min-height: 240px; }.lan-progress { display: flex; gap: 10px; align-items: center; color: var(--ink-muted); font-size: 12px; }.lan-progress span { width: 9px; height: 9px; border-radius: 50%; background: var(--cinnabar); animation: lan-pulse 1.1s ease-in-out infinite alternate; }.lan-state { display: inline-flex; margin-bottom: 11px; padding: 6px 10px; border-radius: 999px; font-size: 10px; font-weight: 800; letter-spacing: .04em; }.lan-state.is-attention { color: #87402f; background: rgba(185,88,63,.12); }.lan-state.is-ready { color: #3f6857; background: var(--green-soft); }.lan-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }.lan-primary,.lan-secondary { min-height: 44px; padding: 0 17px; border-radius: 999px; font-weight: 760; cursor: pointer; }.lan-primary { color: var(--paper); border: 1px solid var(--green-deep); background: var(--green-deep); }.lan-secondary { color: var(--green-deep); border: 1px solid var(--line-strong); background: transparent; }.lan-safety { max-width: 620px; margin: 16px 0 0; padding-left: 12px; color: var(--ink-muted); border-left: 2px solid var(--sand); font-size: 11px; line-height: 1.6; }
+.network-kind { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 9px; margin: 0 0 14px; }.network-kind button { display: grid; gap: 2px; min-height: 58px; padding: 10px 14px; color: var(--ink-muted); text-align: left; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,253,247,.62); cursor: pointer; }.network-kind button.is-selected { color: var(--green-deep); border-color: rgba(33,51,45,.42); background: var(--green-soft); box-shadow: inset 3px 0 0 var(--green-deep); }.network-kind strong { font-size: 13px; }.network-kind span { font-size: 10px; opacity: .72; }.setup-steps { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }.setup-steps li { display: grid; grid-template-columns: 31px minmax(0,1fr); gap: 11px; align-items: start; padding: 12px 13px; border: 1px solid rgba(33,51,45,.1); border-radius: 12px; background: rgba(255,253,247,.54); }.setup-steps li>span { display: grid; width: 28px; height: 28px; color: var(--paper); place-items: center; border-radius: 50%; background: var(--green-deep); font-family: serif; font-size: 14px; font-weight: 800; }.setup-steps strong { display: block; padding-top: 2px; font-size: 12px; }.setup-steps p { margin: 3px 0 0; color: var(--ink-muted); font-size: 11px; line-height: 1.55; }.firewall-steps li>span { background: var(--cinnabar); }.guide-actions { margin-top: 14px; }.lan-troubleshooting { margin-top: 13px; color: var(--ink-muted); border: 1px solid rgba(33,51,45,.12); border-radius: 11px; background: rgba(232,221,199,.18); }.lan-troubleshooting summary { padding: 11px 13px; color: var(--green-deep); font-size: 11px; font-weight: 760; cursor: pointer; }.lan-troubleshooting ul { display: grid; gap: 7px; margin: 0; padding: 0 18px 14px 31px; font-size: 10px; line-height: 1.55; }.lan-primary:focus-visible,.lan-secondary:focus-visible,.network-kind button:focus-visible,.lan-troubleshooting summary:focus-visible { outline: 3px solid rgba(185,88,63,.28); outline-offset: 2px; }
 @keyframes lan-pulse { to { transform: scale(1.35); opacity: .45; } }
 .layout-bar { display: flex; gap: 11px; align-items: end; margin-top: 25px; padding: 17px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,253,247,.66); }.layout-heading { display: flex; flex: 1; gap: 10px; align-items: flex-start; }.layout-heading h2,.layout-heading p { margin: 0; }.layout-heading h2 { font-size: 16px; }.layout-heading p { margin-top: 3px; color: var(--ink-muted); font-size: 10px; }.layout-bar select { min-width: 210px; }.layout-bar input { width: 78px; }
 .unassigned-strip { margin-top: 17px; padding: 17px; border: 1px dashed rgba(33,51,45,.22); border-radius: 14px; background: rgba(232,221,199,.18); }.strip-heading { display: flex; justify-content: space-between; align-items: center; }.strip-heading div { display: flex; gap: 9px; align-items: baseline; }.strip-heading p { margin: 0; font-weight: 760; }.strip-heading span { color: var(--ink-muted); font-size: 10px; }.strip-heading strong { color: var(--cinnabar); }.thumbnail-row { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; max-height: 290px; margin-top: 12px; overflow: auto; }.quick-assign { display: flex; gap: 5px; margin-top: 4px; }.quick-assign button,.item-actions button { min-height: 25px; padding: 0 7px; color: var(--ink-muted); border: 1px solid rgba(33,51,45,.13); border-radius: 7px; background: rgba(255,253,247,.7); font-size: 9px; cursor: pointer; }.strip-empty { display: flex; gap: 6px; align-items: center; margin: 12px 0 0; color: #537064; font-size: 11px; }
@@ -976,6 +1058,6 @@ input, textarea, select { box-sizing: border-box; padding: 10px 12px; color: var
 .commit-dock { position: sticky; z-index: 12; bottom: 14px; display: flex; justify-content: space-between; gap: 20px; align-items: center; margin-top: 22px; padding: 15px 17px; border: 1px solid rgba(33,51,45,.15); border-radius: 15px; background: rgba(246,241,231,.94); box-shadow: 0 16px 45px rgba(34,48,43,.18); backdrop-filter: blur(16px); }.commit-dock div { display: grid; grid-template-columns: auto auto; gap: 2px 9px; }.commit-dock p,.commit-dock strong,.commit-dock span { margin: 0; }.commit-dock p { color: var(--cinnabar); font-size: 9px; font-weight: 800; letter-spacing: .1em; }.commit-dock strong { font-size: 16px; }.commit-dock span { grid-column: 1/-1; color: var(--ink-muted); font-size: 10px; }
 .completed-panel { display: grid; min-height: 420px; place-content: center; justify-items: center; text-align: center; }.completed-panel h2 { margin: 14px 0 5px; }.completed-panel p { margin: 0; color: var(--ink-muted); }.completed-panel button { margin-top: 18px; padding: 10px 16px; color: var(--paper); border: 0; border-radius: 999px; background: var(--green-deep); }
 @media (max-width: 980px) { .batch-grid,.thumbnail-row { grid-template-columns: repeat(2,minmax(0,1fr)); }.collecting-panel { grid-template-columns: 1fr; }.layout-bar { align-items: stretch; flex-wrap: wrap; }.draft-fields { grid-template-columns: 1fr 1fr; }.note-field { grid-column: 1/-1; }.lan-session-grid { grid-template-columns: 1fr; }.qr-paper { width: min(320px,100%); margin: auto; } }
-@media (max-width: 720px) { .capture-next { padding: 30px 20px 110px; }.inbox-hero,.workbench-header,.new-batch-card { align-items: stretch; flex-direction: column; }.new-batch-card form,.capture-toolbar { grid-template-columns: 1fr; flex-direction: column; }.new-batch-card input { width: 100%; }.batch-grid,.thumbnail-row,.draft-zones,.zone-items,.draft-fields { grid-template-columns: 1fr; }.capture-toolbar { display: grid; }.workbench-stats { align-self: stretch; }.workbench-stats span { flex: 1; }.layout-bar select { min-width: 100%; }.commit-dock { align-items: stretch; flex-direction: column; }.commit-dock button { width: 100%; } }
+@media (max-width: 720px) { .capture-next { padding: 30px 20px 110px; }.inbox-hero,.workbench-header,.new-batch-card { align-items: stretch; flex-direction: column; }.new-batch-card form,.capture-toolbar { grid-template-columns: 1fr; flex-direction: column; }.new-batch-card input { width: 100%; }.batch-grid,.thumbnail-row,.draft-zones,.zone-items,.draft-fields,.network-kind { grid-template-columns: 1fr; }.capture-toolbar { display: grid; }.workbench-stats { align-self: stretch; }.workbench-stats span { flex: 1; }.layout-bar select { min-width: 100%; }.commit-dock { align-items: stretch; flex-direction: column; }.commit-dock button { width: 100%; }.lan-dialog { padding: 28px 20px; }.lan-dialog h2 { font-size: 28px; }.lan-actions>* { width: 100%; } }
 @media (prefers-reduced-motion: reduce) { .batch-card,.external-drop { transition: none; }.lan-progress span { animation: none; } }
 </style>

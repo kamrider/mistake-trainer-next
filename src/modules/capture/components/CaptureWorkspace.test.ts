@@ -118,12 +118,17 @@ describe('CaptureWorkspace Next', () => {
     const view = renderWorkspace(detail, publicNetwork)
 
     await user.click(screen.getByRole('button', { name: /手机扫码/ }))
-    expect(screen.getByRole('heading', { name: '先把可信网络设为专用' })).toBeVisible()
+    expect(screen.getByRole('heading', { name: '跟着 4 步，把可信网络设为专用' })).toBeVisible()
     expect(screen.queryByRole('button', { name: /生成二维码/ })).not.toBeInTheDocument()
     expect(screen.getByText(/不会开放公用网络/)).toBeVisible()
+    expect(screen.getByText('点击当前已连接的 Wi‑Fi 名称')).toBeVisible()
 
-    await user.click(screen.getByRole('button', { name: '打开 Windows 网络设置' }))
-    expect(view.emitted('openLanNetworkSettings')).toHaveLength(1)
+    await user.click(screen.getByRole('button', { name: '打开 Wi‑Fi 设置' }))
+    expect(view.emitted('openLanNetworkSettings')).toEqual([['wifi']])
+    await user.click(screen.getByRole('button', { name: '网线 / 扩展坞' }))
+    expect(screen.getByText('进入“网络配置文件类型”')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '打开以太网设置' }))
+    expect(view.emitted('openLanNetworkSettings')).toEqual([['wifi'], ['ethernet']])
     expect(view.emitted('mobileCapture')).toBeUndefined()
   })
 
@@ -149,6 +154,9 @@ describe('CaptureWorkspace Next', () => {
     expect(screen.getByRole('heading', { name: '允许手机连接这台电脑' })).toBeVisible()
     expect(screen.queryByRole('button', { name: /生成二维码/ })).not.toBeInTheDocument()
     expect(screen.queryByText(/netsh|PowerShell|命令提示符/i)).not.toBeInTheDocument()
+    expect(screen.getByText(/Windows 弹窗中点击“是”/)).toBeVisible()
+    await user.click(screen.getByText('没有弹窗，或者我没有管理员权限'))
+    expect(screen.getByText(/管理员密码/)).toBeVisible()
 
     await user.click(screen.getByRole('button', { name: '修复手机连接' }))
     expect(view.emitted('repairLanFirewall')).toHaveLength(1)
