@@ -23,7 +23,8 @@ private local-subnet traffic only. It never enables public-network access.
 1. With Windows currently on a public network, click **手机扫码**. Confirm no QR code or
    listener appears, the app explains that a private network is required, and **打开
    Windows 网络设置** opens the system network page. The app must not silently change
-   the profile or offer to enable public access.
+   the profile or offer to enable public access. Repeat with simultaneous Private and
+   Public adapters and confirm the conservative gate still blocks QR generation.
 2. Put the phone and Windows computer on the same trusted home Wi-Fi or personal hotspot
    and mark that Windows connection **Private**. Click **我已设置，重新检测**.
 3. If the app rule is absent or invalid, confirm **修复手机连接** is shown instead of a

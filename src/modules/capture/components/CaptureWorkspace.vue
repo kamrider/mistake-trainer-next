@@ -457,12 +457,12 @@ function statusLabel(batch: CaptureBatchSummary) {
               </template>
 
               <template v-else-if="lanNeedsNetworkChange">
-                <span class="lan-state is-attention">当前没有可用的专用网络</span>
+                <span class="lan-state is-attention">活动网络中含有非专用连接</span>
                 <h2 id="lan-dialog-title">
                   先把可信网络设为专用
                 </h2>
                 <p class="lan-intro">
-                  Windows 当前没有可供手机采集使用的“专用网络”（常见情况是 Wi‑Fi 被标记为“公用”），因此连接会被安全拦截。请连接个人热点或可信家庭 Wi‑Fi，并把它设为“专用网络”。
+                  Windows 当前没有形成仅含“专用网络”的安全连接状态（常见情况是 Wi‑Fi 被标记为“公用”），因此手机连接会被拦截。请断开无关网络，连接个人热点或可信家庭 Wi‑Fi，并把它设为“专用网络”。
                 </p>
                 <div class="lan-actions">
                   <button
