@@ -17,6 +17,13 @@ const MAX_STAGED_BYTES: usize = 100 * 1024 * 1024;
 const MAX_DIMENSION: u32 = 12_000;
 const MAX_PIXELS: u64 = 80_000_000;
 
+#[derive(Clone, Debug)]
+pub struct CaptureImageMetadata {
+    pub media_type: String,
+    pub width: u32,
+    pub height: u32,
+}
+
 #[derive(Clone, Debug, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct StagedAsset {
@@ -172,31 +179,7 @@ pub fn stage_image_bytes(
     if !matches!(role, "question" | "answer") {
         return Err(StageCaptureError::InvalidRole);
     }
-    if bytes.is_empty() || u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_CAPTURE_FILE_BYTES {
-        return Err(StageCaptureError::InvalidImage);
-    }
-
-    let format = image::guess_format(&bytes).map_err(|_| StageCaptureError::InvalidImage)?;
-    let media_type = match format {
-        image::ImageFormat::Png => "image/png",
-        image::ImageFormat::Jpeg => "image/jpeg",
-        image::ImageFormat::WebP => "image/webp",
-        _ => return Err(StageCaptureError::InvalidImage),
-    };
-    let reader = ImageReader::with_format(Cursor::new(&bytes), format);
-    let (width, height) = reader
-        .into_dimensions()
-        .map_err(|_| StageCaptureError::InvalidImage)?;
-    if width == 0
-        || height == 0
-        || width > MAX_DIMENSION
-        || height > MAX_DIMENSION
-        || u64::from(width) * u64::from(height) > MAX_PIXELS
-    {
-        return Err(StageCaptureError::InvalidImage);
-    }
-    image::load_from_memory_with_format(&bytes, format)
-        .map_err(|_| StageCaptureError::InvalidImage)?;
+    let metadata = inspect_capture_image(&bytes)?;
 
     let file_name = Path::new(source_label)
         .file_name()
@@ -208,10 +191,10 @@ pub fn stage_image_bytes(
         id: Uuid::now_v7().to_string(),
         file_name,
         role: role.to_owned(),
-        media_type: media_type.to_owned(),
+        media_type: metadata.media_type,
         byte_length: bytes.len() as f64,
-        width,
-        height,
+        width: metadata.width,
+        height: metadata.height,
     };
     let mut state = stage
         .state
@@ -234,4 +217,37 @@ pub fn stage_image_bytes(
         },
     );
     Ok(summary)
+}
+
+pub fn inspect_capture_image(bytes: &[u8]) -> Result<CaptureImageMetadata, StageCaptureError> {
+    if bytes.is_empty() || u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_CAPTURE_FILE_BYTES {
+        return Err(StageCaptureError::InvalidImage);
+    }
+
+    let format = image::guess_format(bytes).map_err(|_| StageCaptureError::InvalidImage)?;
+    let media_type = match format {
+        image::ImageFormat::Png => "image/png",
+        image::ImageFormat::Jpeg => "image/jpeg",
+        image::ImageFormat::WebP => "image/webp",
+        _ => return Err(StageCaptureError::InvalidImage),
+    };
+    let reader = ImageReader::with_format(Cursor::new(bytes), format);
+    let (width, height) = reader
+        .into_dimensions()
+        .map_err(|_| StageCaptureError::InvalidImage)?;
+    if width == 0
+        || height == 0
+        || width > MAX_DIMENSION
+        || height > MAX_DIMENSION
+        || u64::from(width) * u64::from(height) > MAX_PIXELS
+    {
+        return Err(StageCaptureError::InvalidImage);
+    }
+    image::load_from_memory_with_format(bytes, format)
+        .map_err(|_| StageCaptureError::InvalidImage)?;
+    Ok(CaptureImageMetadata {
+        media_type: media_type.to_owned(),
+        width,
+        height,
+    })
 }

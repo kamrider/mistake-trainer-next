@@ -56,18 +56,27 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             let transaction = connection.transaction()?;
             transaction.execute_batch(include_str!("../../migrations/0001_initial.sql"))?;
             transaction.execute_batch(include_str!("../../migrations/0002_review_sessions.sql"))?;
-            transaction.pragma_update(None, "user_version", 2)?;
+            transaction.execute_batch(include_str!("../../migrations/0003_capture_inbox.sql"))?;
+            transaction.pragma_update(None, "user_version", 3)?;
             transaction.commit()?;
             Ok(())
         }
         1 => {
             let transaction = connection.transaction()?;
             transaction.execute_batch(include_str!("../../migrations/0002_review_sessions.sql"))?;
-            transaction.pragma_update(None, "user_version", 2)?;
+            transaction.execute_batch(include_str!("../../migrations/0003_capture_inbox.sql"))?;
+            transaction.pragma_update(None, "user_version", 3)?;
             transaction.commit()?;
             Ok(())
         }
-        2 => Ok(()),
+        2 => {
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(include_str!("../../migrations/0003_capture_inbox.sql"))?;
+            transaction.pragma_update(None, "user_version", 3)?;
+            transaction.commit()?;
+            Ok(())
+        }
+        3 => Ok(()),
         newer => Err(DatabaseError::UnsupportedSchema(newer)),
     }
 }
