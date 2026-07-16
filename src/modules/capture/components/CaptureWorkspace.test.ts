@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/vue'
+import { render, screen, waitFor } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import type {
@@ -29,6 +29,8 @@ const readyPreflight: CaptureLanPreflight = {
 function renderWorkspace(
   detail?: CaptureBatchDetail,
   preflight: CaptureLanPreflight | undefined = readyPreflight,
+  guidePolling = false,
+  preflightBusy = false,
 ) {
   return render(CaptureWorkspace, {
     props: {
@@ -40,7 +42,8 @@ function renderWorkspace(
       desktopAvailable: true,
       lanAddresses: [{ label: 'Wi-Fi', address: '192.168.1.2' }],
       lanPreflight: preflight,
-      lanPreflightBusy: false,
+      lanPreflightBusy: preflightBusy,
+      lanGuidePolling: guidePolling,
       lanSession: undefined,
     },
   })
@@ -115,13 +118,14 @@ describe('CaptureWorkspace Next', () => {
       drafts: [],
       unassignedItemIds: [],
     }
-    const view = renderWorkspace(detail, publicNetwork)
+    const view = renderWorkspace(detail, publicNetwork, true, true)
 
     await user.click(screen.getByRole('button', { name: /手机扫码/ }))
     expect(screen.getByRole('heading', { name: '跟着 4 步，把可信网络设为专用' })).toBeVisible()
     expect(screen.queryByRole('button', { name: /生成二维码/ })).not.toBeInTheDocument()
     expect(screen.getByText(/不会开放公用网络/)).toBeVisible()
     expect(screen.getByText('点击当前已连接的 Wi‑Fi 名称')).toBeVisible()
+    expect(screen.getByText(/会在 90 秒内自动检测/)).toBeVisible()
 
     await user.click(screen.getByRole('button', { name: '打开 Wi‑Fi 设置' }))
     expect(view.emitted('openLanNetworkSettings')).toEqual([['wifi']])
@@ -130,6 +134,68 @@ describe('CaptureWorkspace Next', () => {
     await user.click(screen.getByRole('button', { name: '打开以太网设置' }))
     expect(view.emitted('openLanNetworkSettings')).toEqual([['wifi'], ['ethernet']])
     expect(view.emitted('mobileCapture')).toBeUndefined()
+  })
+
+  it('contains keyboard focus in the phone guide and restores it on Escape', async () => {
+    const user = userEvent.setup()
+    const detail: CaptureBatchDetail = {
+      batch,
+      items: [],
+      drafts: [],
+      unassignedItemIds: [],
+    }
+    renderWorkspace(detail)
+    const launcher = screen.getByRole('button', { name: /手机扫码/ })
+
+    await user.click(launcher)
+    const dialog = screen.getByRole('dialog')
+    expect(screen.getByRole('button', { name: '关闭' })).toHaveFocus()
+
+    await user.keyboard('{Shift>}{Tab}{/Shift}')
+    expect(dialog).toContainElement(document.activeElement as HTMLElement)
+    expect(launcher).not.toHaveFocus()
+
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(launcher).toHaveFocus()
+  })
+
+  it('recovers focus when automatic detection advances to the repair step', async () => {
+    const user = userEvent.setup()
+    const publicNetwork: CaptureLanPreflight = {
+      supported: true,
+      activeProfiles: ['public'],
+      firewallRule: 'ready',
+      canStart: false,
+      needsNetworkChange: true,
+      needsFirewallRepair: false,
+    }
+    const missingRule: CaptureLanPreflight = {
+      supported: true,
+      activeProfiles: ['private'],
+      firewallRule: 'missing',
+      canStart: false,
+      needsNetworkChange: false,
+      needsFirewallRepair: true,
+    }
+    const detail: CaptureBatchDetail = {
+      batch,
+      items: [],
+      drafts: [],
+      unassignedItemIds: [],
+    }
+    const view = renderWorkspace(detail, publicNetwork)
+
+    await user.click(screen.getByRole('button', { name: /手机扫码/ }))
+    const removedControl = screen.getByRole('button', { name: '打开 Wi‑Fi 设置' })
+    removedControl.focus()
+    expect(removedControl).toHaveFocus()
+
+    await view.rerender({ lanPreflight: missingRule })
+
+    expect(await screen.findByRole('heading', { name: '允许手机连接这台电脑' })).toBeVisible()
+    await waitFor(() => expect(screen.getByRole('button', { name: '关闭' })).toHaveFocus())
+    expect(screen.getByRole('dialog')).toContainElement(document.activeElement as HTMLElement)
   })
 
   it('offers one-click repair without exposing commands', async () => {

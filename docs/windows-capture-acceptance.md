@@ -21,31 +21,41 @@ private local-subnet traffic only. It never enables public-network access.
 ## Phone session
 
 1. With Windows currently on a public network, click **手机扫码**. Confirm no QR code or
-   listener appears, the app explains that a private network is required, and **打开
-   Windows 网络设置** opens the system network page. The app must not silently change
-   the profile or offer to enable public access. Repeat with simultaneous Private and
-   Public adapters and confirm the conservative gate still blocks QR generation.
-2. Put the phone and Windows computer on the same trusted home Wi-Fi or personal hotspot
-   and mark that Windows connection **Private**. Click **我已设置，重新检测**.
-3. If the app rule is absent or invalid, confirm **修复手机连接** is shown instead of a
+   listener appears. Confirm the dialog contains four numbered steps, warns against
+   changing a school/cafe network to Private, and contains no terminal commands.
+2. Choose **Wi-Fi**, then click **打开 Wi-Fi 设置**. Confirm Windows opens its Wi-Fi page.
+   Follow the in-app text: click the connected network or **Properties**, find **Network
+   profile type**, and select **Private network**. Repeat with **网线 / 扩展坞** and
+   confirm **打开以太网设置** opens the Ethernet page.
+3. After a Settings page opens, leave the guide visible for up to 90 seconds. Confirm it
+   displays automatic-detection status and advances to firewall repair without requiring
+   **设置完成，立即检测**. Also confirm that button performs an immediate manual refresh.
+4. Repeat with simultaneous Private and Public adapters. The conservative gate must
+   still block QR generation, and the expanded troubleshooting section must suggest
+   disconnecting unneeded VPN, virtual, company, or extra wired connections. On a managed
+   school/work device where **Private network** is unavailable, verify the guide recommends
+   an administrator, personal computer, or personal hotspot instead of bypass instructions.
+5. If the app rule is absent or invalid, confirm **修复手机连接** is shown instead of a
    QR code. Cancel the Windows administrator prompt once: no listener should start and
-   the repair button must remain available. Click it again and approve. In Windows
+   the repair button must remain available. Expand the administrator-help section and
+   confirm it explains the password and cancellation cases. Click repair again, approve
+   **Yes** in UAC, and verify the dialog advances automatically. In Windows
    Defender Firewall, verify the rule is bound to the current executable, inbound TCP,
    Private profile, `LocalSubnet`, and has edge traversal disabled. Public remains blocked.
-4. Once both checks pass, select the private IPv4 address for the Wi-Fi or hotspot and
+6. Once both checks pass, select the private IPv4 address for the Wi-Fi or hotspot and
    generate the QR code. Restart the app and confirm the valid rule is recognized without
    another administrator prompt. If the executable path changes, the app must request an
    explicit repair instead of trusting the stale rule.
-5. On iPhone Safari and Android Chrome, test **连续拍照** and **从相册批量选择**. Change
+7. On iPhone Safari and Android Chrome, test **连续拍照** and **从相册批量选择**. Change
    the batch subject, delete one upload, refresh the page, and confirm state recovers.
-6. Interrupt Wi-Fi during an upload, restore it, and confirm the item retries without
+8. Interrupt Wi-Fi during an upload, restore it, and confirm the item retries without
    duplicating. Uploads run at most two at a time and one failed item must not block the
    rest of the queue.
-7. Select a HEIC/HEIF image on iPhone. Confirm conversion happens only after selection,
+9. Select a HEIC/HEIF image on iPhone. Confirm conversion happens only after selection,
    uploads as JPEG, and no external network request is made. If conversion fails, the
    item must stay visibly failed rather than uploading damaged bytes. Apple users can
    switch Camera > Formats to **Most Compatible** as a fallback.
-8. Click **完成拍摄** and confirm the desktop batch changes to organizing. Start another
+10. Click **完成拍摄** and confirm the desktop batch changes to organizing. Start another
    session, stop it from Windows, and confirm the old page can no longer call the API.
    Repeat after 30 minutes idle to confirm expiry.
 

@@ -65,6 +65,8 @@ pub enum CaptureFirewallError {
     Cancelled,
     #[error("Windows firewall repair failed: {0}")]
     Repair(String),
+    #[error("Windows network settings could not be opened: {0}")]
+    SettingsLaunch(String),
 }
 
 pub fn evaluate_preflight(
@@ -351,7 +353,7 @@ mod windows_impl {
         execute_info.nShow = 1;
         unsafe { ShellExecuteExW(&mut execute_info) }
             .map(|_| true)
-            .map_err(|error| CaptureFirewallError::Repair(error.to_string()))
+            .map_err(|error| CaptureFirewallError::SettingsLaunch(error.to_string()))
     }
 
     fn inspect_named_rule(

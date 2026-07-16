@@ -4,7 +4,7 @@ import {
   Images, LayoutGrid, ListPlus, LockKeyhole, Plus, QrCode, Save, Smartphone,
   Sparkles, Trash2, UploadCloud, X,
 } from '@lucide/vue'
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import type {
   CaptureBatchDetail, CaptureBatchSummary, CaptureDraftSummary, CaptureItemSummary,
   CaptureLanAddress, CaptureLanPreflight, CaptureLanSession, CaptureLanSettingsPage,
@@ -29,6 +29,7 @@ const props = defineProps<{
   lanAddresses: CaptureLanAddress[]
   lanPreflight: CaptureLanPreflight | undefined
   lanPreflightBusy: boolean
+  lanGuidePolling: boolean
   lanSession: CaptureLanSession | undefined
 }>()
 
@@ -63,6 +64,10 @@ const answerImages = ref(1)
 const splitIndex = ref<number | null>(null)
 const dropActive = ref(false)
 const showLanPanel = ref(false)
+const lanLauncher = ref<HTMLButtonElement>()
+const lanDialog = ref<HTMLElement>()
+const lanClose = ref<HTMLButtonElement>()
+let lanFocusReturn: HTMLElement | null = null
 const selectedLanAddress = ref('')
 const networkGuideKind = ref<Extract<CaptureLanSettingsPage, 'wifi' | 'ethernet'>>('wifi')
 const draftEdits = reactive<Record<string, { subject: string, tags: string, note: string }>>({})
@@ -105,8 +110,26 @@ watch(() => props.lanAddresses, (addresses) => {
 }, { immediate: true })
 
 watch(() => props.lanSession, (session) => {
-  if (session) showLanPanel.value = true
+  if (session && !showLanPanel.value) void showLanDialog(false)
 })
+
+watch(
+  () => [
+    props.lanSession?.sessionId,
+    props.lanPreflight?.needsNetworkChange,
+    props.lanPreflight?.needsFirewallRepair,
+    props.lanPreflight?.canStart,
+  ],
+  async () => {
+    if (!showLanPanel.value) return
+    await nextTick()
+    const activeElement = document.activeElement
+    if (!(activeElement instanceof Node) || !lanDialog.value?.contains(activeElement)) {
+      lanClose.value?.focus()
+    }
+  },
+  { flush: 'post' },
+)
 
 function createBatch() {
   emit('createBatch', newSubject.value.trim())
@@ -118,10 +141,49 @@ function startMobileCapture() {
   emit('mobileCapture', address)
 }
 
-function openLanPanel() {
+async function showLanDialog(refresh = true) {
+  lanFocusReturn = document.activeElement instanceof HTMLElement ? document.activeElement : lanLauncher.value ?? null
   showLanPanel.value = true
-  emit('refreshLanAddresses')
-  emit('refreshLanPreflight')
+  await nextTick()
+  lanClose.value?.focus()
+  if (refresh) {
+    emit('refreshLanAddresses')
+    emit('refreshLanPreflight')
+  }
+}
+
+function openLanPanel() {
+  void showLanDialog()
+}
+
+async function closeLanPanel() {
+  showLanPanel.value = false
+  await nextTick()
+  ;(lanFocusReturn?.isConnected ? lanFocusReturn : lanLauncher.value)?.focus()
+  lanFocusReturn = null
+}
+
+function handleLanDialogKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    void closeLanPanel()
+    return
+  }
+  if (event.key !== 'Tab' || !lanDialog.value) return
+  const focusable = [...lanDialog.value.querySelectorAll<HTMLElement>(
+    'button:not([disabled]), select:not([disabled]), input:not([disabled]), summary, [href], [tabindex]:not([tabindex="-1"])',
+  )].filter(element => !element.hasAttribute('hidden'))
+  if (!focusable.length) return
+  const first = focusable[0]!
+  const last = focusable[focusable.length - 1]!
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last.focus()
+  }
+  else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
+  }
 }
 
 function formatLanBytes(value: number) {
@@ -341,6 +403,7 @@ function statusLabel(batch: CaptureBatchSummary) {
         class="capture-toolbar"
       >
         <button
+          ref="lanLauncher"
           type="button"
           class="primary-tool"
           :disabled="busy || !desktopAvailable || !isCollecting"
@@ -364,19 +427,22 @@ function statusLabel(batch: CaptureBatchSummary) {
         v-if="showLanPanel"
         class="lan-overlay"
         role="presentation"
-        @click.self="showLanPanel = false"
+        @click.self="closeLanPanel"
       >
         <section
+          ref="lanDialog"
           class="lan-dialog"
           role="dialog"
           aria-modal="true"
           aria-labelledby="lan-dialog-title"
+          @keydown="handleLanDialogKeydown"
         >
           <button
+            ref="lanClose"
             class="lan-close"
             type="button"
             aria-label="关闭"
-            @click="showLanPanel = false"
+            @click="closeLanPanel"
           >
             <X :size="18" />
           </button>
@@ -421,7 +487,7 @@ function statusLabel(batch: CaptureBatchSummary) {
               class="lan-preflight"
               aria-live="polite"
             >
-              <template v-if="lanPreflightBusy">
+              <template v-if="lanPreflightBusy && !lanPreflight">
                 <h2 id="lan-dialog-title">
                   正在检查连接条件
                 </h2>
@@ -542,13 +608,19 @@ function statusLabel(batch: CaptureBatchSummary) {
                     设置完成，立即检测
                   </button>
                 </div>
+                <p
+                  v-if="lanGuidePolling"
+                  class="guide-detection"
+                >
+                  <span />Windows 设置已打开；本应用会在 90 秒内自动检测，设置成功后这里会直接进入下一步。
+                </p>
 
                 <details class="lan-troubleshooting">
                   <summary>还是检测不过？按这里逐项排查</summary>
                   <ul>
                     <li><strong>先断开不需要的连接：</strong>VPN、公司网络、虚拟机网卡或另一根网线可能仍被 Windows 标记为公用。</li>
                     <li><strong>找不到“专用网络”：</strong>电脑可能受学校或公司管理。请不要绕过限制，改用个人电脑或手机热点。</li>
-                    <li><strong>正在使用公共 Wi‑Fi：</strong>不要把它改成专用；打开手机热点，让电脑和拍照手机都连接该热点后再试。</li>
+                    <li><strong>正在使用公共 Wi‑Fi：</strong>不要把它改成专用。可用另一台手机开热点，让电脑和拍照设备都连入；如果就用开热点的手机拍照，只需让电脑连入该热点。</li>
                   </ul>
                 </details>
                 <p class="lan-safety">
@@ -1050,6 +1122,7 @@ input, textarea, select { box-sizing: border-box; padding: 10px 12px; color: var
 .lan-overlay { position: fixed; z-index: 80; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(28,38,34,.46); backdrop-filter: blur(9px); }.lan-dialog { position: relative; width: min(760px,100%); max-height: min(780px,calc(100vh - 48px)); overflow: auto; padding: 34px; border: 1px solid rgba(33,51,45,.14); border-radius: 8px 30px 30px; background: var(--paper); box-shadow: 0 30px 90px rgba(20,30,26,.28); }.lan-dialog h2 { margin: 4px 0 0; font-family: var(--font-serif); font-size: 34px; }.lan-intro { margin: 10px 0 24px; color: var(--ink-muted); }.lan-close { position: absolute; top: 17px; right: 17px; display: grid; place-items: center; width: 38px; height: 38px; padding: 0; border: 0; border-radius: 50%; color: var(--ink); background: var(--sand); cursor: pointer; }.lan-session-grid { display: grid; grid-template-columns: minmax(250px,320px) 1fr; gap: 30px; align-items: center; }.qr-paper { padding: 18px; border: 1px solid var(--line); border-radius: 18px; background: #fff; }.qr-paper img { display: block; width: 100%; aspect-ratio: 1; }.lan-session-copy { display: grid; gap: 13px; }.lan-session-copy div { display: grid; gap: 3px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }.lan-session-copy span,.lan-address-label { color: var(--ink-muted); font-size: 11px; font-weight: 720; }.lan-session-copy strong { font-size: 16px; }.lan-session-copy p,.lan-empty { margin: 2px 0; color: var(--ink-muted); font-size: 12px; line-height: 1.65; }.lan-stop,.lan-start { display: inline-flex; gap: 8px; align-items: center; justify-content: center; min-height: 44px; padding: 0 18px; border: 0; border-radius: 999px; color: var(--paper); background: var(--vermillion); font-weight: 760; cursor: pointer; }.lan-stop { justify-self: start; }.lan-start { margin-top: 20px; background: var(--green-deep); }.lan-refresh { min-height: 38px; margin-top: 12px; padding: 0 14px; color: var(--green-deep); border: 1px solid var(--line-strong); border-radius: 999px; background: transparent; font-weight: 720; cursor: pointer; }.lan-address-label { display: grid; gap: 8px; }.lan-address-label select { min-height: 48px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 13px; color: var(--ink); background: #fffdf8; }
 .lan-preflight { min-height: 240px; }.lan-progress { display: flex; gap: 10px; align-items: center; color: var(--ink-muted); font-size: 12px; }.lan-progress span { width: 9px; height: 9px; border-radius: 50%; background: var(--cinnabar); animation: lan-pulse 1.1s ease-in-out infinite alternate; }.lan-state { display: inline-flex; margin-bottom: 11px; padding: 6px 10px; border-radius: 999px; font-size: 10px; font-weight: 800; letter-spacing: .04em; }.lan-state.is-attention { color: #87402f; background: rgba(185,88,63,.12); }.lan-state.is-ready { color: #3f6857; background: var(--green-soft); }.lan-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }.lan-primary,.lan-secondary { min-height: 44px; padding: 0 17px; border-radius: 999px; font-weight: 760; cursor: pointer; }.lan-primary { color: var(--paper); border: 1px solid var(--green-deep); background: var(--green-deep); }.lan-secondary { color: var(--green-deep); border: 1px solid var(--line-strong); background: transparent; }.lan-safety { max-width: 620px; margin: 16px 0 0; padding-left: 12px; color: var(--ink-muted); border-left: 2px solid var(--sand); font-size: 11px; line-height: 1.6; }
 .network-kind { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 9px; margin: 0 0 14px; }.network-kind button { display: grid; gap: 2px; min-height: 58px; padding: 10px 14px; color: var(--ink-muted); text-align: left; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,253,247,.62); cursor: pointer; }.network-kind button.is-selected { color: var(--green-deep); border-color: rgba(33,51,45,.42); background: var(--green-soft); box-shadow: inset 3px 0 0 var(--green-deep); }.network-kind strong { font-size: 13px; }.network-kind span { font-size: 10px; opacity: .72; }.setup-steps { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }.setup-steps li { display: grid; grid-template-columns: 31px minmax(0,1fr); gap: 11px; align-items: start; padding: 12px 13px; border: 1px solid rgba(33,51,45,.1); border-radius: 12px; background: rgba(255,253,247,.54); }.setup-steps li>span { display: grid; width: 28px; height: 28px; color: var(--paper); place-items: center; border-radius: 50%; background: var(--green-deep); font-family: serif; font-size: 14px; font-weight: 800; }.setup-steps strong { display: block; padding-top: 2px; font-size: 12px; }.setup-steps p { margin: 3px 0 0; color: var(--ink-muted); font-size: 11px; line-height: 1.55; }.firewall-steps li>span { background: var(--cinnabar); }.guide-actions { margin-top: 14px; }.lan-troubleshooting { margin-top: 13px; color: var(--ink-muted); border: 1px solid rgba(33,51,45,.12); border-radius: 11px; background: rgba(232,221,199,.18); }.lan-troubleshooting summary { padding: 11px 13px; color: var(--green-deep); font-size: 11px; font-weight: 760; cursor: pointer; }.lan-troubleshooting ul { display: grid; gap: 7px; margin: 0; padding: 0 18px 14px 31px; font-size: 10px; line-height: 1.55; }.lan-primary:focus-visible,.lan-secondary:focus-visible,.network-kind button:focus-visible,.lan-troubleshooting summary:focus-visible { outline: 3px solid rgba(185,88,63,.28); outline-offset: 2px; }
+.guide-detection { display: flex; gap: 9px; align-items: center; margin: 11px 0 0; padding: 10px 12px; color: #416353; border-radius: 10px; background: var(--green-soft); font-size: 10px; line-height: 1.5; }.guide-detection span { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: #4f806e; box-shadow: 0 0 0 4px rgba(79,128,110,.13); }
 @keyframes lan-pulse { to { transform: scale(1.35); opacity: .45; } }
 .layout-bar { display: flex; gap: 11px; align-items: end; margin-top: 25px; padding: 17px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,253,247,.66); }.layout-heading { display: flex; flex: 1; gap: 10px; align-items: flex-start; }.layout-heading h2,.layout-heading p { margin: 0; }.layout-heading h2 { font-size: 16px; }.layout-heading p { margin-top: 3px; color: var(--ink-muted); font-size: 10px; }.layout-bar select { min-width: 210px; }.layout-bar input { width: 78px; }
 .unassigned-strip { margin-top: 17px; padding: 17px; border: 1px dashed rgba(33,51,45,.22); border-radius: 14px; background: rgba(232,221,199,.18); }.strip-heading { display: flex; justify-content: space-between; align-items: center; }.strip-heading div { display: flex; gap: 9px; align-items: baseline; }.strip-heading p { margin: 0; font-weight: 760; }.strip-heading span { color: var(--ink-muted); font-size: 10px; }.strip-heading strong { color: var(--cinnabar); }.thumbnail-row { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; max-height: 290px; margin-top: 12px; overflow: auto; }.quick-assign { display: flex; gap: 5px; margin-top: 4px; }.quick-assign button,.item-actions button { min-height: 25px; padding: 0 7px; color: var(--ink-muted); border: 1px solid rgba(33,51,45,.13); border-radius: 7px; background: rgba(255,253,247,.7); font-size: 9px; cursor: pointer; }.strip-empty { display: flex; gap: 6px; align-items: center; margin: 12px 0 0; color: #537064; font-size: 11px; }

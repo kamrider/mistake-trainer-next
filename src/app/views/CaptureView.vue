@@ -11,6 +11,7 @@ import {
   type CaptureLanAddress,
   type CaptureLanPreflight,
   type CaptureLanSession,
+  type CaptureLanSettingsPage,
   type CaptureLayoutMode,
 } from '../../shared/api/bindings'
 import { normalizeAppResult } from '../../shared/api/normalize-result'
@@ -23,12 +24,23 @@ const previews = reactive<Record<string, string>>({})
 const lanAddresses = ref<CaptureLanAddress[]>([])
 const lanPreflight = ref<CaptureLanPreflight>()
 const lanPreflightBusy = ref(false)
+const lanGuidePolling = ref(false)
 const lanSession = ref<CaptureLanSession>()
 const previewOrder: string[] = []
 const desktopAvailable = isTauri()
 let unlisten: UnlistenFn | undefined
 let refreshTimer: ReturnType<typeof setTimeout> | undefined
 let lanPollTimer: ReturnType<typeof setInterval> | undefined
+let lanGuidePollTimer: ReturnType<typeof setTimeout> | undefined
+let lanGuideDeadlineTimer: ReturnType<typeof setTimeout> | undefined
+let lanGuidePollDeadline = 0
+let lanGuidePollGeneration = 0
+let viewMounted = false
+type LanPreflightCommandResult = Awaited<ReturnType<typeof commands.captureLanPreflight>>
+let lanPreflightRequest: {
+  generation: number | undefined
+  promise: Promise<LanPreflightCommandResult>
+} | undefined
 
 function showError(message: string) {
   errorMessage.value = message
@@ -318,37 +330,83 @@ async function loadPreview(itemId: string) {
   }
 }
 
-async function loadLanAddresses() {
-  if (!desktopAvailable) return
-  try {
-    const result = normalizeAppResult(await commands.captureLanAddresses())
-    if (result.ok) lanAddresses.value = result.data
+function canApplyLanGuideResult(generation?: number) {
+  return viewMounted
+    && (generation === undefined
+      || (generation === lanGuidePollGeneration && Date.now() < lanGuidePollDeadline))
+}
+
+async function requestLanPreflight(generation?: number): Promise<LanPreflightCommandResult> {
+  while (lanPreflightRequest) {
+    const activeRequest = lanPreflightRequest
+    const result = await activeRequest.promise
+    if (generation === undefined || activeRequest.generation === generation) return result
+    // A restarted guide must not accept the result of the generation it invalidated.
+    if (lanPreflightRequest === activeRequest) lanPreflightRequest = undefined
   }
-  catch {
-    lanAddresses.value = []
+  const promise = commands.captureLanPreflight()
+  const request = { generation, promise }
+  lanPreflightRequest = request
+  try {
+    return await promise
+  }
+  finally {
+    if (lanPreflightRequest === request) lanPreflightRequest = undefined
   }
 }
 
-async function loadLanPreflight(): Promise<CaptureLanPreflight | undefined> {
-  if (!desktopAvailable || lanPreflightBusy.value) return lanPreflight.value
-  lanPreflightBusy.value = true
+async function loadLanAddresses(generation?: number) {
+  if (!desktopAvailable) return
   try {
-    const result = normalizeAppResult(await commands.captureLanPreflight())
+    const result = normalizeAppResult(await commands.captureLanAddresses())
+    if (!canApplyLanGuideResult(generation)) return
+    if (result.ok) lanAddresses.value = result.data
+  }
+  catch {
+    if (canApplyLanGuideResult(generation)) lanAddresses.value = []
+  }
+}
+
+async function loadLanPreflight(options: {
+  silent?: boolean
+  generation?: number
+} = {}): Promise<CaptureLanPreflight | undefined> {
+  if (!desktopAvailable) return lanPreflight.value
+  const { silent = false, generation } = options
+  if (!silent) lanPreflightBusy.value = true
+  try {
+    const result = normalizeAppResult(await requestLanPreflight(generation))
+    if (!canApplyLanGuideResult(generation)) return undefined
     if (result.ok) {
       lanPreflight.value = result.data
       return result.data
     }
-    lanPreflight.value = undefined
-    showError(result.error.userMessage)
+    if (!silent) {
+      lanPreflight.value = undefined
+      showError(result.error.userMessage)
+    }
   }
   catch {
-    lanPreflight.value = undefined
-    showError('没有读取到 Windows 手机连接权限，请重新检测。')
+    if (canApplyLanGuideResult(generation) && !silent) {
+      lanPreflight.value = undefined
+      showError('没有读取到 Windows 手机连接权限，请重新检测。')
+    }
   }
   finally {
-    lanPreflightBusy.value = false
+    if (!silent && canApplyLanGuideResult(generation)) lanPreflightBusy.value = false
   }
   return undefined
+}
+
+async function refreshLanSetup(options: {
+  silent?: boolean
+  generation?: number
+} = {}) {
+  const status = await loadLanPreflight(options)
+  if (!status || status.needsNetworkChange || !canApplyLanGuideResult(options.generation)) return status
+  await loadLanAddresses(options.generation)
+  if (canApplyLanGuideResult(options.generation)) stopLanGuidePolling()
+  return status
 }
 
 async function repairLanFirewall() {
@@ -375,15 +433,52 @@ async function repairLanFirewall() {
   }
 }
 
-async function openLanNetworkSettings() {
+async function openLanNetworkSettings(page: CaptureLanSettingsPage) {
   if (!desktopAvailable) return
   try {
-    const result = normalizeAppResult(await commands.captureLanOpenNetworkSettings())
-    if (!result.ok) showError(result.error.userMessage)
+    const result = normalizeAppResult(await commands.captureLanOpenNetworkSettings(page))
+    if (result.ok) startLanGuidePolling()
+    else showError(result.error.userMessage)
   }
   catch {
     showError('没有打开 Windows 网络设置，请从系统设置中进入“网络和 Internet”。')
   }
+}
+
+function stopLanGuidePolling() {
+  lanGuidePollGeneration += 1
+  if (lanGuidePollTimer) clearTimeout(lanGuidePollTimer)
+  if (lanGuideDeadlineTimer) clearTimeout(lanGuideDeadlineTimer)
+  lanGuidePollTimer = undefined
+  lanGuideDeadlineTimer = undefined
+  lanGuidePollDeadline = 0
+  lanGuidePolling.value = false
+}
+
+function scheduleLanGuidePoll(generation: number) {
+  lanGuidePollTimer = setTimeout(async () => {
+    if (!canApplyLanGuideResult(generation)) {
+      if (generation === lanGuidePollGeneration) stopLanGuidePolling()
+      return
+    }
+    const status = await refreshLanSetup({ silent: true, generation })
+    if (!canApplyLanGuideResult(generation)) {
+      if (generation === lanGuidePollGeneration) stopLanGuidePolling()
+      return
+    }
+    if (!status || status.needsNetworkChange) scheduleLanGuidePoll(generation)
+  }, 2_000)
+}
+
+function startLanGuidePolling() {
+  stopLanGuidePolling()
+  lanGuidePolling.value = true
+  lanGuidePollDeadline = Date.now() + 90_000
+  const generation = lanGuidePollGeneration
+  lanGuideDeadlineTimer = setTimeout(() => {
+    if (generation === lanGuidePollGeneration) stopLanGuidePolling()
+  }, 90_000)
+  scheduleLanGuidePoll(generation)
 }
 
 async function loadLanStatus() {
@@ -455,6 +550,7 @@ function scheduleRefresh(batchId: string) {
 }
 
 onMounted(async () => {
+  viewMounted = true
   window.addEventListener('paste', handlePaste)
   if (!desktopAvailable) {
     showError('浏览器预览只展示界面；请在 Windows 桌面应用中使用加密采集箱。')
@@ -467,9 +563,11 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  viewMounted = false
   window.removeEventListener('paste', handlePaste)
   if (refreshTimer) clearTimeout(refreshTimer)
   if (lanPollTimer) clearInterval(lanPollTimer)
+  stopLanGuidePolling()
   unlisten?.()
 })
 </script>
@@ -485,6 +583,7 @@ onBeforeUnmount(() => {
     :lan-addresses="lanAddresses"
     :lan-preflight="lanPreflight"
     :lan-preflight-busy="lanPreflightBusy"
+    :lan-guide-polling="lanGuidePolling"
     :lan-session="lanSession"
     @create-batch="createBatch"
     @open-batch="loadDetail"
@@ -502,7 +601,7 @@ onBeforeUnmount(() => {
     @preview="loadPreview"
     @mobile-capture="startMobileCapture"
     @refresh-lan-addresses="loadLanAddresses"
-    @refresh-lan-preflight="loadLanPreflight"
+    @refresh-lan-preflight="refreshLanSetup"
     @repair-lan-firewall="repairLanFirewall"
     @open-lan-network-settings="openLanNetworkSettings"
     @stop-mobile-capture="stopMobileCapture()"

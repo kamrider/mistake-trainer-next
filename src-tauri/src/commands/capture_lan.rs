@@ -158,6 +158,11 @@ fn firewall_error<T>(error: &CaptureFirewallError) -> AppResult<T> {
             "Windows 没有完成连接修复，请确认管理员提示后重试。",
             true,
         ),
+        CaptureFirewallError::SettingsLaunch(_) => (
+            "capture_lan_settings_open_failed",
+            "没有打开 Windows 设置。请点击开始菜单 → 设置 → 网络和 Internet，再选择 Wi‑Fi 或以太网。",
+            true,
+        ),
     };
     let diagnostic_id = Uuid::now_v7().to_string();
     eprintln!("capture firewall error [{diagnostic_id}] {code}: {error}");
@@ -222,4 +227,26 @@ fn current_utc_millis() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::Value;
+
+    use super::*;
+
+    #[test]
+    fn settings_launch_failure_has_manual_gui_fallback() {
+        let value = serde_json::to_value(firewall_error::<()>(
+            &CaptureFirewallError::SettingsLaunch("shell unavailable".to_owned()),
+        ))
+        .expect("serialize settings launch error");
+
+        assert_eq!(value["error"]["code"], "capture_lan_settings_open_failed");
+        let message = value["error"]["userMessage"].as_str().unwrap_or_default();
+        assert!(message.contains("开始菜单"));
+        assert!(message.contains("网络和 Internet"));
+        assert!(!message.contains("管理员"));
+        assert_ne!(value["error"]["diagnosticId"], Value::Null);
+    }
 }
