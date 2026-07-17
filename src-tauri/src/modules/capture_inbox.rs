@@ -18,7 +18,7 @@ use crate::{
 
 pub const MAX_CAPTURE_BATCH_ITEMS: i64 = 150;
 pub const MAX_CAPTURE_BATCH_BYTES: i64 = 1024 * 1024 * 1024;
-const CAPTURE_PREVIEW_MAX_DIMENSION: u32 = 320;
+const CAPTURE_PREVIEW_MAX_DIMENSION: u32 = 960;
 const MAX_ENCRYPTED_CAPTURE_BYTES: u64 = 25 * 1024 * 1024 + 64;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Type, PartialEq, Eq)]
@@ -71,6 +71,7 @@ pub struct CaptureItemSummary {
     pub byte_length: f64,
     pub width: u32,
     pub height: u32,
+    pub staged_role: String,
     pub draft_id: Option<String>,
     pub role: Option<String>,
     pub position: Option<u32>,
@@ -158,6 +159,28 @@ pub struct MoveCaptureItem {
     pub target_draft_id: Option<String>,
     pub target_role: Option<String>,
     pub target_position: u32,
+    pub now_utc_ms: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct StageCaptureItemRole {
+    pub account_id: String,
+    pub profile_id: String,
+    pub batch_id: String,
+    pub expected_revision: u32,
+    pub item_id: String,
+    pub staged_role: String,
+    pub now_utc_ms: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct MergeCaptureCard {
+    pub account_id: String,
+    pub profile_id: String,
+    pub batch_id: String,
+    pub expected_revision: u32,
+    pub target_draft_id: Option<String>,
+    pub item_ids: Vec<String>,
     pub now_utc_ms: i64,
 }
 
@@ -276,7 +299,7 @@ pub fn get_capture_batch_detail(
     let batch = query_batch(connection, account_id, profile_id, batch_id)?;
     let mut item_statement = connection.prepare(
         "SELECT i.id, i.source_name, i.source_sequence, a.media_type, a.byte_length,
-                i.width, i.height, di.draft_id, di.role, di.position
+                i.width, i.height, i.staged_role, di.draft_id, di.role, di.position
          FROM capture_items i
          JOIN assets a ON a.id = i.asset_id AND a.account_id = ?1
          LEFT JOIN capture_draft_items di ON di.item_id = i.id
@@ -293,9 +316,10 @@ pub fn get_capture_batch_detail(
                 byte_length: row.get::<_, i64>(4)? as f64,
                 width: row.get(5)?,
                 height: row.get(6)?,
-                draft_id: row.get(7)?,
-                role: row.get(8)?,
-                position: row.get(9)?,
+                staged_role: row.get(7)?,
+                draft_id: row.get(8)?,
+                role: row.get(9)?,
+                position: row.get(10)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -549,7 +573,7 @@ fn get_capture_item(
     connection
         .query_row(
             "SELECT i.id, i.source_name, i.source_sequence, a.media_type, a.byte_length,
-                    i.width, i.height, di.draft_id, di.role, di.position
+                    i.width, i.height, i.staged_role, di.draft_id, di.role, di.position
              FROM capture_items i
              JOIN assets a ON a.id = i.asset_id AND a.account_id = ?1
              LEFT JOIN capture_draft_items di ON di.item_id = i.id
@@ -564,9 +588,10 @@ fn get_capture_item(
                     byte_length: row.get::<_, i64>(4)? as f64,
                     width: row.get(5)?,
                     height: row.get(6)?,
-                    draft_id: row.get(7)?,
-                    role: row.get(8)?,
-                    position: row.get(9)?,
+                    staged_role: row.get(7)?,
+                    draft_id: row.get(8)?,
+                    role: row.get(9)?,
+                    position: row.get(10)?,
                 })
             },
         )
@@ -738,34 +763,11 @@ fn insert_link(
             i64::try_from(position).unwrap_or(i64::MAX)
         ],
     )?;
+    transaction.execute(
+        "UPDATE capture_items SET staged_role = ?2 WHERE id = ?1",
+        params![item_id, role],
+    )?;
     Ok(())
-}
-
-pub fn create_capture_draft(
-    connection: &mut Connection,
-    account_id: &str,
-    profile_id: &str,
-    batch_id: &str,
-    expected_revision: u32,
-    now_utc_ms: i64,
-) -> Result<CaptureBatchDetail, CaptureInboxError> {
-    let batch = query_batch(connection, account_id, profile_id, batch_id)?;
-    ensure_organizing_revision(&batch, expected_revision)?;
-    let transaction = connection.transaction()?;
-    let next_position: i64 = transaction.query_row(
-        "SELECT COALESCE(MAX(position), -1) + 1 FROM capture_drafts WHERE batch_id = ?1",
-        [batch_id],
-        |row| row.get(0),
-    )?;
-    insert_draft(
-        &transaction,
-        batch_id,
-        usize::try_from(next_position).unwrap_or(usize::MAX),
-        now_utc_ms,
-    )?;
-    touch_batch(&transaction, batch_id, now_utc_ms)?;
-    transaction.commit()?;
-    get_capture_batch_detail(connection, account_id, profile_id, batch_id)
 }
 
 pub fn move_capture_item(
@@ -832,6 +834,129 @@ pub fn move_capture_item(
             "INSERT INTO capture_draft_items(draft_id, item_id, role, position)
              VALUES(?1, ?2, ?3, ?4)",
             params![target_draft_id, input.item_id, role, position],
+        )?;
+        transaction.execute(
+            "UPDATE capture_items SET staged_role = ?2 WHERE id = ?1",
+            params![input.item_id, role],
+        )?;
+    }
+    touch_batch(&transaction, &input.batch_id, input.now_utc_ms)?;
+    transaction.commit()?;
+    get_capture_batch_detail(
+        connection,
+        &input.account_id,
+        &input.profile_id,
+        &input.batch_id,
+    )
+}
+
+pub fn stage_capture_item_role(
+    connection: &mut Connection,
+    input: StageCaptureItemRole,
+) -> Result<CaptureBatchDetail, CaptureInboxError> {
+    if input.staged_role != "question" && input.staged_role != "answer" {
+        return Err(CaptureInboxError::InvalidInput);
+    }
+    let batch = query_batch(
+        connection,
+        &input.account_id,
+        &input.profile_id,
+        &input.batch_id,
+    )?;
+    ensure_organizing_revision(&batch, input.expected_revision)?;
+    let transaction = connection.transaction()?;
+    let changed = transaction.execute(
+        "UPDATE capture_items SET staged_role = ?1 WHERE id = ?2 AND batch_id = ?3",
+        params![input.staged_role, input.item_id, input.batch_id],
+    )?;
+    if changed != 1 {
+        return Err(CaptureInboxError::ItemNotFound);
+    }
+    touch_batch(&transaction, &input.batch_id, input.now_utc_ms)?;
+    transaction.commit()?;
+    get_capture_batch_detail(
+        connection,
+        &input.account_id,
+        &input.profile_id,
+        &input.batch_id,
+    )
+}
+
+pub fn merge_capture_card(
+    connection: &mut Connection,
+    input: MergeCaptureCard,
+) -> Result<CaptureBatchDetail, CaptureInboxError> {
+    if input.item_ids.is_empty() || input.item_ids.len() > MAX_CAPTURE_BATCH_ITEMS as usize {
+        return Err(CaptureInboxError::InvalidInput);
+    }
+    let unique_item_ids = input.item_ids.iter().collect::<BTreeSet<_>>();
+    if unique_item_ids.len() != input.item_ids.len() {
+        return Err(CaptureInboxError::InvalidInput);
+    }
+    let batch = query_batch(
+        connection,
+        &input.account_id,
+        &input.profile_id,
+        &input.batch_id,
+    )?;
+    ensure_organizing_revision(&batch, input.expected_revision)?;
+    let transaction = connection.transaction()?;
+    let target_draft_id = if let Some(target_draft_id) = input.target_draft_id {
+        let target_exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM capture_drafts WHERE id = ?1 AND batch_id = ?2)",
+            params![target_draft_id, input.batch_id],
+            |row| row.get(0),
+        )?;
+        if !target_exists {
+            return Err(CaptureInboxError::DraftNotFound);
+        }
+        target_draft_id
+    } else {
+        let next_position: i64 = transaction.query_row(
+            "SELECT COALESCE(MAX(position), -1) + 1 FROM capture_drafts WHERE batch_id = ?1",
+            [input.batch_id.as_str()],
+            |row| row.get(0),
+        )?;
+        insert_draft(
+            &transaction,
+            &input.batch_id,
+            usize::try_from(next_position).unwrap_or(usize::MAX),
+            input.now_utc_ms,
+        )?
+    };
+
+    for item_id in &input.item_ids {
+        let staged_role = transaction
+            .query_row(
+                "SELECT staged_role FROM capture_items WHERE id = ?1 AND batch_id = ?2",
+                params![item_id, input.batch_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or(CaptureInboxError::ItemNotFound)?;
+        let source = transaction
+            .query_row(
+                "SELECT draft_id, role FROM capture_draft_items WHERE item_id = ?1",
+                [item_id.as_str()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        transaction.execute(
+            "DELETE FROM capture_draft_items WHERE item_id = ?1",
+            [item_id.as_str()],
+        )?;
+        if let Some((source_draft_id, source_role)) = source {
+            repack_link_positions(&transaction, &source_draft_id, &source_role)?;
+        }
+        let position: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM capture_draft_items WHERE draft_id = ?1 AND role = ?2",
+            params![target_draft_id, staged_role],
+            |row| row.get(0),
+        )?;
+        transaction.execute(
+            "INSERT INTO capture_draft_items(draft_id, item_id, role, position)
+             VALUES(?1, ?2, ?3, ?4)",
+            params![target_draft_id, item_id, staged_role, position],
         )?;
     }
     touch_batch(&transaction, &input.batch_id, input.now_utc_ms)?;

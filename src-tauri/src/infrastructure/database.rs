@@ -57,7 +57,10 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             transaction.execute_batch(include_str!("../../migrations/0001_initial.sql"))?;
             transaction.execute_batch(include_str!("../../migrations/0002_review_sessions.sql"))?;
             transaction.execute_batch(include_str!("../../migrations/0003_capture_inbox.sql"))?;
-            transaction.pragma_update(None, "user_version", 3)?;
+            transaction.execute_batch(include_str!(
+                "../../migrations/0004_capture_staged_roles.sql"
+            ))?;
+            transaction.pragma_update(None, "user_version", 4)?;
             transaction.commit()?;
             Ok(())
         }
@@ -65,18 +68,33 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             let transaction = connection.transaction()?;
             transaction.execute_batch(include_str!("../../migrations/0002_review_sessions.sql"))?;
             transaction.execute_batch(include_str!("../../migrations/0003_capture_inbox.sql"))?;
-            transaction.pragma_update(None, "user_version", 3)?;
+            transaction.execute_batch(include_str!(
+                "../../migrations/0004_capture_staged_roles.sql"
+            ))?;
+            transaction.pragma_update(None, "user_version", 4)?;
             transaction.commit()?;
             Ok(())
         }
         2 => {
             let transaction = connection.transaction()?;
             transaction.execute_batch(include_str!("../../migrations/0003_capture_inbox.sql"))?;
-            transaction.pragma_update(None, "user_version", 3)?;
+            transaction.execute_batch(include_str!(
+                "../../migrations/0004_capture_staged_roles.sql"
+            ))?;
+            transaction.pragma_update(None, "user_version", 4)?;
             transaction.commit()?;
             Ok(())
         }
-        3 => Ok(()),
+        3 => {
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(include_str!(
+                "../../migrations/0004_capture_staged_roles.sql"
+            ))?;
+            transaction.pragma_update(None, "user_version", 4)?;
+            transaction.commit()?;
+            Ok(())
+        }
+        4 => Ok(()),
         newer => Err(DatabaseError::UnsupportedSchema(newer)),
     }
 }

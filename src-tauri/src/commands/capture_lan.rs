@@ -7,9 +7,8 @@ use crate::{
     application::result::AppResult,
     infrastructure::runtime::LibraryRuntime,
     modules::capture_firewall::{
-        CaptureFirewallError, CaptureLanPreflight, CaptureLanSettingsPage,
-        capture_lan_preflight as inspect_capture_lan_preflight, open_network_settings,
-        repair_capture_firewall,
+        CaptureFirewallError, CaptureLanPreflight,
+        capture_lan_preflight as inspect_capture_lan_preflight, repair_capture_firewall,
     },
     modules::capture_lan::{
         BatchChangeNotifier, CaptureLanAddress, CaptureLanContext, CaptureLanError,
@@ -34,12 +33,6 @@ pub fn capture_lan_preflight() -> AppResult<CaptureLanPreflight> {
 #[specta::specta]
 pub fn capture_lan_firewall_repair() -> AppResult<CaptureLanPreflight> {
     firewall_result_or_error(repair_capture_firewall())
-}
-
-#[tauri::command]
-#[specta::specta]
-pub fn capture_lan_open_network_settings(page: CaptureLanSettingsPage) -> AppResult<bool> {
-    firewall_result_or_error(open_network_settings(page))
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -68,18 +61,10 @@ pub fn capture_lan_start(
         Ok(value) => value,
         Err(error) => return firewall_error(&error),
     };
-    if preflight.needs_network_change {
-        return AppResult::failure(
-            "capture_lan_public_network",
-            "当前网络被 Windows 标记为公用网络。请切换到个人热点或可信家庭网络，并在系统中设为专用网络。",
-            true,
-            Uuid::now_v7().to_string(),
-        );
-    }
     if preflight.needs_firewall_repair {
         return AppResult::failure(
             "capture_lan_firewall_required",
-            "Windows 尚未允许手机连接。请在手机扫码面板中点击“修复连接”。",
+            "Windows 尚未允许手机连接。请再次点击“手机扫码”，并在系统授权窗口中选择“是”。",
             true,
             Uuid::now_v7().to_string(),
         );
@@ -158,11 +143,6 @@ fn firewall_error<T>(error: &CaptureFirewallError) -> AppResult<T> {
             "Windows 没有完成连接修复，请确认管理员提示后重试。",
             true,
         ),
-        CaptureFirewallError::SettingsLaunch(_) => (
-            "capture_lan_settings_open_failed",
-            "没有打开 Windows 设置。请点击开始菜单 → 设置 → 网络和 Internet，再选择 Wi‑Fi 或以太网。",
-            true,
-        ),
     };
     let diagnostic_id = Uuid::now_v7().to_string();
     eprintln!("capture firewall error [{diagnostic_id}] {code}: {error}");
@@ -227,26 +207,4 @@ fn current_utc_millis() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
         .unwrap_or_default()
-}
-
-#[cfg(test)]
-mod tests {
-    use serde_json::Value;
-
-    use super::*;
-
-    #[test]
-    fn settings_launch_failure_has_manual_gui_fallback() {
-        let value = serde_json::to_value(firewall_error::<()>(
-            &CaptureFirewallError::SettingsLaunch("shell unavailable".to_owned()),
-        ))
-        .expect("serialize settings launch error");
-
-        assert_eq!(value["error"]["code"], "capture_lan_settings_open_failed");
-        let message = value["error"]["userMessage"].as_str().unwrap_or_default();
-        assert!(message.contains("开始菜单"));
-        assert!(message.contains("网络和 Internet"));
-        assert!(!message.contains("管理员"));
-        assert_ne!(value["error"]["diagnosticId"], Value::Null);
-    }
 }

@@ -11,12 +11,12 @@ use crate::{
         capture_inbox::{
             ApplyCaptureLayout, CaptureBatchDetail, CaptureBatchState, CaptureBatchSummary,
             CaptureCommitReport, CaptureInboxError, CaptureItemPreview, CaptureItemSummary,
-            CaptureLayoutMode, CreateCaptureBatch, IngestCaptureItem, MoveCaptureItem,
-            UpdateCaptureDraft, apply_capture_layout, commit_ready_capture_drafts,
-            create_capture_batch, create_capture_draft, discard_capture_batch,
+            CaptureLayoutMode, CreateCaptureBatch, IngestCaptureItem, MergeCaptureCard,
+            MoveCaptureItem, StageCaptureItemRole, UpdateCaptureDraft, apply_capture_layout,
+            commit_ready_capture_drafts, create_capture_batch, discard_capture_batch,
             get_capture_batch_detail, get_capture_item_preview, ingest_capture_item,
-            list_capture_batches, move_capture_item, remove_capture_item, update_capture_batch,
-            update_capture_draft,
+            list_capture_batches, merge_capture_card, move_capture_item, remove_capture_item,
+            stage_capture_item_role, update_capture_batch, update_capture_draft,
         },
     },
 };
@@ -66,6 +66,24 @@ pub struct CaptureItemMoveInput {
     pub target_draft_id: Option<String>,
     pub target_role: Option<String>,
     pub target_position: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureItemStageRoleInput {
+    pub batch_id: String,
+    pub expected_revision: u32,
+    pub item_id: String,
+    pub staged_role: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureCardMergeInput {
+    pub batch_id: String,
+    pub expected_revision: u32,
+    pub target_draft_id: Option<String>,
+    pub item_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Type)]
@@ -423,30 +441,6 @@ pub fn capture_layout_apply(
 
 #[tauri::command]
 #[specta::specta]
-pub fn capture_draft_create(
-    app: AppHandle,
-    state: State<'_, LibraryRuntime>,
-    batch_id: String,
-    expected_revision: u32,
-) -> AppResult<CaptureBatchDetail> {
-    let mut connection = match state.connection.lock() {
-        Ok(connection) => connection,
-        Err(_) => return capture_error("library_lock_poisoned", None),
-    };
-    let result = result_or_error(create_capture_draft(
-        &mut connection,
-        state.account_id(),
-        state.profile_id(),
-        &batch_id,
-        expected_revision,
-        current_utc_millis(),
-    ));
-    emit_batch_changed(&app, &batch_id);
-    result
-}
-
-#[tauri::command]
-#[specta::specta]
 pub fn capture_item_move(
     app: AppHandle,
     state: State<'_, LibraryRuntime>,
@@ -468,6 +462,62 @@ pub fn capture_item_move(
             target_draft_id: input.target_draft_id,
             target_role: input.target_role,
             target_position: input.target_position,
+            now_utc_ms: current_utc_millis(),
+        },
+    ));
+    emit_batch_changed(&app, &batch_id);
+    result
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn capture_item_stage_role(
+    app: AppHandle,
+    state: State<'_, LibraryRuntime>,
+    input: CaptureItemStageRoleInput,
+) -> AppResult<CaptureBatchDetail> {
+    let batch_id = input.batch_id.clone();
+    let mut connection = match state.connection.lock() {
+        Ok(connection) => connection,
+        Err(_) => return capture_error("library_lock_poisoned", None),
+    };
+    let result = result_or_error(stage_capture_item_role(
+        &mut connection,
+        StageCaptureItemRole {
+            account_id: state.account_id().to_owned(),
+            profile_id: state.profile_id().to_owned(),
+            batch_id: input.batch_id,
+            expected_revision: input.expected_revision,
+            item_id: input.item_id,
+            staged_role: input.staged_role,
+            now_utc_ms: current_utc_millis(),
+        },
+    ));
+    emit_batch_changed(&app, &batch_id);
+    result
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn capture_card_merge(
+    app: AppHandle,
+    state: State<'_, LibraryRuntime>,
+    input: CaptureCardMergeInput,
+) -> AppResult<CaptureBatchDetail> {
+    let batch_id = input.batch_id.clone();
+    let mut connection = match state.connection.lock() {
+        Ok(connection) => connection,
+        Err(_) => return capture_error("library_lock_poisoned", None),
+    };
+    let result = result_or_error(merge_capture_card(
+        &mut connection,
+        MergeCaptureCard {
+            account_id: state.account_id().to_owned(),
+            profile_id: state.profile_id().to_owned(),
+            batch_id: input.batch_id,
+            expected_revision: input.expected_revision,
+            target_draft_id: input.target_draft_id,
+            item_ids: input.item_ids,
             now_utc_ms: current_utc_millis(),
         },
     ));

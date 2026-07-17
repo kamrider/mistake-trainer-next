@@ -1324,6 +1324,10 @@ mod tests {
         assert!(MOBILE_PAGE.contains("const createClientId="));
         assert!(MOBILE_PAGE.contains("crypto.getRandomValues"));
         assert!(MOBILE_PAGE.contains("Array.from(input.files||[])"));
+        assert!(MOBILE_PAGE.contains("grid-template-columns:76px minmax(0,1fr) auto"));
+        assert!(MOBILE_PAGE.contains(".item>div { min-width:0"));
+        assert!(MOBILE_PAGE.contains("overflow-wrap:anywhere"));
+        assert!(MOBILE_PAGE.contains("overflow-x:hidden"));
         assert!(MOBILE_PAGE.contains("已选中，正在处理图片"));
 
         let decoder = runtime

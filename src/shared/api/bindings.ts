@@ -33,14 +33,14 @@ export const commands = {
 	captureItemPreview: (batchId: string, itemId: string) => __TAURI_INVOKE<AppResult<CaptureItemPreview>>("capture_item_preview", { batchId, itemId }),
 	captureItemRemove: (batchId: string, expectedRevision: number, itemId: string) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_item_remove", { batchId, expectedRevision, itemId }),
 	captureLayoutApply: (input: CaptureLayoutInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_layout_apply", { input }),
-	captureDraftCreate: (batchId: string, expectedRevision: number) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_draft_create", { batchId, expectedRevision }),
 	captureItemMove: (input: CaptureItemMoveInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_item_move", { input }),
+	captureItemStageRole: (input: CaptureItemStageRoleInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_item_stage_role", { input }),
+	captureCardMerge: (input: CaptureCardMergeInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_card_merge", { input }),
 	captureDraftUpdate: (input: CaptureDraftUpdateInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_draft_update", { input }),
 	captureCommitReady: (batchId: string, expectedRevision: number) => __TAURI_INVOKE<AppResult<CaptureCommitReport>>("capture_commit_ready", { batchId, expectedRevision }),
 	captureLanAddresses: () => __TAURI_INVOKE<AppResult<CaptureLanAddress[]>>("capture_lan_addresses"),
 	captureLanPreflight: () => __TAURI_INVOKE<AppResult<CaptureLanPreflight>>("capture_lan_preflight"),
 	captureLanFirewallRepair: () => __TAURI_INVOKE<AppResult<CaptureLanPreflight>>("capture_lan_firewall_repair"),
-	captureLanOpenNetworkSettings: (page: CaptureLanSettingsPage) => __TAURI_INVOKE<AppResult<boolean>>("capture_lan_open_network_settings", { page }),
 	captureLanStart: (input: CaptureLanStartInput) => __TAURI_INVOKE<AppResult<CaptureLanSession>>("capture_lan_start", { input }),
 	captureLanStatus: () => __TAURI_INVOKE<AppResult<CaptureLanSession | null>>("capture_lan_status"),
 	captureLanStop: () => __TAURI_INVOKE<AppResult<boolean>>("capture_lan_stop"),
@@ -94,6 +94,13 @@ export type CaptureBatchUpdateInput = {
 	expectedRevision: number,
 	subject: string,
 	finishCollecting: boolean,
+};
+
+export type CaptureCardMergeInput = {
+	batchId: string,
+	expectedRevision: number,
+	targetDraftId: string | null,
+	itemIds: string[],
 };
 
 export type CaptureCommitReport = {
@@ -150,6 +157,13 @@ export type CaptureItemPreview = {
 	dataUrl: string,
 };
 
+export type CaptureItemStageRoleInput = {
+	batchId: string,
+	expectedRevision: number,
+	itemId: string,
+	stagedRole: string,
+};
+
 export type CaptureItemSummary = {
 	id: string,
 	sourceName: string,
@@ -158,6 +172,7 @@ export type CaptureItemSummary = {
 	byteLength: number | null,
 	width: number,
 	height: number,
+	stagedRole: string,
 	draftId: string | null,
 	role: string | null,
 	position: number | null,
@@ -190,8 +205,6 @@ export type CaptureLanSession = {
 	receivedItemCount: number,
 	receivedBytes: number | null,
 };
-
-export type CaptureLanSettingsPage = "overview" | "wifi" | "ethernet";
 
 export type CaptureLanStartInput = {
 	batchId: string,

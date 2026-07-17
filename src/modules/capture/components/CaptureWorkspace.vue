@@ -1,16 +1,17 @@
 <script setup lang="ts">
 import {
-  ArrowLeft, Check, ChevronLeft, ChevronRight, ClipboardPaste, FolderOpen,
+  ArrowLeft, Check, ChevronRight, ClipboardPaste, FolderOpen,
   Images, LayoutGrid, ListPlus, LockKeyhole, Plus, QrCode, Save, Smartphone,
   Sparkles, Trash2, UploadCloud, X,
 } from '@lucide/vue'
-import { computed, nextTick, reactive, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import type {
   CaptureBatchDetail, CaptureBatchSummary, CaptureDraftSummary, CaptureItemSummary,
-  CaptureLanAddress, CaptureLanPreflight, CaptureLanSession, CaptureLanSettingsPage,
-  CaptureLayoutMode,
+  CaptureLanAddress, CaptureLanPreflight, CaptureLanSession, CaptureLayoutMode,
 } from '../../../shared/api/bindings'
 import CaptureThumbnail from './CaptureThumbnail.vue'
+import CaptureDraftCard from './CaptureDraftCard.vue'
+import { useCapturePointerDrag, type CapturePointerDrop } from '../composables/useCapturePointerDrag'
 
 type MoveTarget = {
   itemId: string
@@ -29,8 +30,9 @@ const props = defineProps<{
   lanAddresses: CaptureLanAddress[]
   lanPreflight: CaptureLanPreflight | undefined
   lanPreflightBusy: boolean
-  lanGuidePolling: boolean
   lanSession: CaptureLanSession | undefined
+  saveState: 'idle' | 'saving' | 'saved' | 'error'
+  commitMessage: string
 }>()
 
 const emit = defineEmits<{
@@ -42,8 +44,9 @@ const emit = defineEmits<{
   importFiles: [files: File[]]
   finishCollecting: [subject: string]
   applyLayout: [mode: CaptureLayoutMode, questions: number, answers: number, splitIndex: number | null]
-  createDraft: []
   moveItem: [target: MoveTarget]
+  stageItemRole: [itemId: string, stagedRole: 'question' | 'answer']
+  mergeCard: [itemIds: string[], targetDraftId: string | null]
   updateDraft: [draft: CaptureDraftSummary, subject: string, tags: string[], note: string]
   removeItem: [itemId: string]
   commitReady: []
@@ -51,8 +54,6 @@ const emit = defineEmits<{
   mobileCapture: [selectedAddress: string | null]
   refreshLanAddresses: []
   refreshLanPreflight: []
-  repairLanFirewall: []
-  openLanNetworkSettings: [page: CaptureLanSettingsPage]
   stopMobileCapture: []
 }>()
 
@@ -69,8 +70,10 @@ const lanDialog = ref<HTMLElement>()
 const lanClose = ref<HTMLButtonElement>()
 let lanFocusReturn: HTMLElement | null = null
 const selectedLanAddress = ref('')
-const networkGuideKind = ref<Extract<CaptureLanSettingsPage, 'wifi' | 'ethernet'>>('wifi')
-const draftEdits = reactive<Record<string, { subject: string, tags: string, note: string }>>({})
+const selectedDraftId = ref('')
+const draftSubject = ref('')
+const draftTags = ref('')
+const draftNote = ref('')
 
 const itemById = computed(() => new Map(props.detail?.items.map(item => [item.id, item]) ?? []))
 const activeBatches = computed(() => props.batches.filter(batch => batch.state !== 'completed'))
@@ -80,10 +83,10 @@ const isCollecting = computed(() => props.detail?.batch.state === 'collecting')
 const unassignedItems = computed(() => props.detail?.unassignedItemIds
   .map(id => itemById.value.get(id))
   .filter((item): item is CaptureItemSummary => Boolean(item)) ?? [])
+const selectedDraft = computed(() => props.detail?.drafts.find(draft => draft.id === selectedDraftId.value))
 const lanMinutesRemaining = computed(() => props.lanSession
   ? Math.max(0, Math.ceil(((props.lanSession.expiresAtUtcMs ?? Date.now()) - Date.now()) / 60_000))
   : 0)
-const lanNeedsNetworkChange = computed(() => props.lanPreflight?.needsNetworkChange === true)
 const lanNeedsRepair = computed(() => props.lanPreflight?.needsFirewallRepair === true)
 const lanReady = computed(() => props.lanPreflight?.canStart === true)
 
@@ -91,16 +94,15 @@ watch(() => props.detail, (detail) => {
   if (!detail) return
   batchSubject.value = detail.batch.subject
   splitIndex.value = Math.ceil(detail.items.length / 2)
-  for (const draft of detail.drafts) {
-    const current = draftEdits[draft.id]
-    if (!current) {
-      draftEdits[draft.id] = {
-        subject: draft.subject,
-        tags: draft.tags.join('，'),
-        note: draft.note,
-      }
-    }
+  if (!detail.drafts.some(draft => draft.id === selectedDraftId.value)) {
+    selectedDraftId.value = detail.drafts[0]?.id ?? ''
   }
+}, { immediate: true })
+
+watch(selectedDraft, (draft) => {
+  draftSubject.value = draft?.subject ?? ''
+  draftTags.value = draft?.tags.join('，') ?? ''
+  draftNote.value = draft?.note ?? ''
 }, { immediate: true })
 
 watch(() => props.lanAddresses, (addresses) => {
@@ -110,13 +112,12 @@ watch(() => props.lanAddresses, (addresses) => {
 }, { immediate: true })
 
 watch(() => props.lanSession, (session) => {
-  if (session && !showLanPanel.value) void showLanDialog(false)
+  if (session && !showLanPanel.value) void showLanDialog()
 })
 
 watch(
   () => [
     props.lanSession?.sessionId,
-    props.lanPreflight?.needsNetworkChange,
     props.lanPreflight?.needsFirewallRepair,
     props.lanPreflight?.canStart,
   ],
@@ -141,19 +142,16 @@ function startMobileCapture() {
   emit('mobileCapture', address)
 }
 
-async function showLanDialog(refresh = true) {
+async function showLanDialog() {
   lanFocusReturn = document.activeElement instanceof HTMLElement ? document.activeElement : lanLauncher.value ?? null
   showLanPanel.value = true
   await nextTick()
   lanClose.value?.focus()
-  if (refresh) {
-    emit('refreshLanAddresses')
-    emit('refreshLanPreflight')
-  }
 }
 
-function openLanPanel() {
-  void showLanDialog()
+async function openLanPanel() {
+  await showLanDialog()
+  if (!props.lanSession) startMobileCapture()
 }
 
 async function closeLanPanel() {
@@ -208,55 +206,33 @@ function importDrop(event: DragEvent) {
   if (files.length) emit('importFiles', files)
 }
 
-function draggedItemId(event: DragEvent) {
-  return event.dataTransfer?.getData('application/x-mistake-capture-item')
-    || event.dataTransfer?.getData('text/plain')
-    || ''
+function handlePointerDrop(drop: CapturePointerDrop) {
+  const item = itemById.value.get(drop.itemId)
+  if (!item || props.busy) return
+  if (drop.kind === 'unassigned') {
+    if (item.draftId) emit('moveItem', { itemId: item.id, targetDraftId: null, targetRole: null, targetPosition: 0 })
+    return
+  }
+  emit('mergeCard', [item.id], drop.kind === 'card' ? drop.draftId : null)
 }
 
-function dropItem(event: DragEvent, targetDraftId: string | null, targetRole: 'question' | 'answer' | null, targetPosition: number) {
-  const itemId = draggedItemId(event)
-  if (!itemId || !itemById.value.has(itemId)) return
-  emit('moveItem', { itemId, targetDraftId, targetRole, targetPosition })
+const pointerDrag = useCapturePointerDrag(handlePointerDrop)
+
+function toggleItemRole(item: CaptureItemSummary) {
+  if (pointerDrag.consumeSuppressedClick() || props.busy) return
+  emit('stageItemRole', item.id, item.stagedRole === 'question' ? 'answer' : 'question')
 }
 
-function itemsFor(draft: CaptureDraftSummary, role: 'question' | 'answer') {
-  const ids = role === 'question' ? draft.questionItemIds : draft.answerItemIds
-  return ids.map(id => itemById.value.get(id)).filter((item): item is CaptureItemSummary => Boolean(item))
-}
-
-function saveDraft(draft: CaptureDraftSummary) {
-  const edit = draftEdits[draft.id]
-  if (!edit) return
+function saveSelectedDraft() {
+  const draft = selectedDraft.value
+  if (!draft || props.busy) return
   emit(
     'updateDraft',
     draft,
-    edit.subject.trim(),
-    edit.tags.split(/[，,]/).map(tag => tag.trim()).filter(Boolean),
-    edit.note.trim(),
+    draftSubject.value.trim(),
+    draftTags.value.split(/[，,]/).map(tag => tag.trim()).filter(Boolean),
+    draftNote.value.trim(),
   )
-}
-
-function moveAcrossDrafts(item: CaptureItemSummary, draftIndex: number, role: 'question' | 'answer', delta: number) {
-  const target = props.detail?.drafts[draftIndex + delta]
-  if (!target) return
-  emit('moveItem', {
-    itemId: item.id,
-    targetDraftId: target.id,
-    targetRole: role,
-    targetPosition: itemsFor(target, role).length,
-  })
-}
-
-function moveWithin(item: CaptureItemSummary, draft: CaptureDraftSummary, role: 'question' | 'answer', delta: number) {
-  const items = itemsFor(draft, role)
-  const index = items.findIndex(candidate => candidate.id === item.id)
-  emit('moveItem', {
-    itemId: item.id,
-    targetDraftId: draft.id,
-    targetRole: role,
-    targetPosition: Math.max(0, Math.min(items.length - 1, index + delta)),
-  })
 }
 
 function statusLabel(batch: CaptureBatchSummary) {
@@ -487,15 +463,15 @@ function statusLabel(batch: CaptureBatchSummary) {
               class="lan-preflight"
               aria-live="polite"
             >
-              <template v-if="lanPreflightBusy && !lanPreflight">
+              <template v-if="busy || lanPreflightBusy">
                 <h2 id="lan-dialog-title">
-                  正在检查连接条件
+                  正在准备手机连接
                 </h2>
                 <p class="lan-intro">
-                  正在确认 Windows 网络类型与手机连接权限……
+                  首次使用时 Windows 会请求一次管理员授权。请在系统弹窗中确认应用是 Mistake Trainer Next，然后点击“是”。
                 </p>
                 <div class="lan-progress">
-                  <span />检查专用网络与防火墙
+                  <span />检查持久权限并启动二维码
                 </div>
               </template>
 
@@ -524,131 +500,25 @@ function statusLabel(batch: CaptureBatchSummary) {
                 </p>
               </template>
 
-              <template v-else-if="lanNeedsNetworkChange">
-                <span class="lan-state is-attention">活动网络中含有非专用连接</span>
-                <h2 id="lan-dialog-title">
-                  跟着 4 步，把可信网络设为专用
-                </h2>
-                <p class="lan-intro">
-                  只对你自己的家庭 Wi‑Fi 或个人热点这样设置。学校、商场、咖啡店等公共网络请保持“公用”，改用手机热点。
-                </p>
-
-                <div
-                  class="network-kind"
-                  aria-label="选择电脑的联网方式"
-                >
-                  <button
-                    type="button"
-                    aria-label="Wi‑Fi"
-                    :class="{ 'is-selected': networkGuideKind === 'wifi' }"
-                    :aria-pressed="networkGuideKind === 'wifi'"
-                    @click="networkGuideKind = 'wifi'"
-                  >
-                    <strong>Wi‑Fi</strong><span>无线网络</span>
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="网线 / 扩展坞"
-                    :class="{ 'is-selected': networkGuideKind === 'ethernet' }"
-                    :aria-pressed="networkGuideKind === 'ethernet'"
-                    @click="networkGuideKind = 'ethernet'"
-                  >
-                    <strong>网线 / 扩展坞</strong><span>以太网</span>
-                  </button>
-                </div>
-
-                <ol class="setup-steps">
-                  <li>
-                    <span>1</span>
-                    <div>
-                      <strong>打开对应的 Windows 设置页</strong>
-                      <p>点击下面的“打开{{ networkGuideKind === 'wifi' ? ' Wi‑Fi ' : '以太网' }}设置”，会在应用旁边弹出系统设置。</p>
-                    </div>
-                  </li>
-                  <li>
-                    <span>2</span>
-                    <div v-if="networkGuideKind === 'wifi'">
-                      <strong>点击当前已连接的 Wi‑Fi 名称</strong>
-                      <p>在 Wi‑Fi 页面顶部找到正在使用的网络；点击它，或点击旁边的“属性”。不要点“管理已知网络”。</p>
-                    </div>
-                    <div v-else>
-                      <strong>打开当前以太网连接的属性</strong>
-                      <p>如果设置页显示多个网口，点击状态为“已连接”的那个；通常名称是“以太网”。</p>
-                    </div>
-                  </li>
-                  <li>
-                    <span>3</span>
-                    <div>
-                      <strong>进入“网络配置文件类型”</strong>
-                      <p>找到“网络配置文件类型”，选择“专用网络”。不要修改 IP、DNS、代理或防火墙开关。</p>
-                    </div>
-                  </li>
-                  <li>
-                    <span>4</span>
-                    <div>
-                      <strong>回到这里完成检测</strong>
-                      <p>设置成功后本窗口会自动进入下一步；如果没有变化，点击“设置完成，立即检测”。</p>
-                    </div>
-                  </li>
-                </ol>
-
-                <div class="lan-actions guide-actions">
-                  <button
-                    class="lan-primary"
-                    type="button"
-                    @click="emit('openLanNetworkSettings', networkGuideKind)"
-                  >
-                    打开{{ networkGuideKind === 'wifi' ? ' Wi‑Fi ' : '以太网' }}设置
-                  </button>
-                  <button
-                    class="lan-secondary"
-                    type="button"
-                    @click="emit('refreshLanPreflight')"
-                  >
-                    设置完成，立即检测
-                  </button>
-                </div>
-                <p
-                  v-if="lanGuidePolling"
-                  class="guide-detection"
-                >
-                  <span />Windows 设置已打开；本应用会在 90 秒内自动检测，设置成功后这里会直接进入下一步。
-                </p>
-
-                <details class="lan-troubleshooting">
-                  <summary>还是检测不过？按这里逐项排查</summary>
-                  <ul>
-                    <li><strong>先断开不需要的连接：</strong>VPN、公司网络、虚拟机网卡或另一根网线可能仍被 Windows 标记为公用。</li>
-                    <li><strong>找不到“专用网络”：</strong>电脑可能受学校或公司管理。请不要绕过限制，改用个人电脑或手机热点。</li>
-                    <li><strong>正在使用公共 Wi‑Fi：</strong>不要把它改成专用。可用另一台手机开热点，让电脑和拍照设备都连入；如果就用开热点的手机拍照，只需让电脑连入该热点。</li>
-                  </ul>
-                </details>
-                <p class="lan-safety">
-                  应用不会开放公用网络，也不会自动更改你的网络类型。
-                </p>
-              </template>
-
               <template v-else-if="lanNeedsRepair">
-                <span class="lan-state is-attention">需要一次 Windows 授权</span>
+                <span class="lan-state is-attention">Windows 授权尚未完成</span>
                 <h2 id="lan-dialog-title">
-                  允许手机连接这台电脑
+                  下次扫码会再次请求授权
                 </h2>
                 <p class="lan-intro">
-                  网络已经设置正确。最后需要让 Windows 防火墙认识本应用，这一步通常只做一次。
+                  点击下面的按钮会重新弹出 Windows 管理员确认。授权成功后规则会保留，以后点击“手机扫码”会直接生成二维码。
                 </p>
-                <ol class="setup-steps firewall-steps">
-                  <li><span>1</span><div><strong>点击“修复手机连接”</strong><p>应用会请求创建一条仅用于本机手机采集的专用网络规则。</p></div></li>
-                  <li><span>2</span><div><strong>Windows 弹窗中点击“是”</strong><p>看到“是否允许此应用对你的设备进行更改”时，确认应用是 Mistake Trainer Next，然后点击“是”。</p></div></li>
-                  <li><span>3</span><div><strong>回到应用等待自动检测</strong><p>通过后会直接显示“连接权限已就绪”；不会要求重启，也不需要输入命令。</p></div></li>
-                </ol>
+                <div class="lan-permission-summary">
+                  <LockKeyhole :size="18" /><p><strong>授权范围</strong><span>当前应用 · TCP 入站 · 本地子网；不关闭防火墙，不改动其他软件。</span></p>
+                </div>
                 <div class="lan-actions">
                   <button
                     class="lan-primary"
                     type="button"
                     :disabled="busy"
-                    @click="emit('repairLanFirewall')"
+                    @click="startMobileCapture"
                   >
-                    {{ busy ? '等待 Windows 确认…' : '修复手机连接' }}
+                    再次授权并生成二维码
                   </button>
                   <button
                     class="lan-secondary"
@@ -663,19 +533,20 @@ function statusLabel(batch: CaptureBatchSummary) {
                   <summary>没有弹窗，或者我没有管理员权限</summary>
                   <ul>
                     <li>如果弹窗要求管理员密码，请输入这台电脑管理员账户的密码；不知道密码时请让电脑管理员协助。</li>
-                    <li>如果点了“否”或关闭弹窗，不会做任何更改，回到这里可以再次点击“修复手机连接”。</li>
-                    <li>修复不会开放公用网络，也不会关闭 Windows 防火墙。</li>
+                    <li>如果点了“否”或关闭弹窗，不会记录为成功；下一次扫码会再次请求。</li>
+                    <li>授权不会关闭 Windows 防火墙，也不会修改其他软件的网络规则。</li>
+                    <li>本规则覆盖 Windows 网络类型，但只允许当前程序接收来自本地子网的 TCP 连接。</li>
                   </ul>
                 </details>
               </template>
 
               <template v-else-if="lanReady">
-                <span class="lan-state is-ready">专用网络与连接权限已就绪</span>
+                <span class="lan-state is-ready">持久连接权限已就绪</span>
                 <h2 id="lan-dialog-title">
                   选择手机所在的网络
                 </h2>
                 <p class="lan-intro">
-                  仅适用于可信的家庭 Wi‑Fi 或手机个人热点。不要在公共 Wi‑Fi 上使用。
+                  权限只允许本地子网访问当前应用。仍建议在家庭 Wi‑Fi 或个人热点中使用，不要在陌生公共网络上传题目。
                 </p>
                 <label class="lan-address-label">网络接口
                   <select
@@ -822,265 +693,145 @@ function statusLabel(batch: CaptureBatchSummary) {
           </button>
         </section>
 
-        <section
-          class="unassigned-strip"
-          @dragover.prevent
-          @drop.prevent="dropItem($event, null, null, 0)"
-        >
-          <div class="strip-heading">
-            <div><p>未分配图片</p><span>拖到下方题图或答案区</span></div><strong>{{ unassignedItems.length }}</strong>
-          </div>
-          <div
-            v-if="unassignedItems.length"
-            class="thumbnail-row"
+        <section class="organizer-grid">
+          <aside
+            class="unassigned-strip"
+            data-capture-drop="unassigned"
           >
-            <div
-              v-for="item in unassignedItems"
-              :key="item.id"
-              class="unassigned-item"
-            >
-              <CaptureThumbnail
-                :item="item"
-                :data-url="previews[item.id]"
-                removable
-                @preview="emit('preview', $event)"
-                @remove="emit('removeItem', $event)"
-              />
-              <div
-                v-if="detail.drafts.length"
-                class="quick-assign"
-              >
-                <button
-                  type="button"
-                  @click="emit('moveItem', { itemId: item.id, targetDraftId: detail.drafts[0]!.id, targetRole: 'question', targetPosition: detail.drafts[0]!.questionItemIds.length })"
-                >
-                  设为题图
-                </button>
-                <button
-                  type="button"
-                  @click="emit('moveItem', { itemId: item.id, targetDraftId: detail.drafts[0]!.id, targetRole: 'answer', targetPosition: detail.drafts[0]!.answerItemIds.length })"
-                >
-                  设为答案
-                </button>
-              </div>
+            <div class="strip-heading">
+              <div><p>素材牌库</p><span>单击切换题面 / 答案，拖到右侧完成融合</span></div><strong>{{ unassignedItems.length }}</strong>
             </div>
-          </div>
-          <p
-            v-else
-            class="strip-empty"
-          >
-            <Check :size="16" />所有图片都已分配
-          </p>
+            <TransitionGroup
+              v-if="unassignedItems.length"
+              name="organizer-move"
+              tag="div"
+              class="unassigned-gallery"
+            >
+              <article
+                v-for="item in unassignedItems"
+                :key="item.id"
+                class="unassigned-item"
+                :class="`is-${item.stagedRole}`"
+                :aria-label="`待配对图片：${item.sourceName}`"
+              >
+                <CaptureThumbnail
+                  :item="item"
+                  :data-url="previews[item.id]"
+                  variant="gallery"
+                  removable
+                  :disabled="busy"
+                  @preview="emit('preview', $event)"
+                  @remove="emit('removeItem', $event)"
+                  @activate="toggleItemRole(item)"
+                  @pointer-start="pointerDrag.start"
+                />
+                <div class="role-chip">
+                  <span>{{ item.stagedRole === 'question' ? '题面' : '答案' }}</span>
+                  <small>单击切换 · 拖到右侧</small>
+                </div>
+              </article>
+            </TransitionGroup>
+            <p
+              v-else
+              class="strip-empty"
+            >
+              <Check :size="16" />所有图片都已配对
+            </p>
+          </aside>
+
+          <section class="draft-stack">
+            <header class="card-stack-heading">
+              <div><p>问答卡</p><h2>一题一张卡，翻面核对答案</h2></div>
+              <span>拖到已有卡上会融合；拖到下方空白区会直接创建新题</span>
+            </header>
+            <TransitionGroup
+              name="organizer-move"
+              tag="div"
+              class="draft-cards"
+            >
+              <CaptureDraftCard
+                v-for="(draft, draftIndex) in detail.drafts"
+                :key="draft.id"
+                :draft="draft"
+                :draft-index="draftIndex"
+                :items="detail.items"
+                :previews="previews"
+                :selected="draft.id === selectedDraftId"
+                :busy="busy"
+                @select="selectedDraftId = $event"
+                @preview="emit('preview', $event)"
+                @pointer-start="pointerDrag.start"
+                @return-item="itemId => emit('moveItem', { itemId, targetDraftId: null, targetRole: null, targetPosition: 0 })"
+              />
+            </TransitionGroup>
+            <div
+              class="new-card-drop"
+              data-capture-drop="new-card"
+            >
+              <Plus :size="22" />
+              <strong>拖到这里，自动生成一道新题</strong>
+              <span>图片会按照左侧标记的“题面 / 答案”进入新卡</span>
+            </div>
+
+            <section
+              v-if="selectedDraft"
+              class="card-inspector"
+              aria-label="当前题卡信息"
+            >
+              <header><div><p>当前题卡</p><h3>补充科目、标签与笔记</h3></div><span>修改后自动保存</span></header>
+              <div class="inspector-fields">
+                <label><span>科目</span><input
+                  v-model="draftSubject"
+                  maxlength="40"
+                  placeholder="必填，例如：数学"
+                  @change="saveSelectedDraft"
+                ></label>
+                <label><span>标签</span><input
+                  v-model="draftTags"
+                  maxlength="200"
+                  placeholder="函数，粗心"
+                  @change="saveSelectedDraft"
+                ></label>
+                <label class="inspector-note"><span>笔记</span><textarea
+                  v-model="draftNote"
+                  maxlength="500"
+                  rows="2"
+                  placeholder="错因或下次提醒"
+                  @change="saveSelectedDraft"
+                /></label>
+              </div>
+            </section>
+          </section>
         </section>
 
-        <section class="draft-stack">
-          <article
-            v-for="(draft, draftIndex) in detail.drafts"
-            :key="draft.id"
-            class="draft-card"
-            :class="{ 'is-ready': draft.ready }"
+        <Teleport to="body">
+          <div
+            v-if="pointerDrag.drag.active"
+            class="capture-drag-ghost"
+            :style="pointerDrag.style.value"
+            aria-hidden="true"
           >
-            <header class="draft-header">
-              <span class="draft-number">{{ String(draftIndex + 1).padStart(2, '0') }}</span><div><h3>错题草稿</h3><p>{{ draft.ready ? '题答齐全，可加入题库' : '还需要题图、答案与科目' }}</p></div><span class="ready-mark">{{ draft.ready ? '就绪' : '未完成' }}</span>
-            </header>
-            <div class="draft-zones">
-              <section
-                class="draft-zone question-zone"
-                @dragover.prevent
-                @drop.prevent="dropItem($event, draft.id, 'question', draft.questionItemIds.length)"
-              >
-                <div class="zone-title">
-                  <span>题图</span><small>{{ draft.questionItemIds.length }} 张</small>
-                </div>
-                <div
-                  v-if="itemsFor(draft, 'question').length"
-                  class="zone-items"
-                >
-                  <div
-                    v-for="item in itemsFor(draft, 'question')"
-                    :key="item.id"
-                    class="assigned-item"
-                  >
-                    <CaptureThumbnail
-                      :item="item"
-                      :data-url="previews[item.id]"
-                      @preview="emit('preview', $event)"
-                    />
-                    <div class="item-actions">
-                      <button
-                        type="button"
-                        title="移到上一题"
-                        :disabled="draftIndex === 0"
-                        @click="moveAcrossDrafts(item, draftIndex, 'question', -1)"
-                      >
-                        <ChevronLeft :size="13" />
-                      </button>
-                      <button
-                        type="button"
-                        title="前移"
-                        @click="moveWithin(item, draft, 'question', -1)"
-                      >
-                        前
-                      </button>
-                      <button
-                        type="button"
-                        title="后移"
-                        @click="moveWithin(item, draft, 'question', 1)"
-                      >
-                        后
-                      </button>
-                      <button
-                        type="button"
-                        title="改为答案"
-                        @click="emit('moveItem', { itemId: item.id, targetDraftId: draft.id, targetRole: 'answer', targetPosition: draft.answerItemIds.length })"
-                      >
-                        答
-                      </button>
-                      <button
-                        type="button"
-                        title="移回未分配"
-                        @click="emit('moveItem', { itemId: item.id, targetDraftId: null, targetRole: null, targetPosition: 0 })"
-                      >
-                        <X :size="13" />
-                      </button>
-                      <button
-                        type="button"
-                        title="移到下一题"
-                        :disabled="draftIndex === detail.drafts.length - 1"
-                        @click="moveAcrossDrafts(item, draftIndex, 'question', 1)"
-                      >
-                        <ChevronRight :size="13" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                <p
-                  v-else
-                  class="zone-empty"
-                >
-                  拖入题目图片
-                </p>
-              </section>
-              <section
-                class="draft-zone answer-zone"
-                @dragover.prevent
-                @drop.prevent="dropItem($event, draft.id, 'answer', draft.answerItemIds.length)"
-              >
-                <div class="zone-title">
-                  <span>答案</span><small>{{ draft.answerItemIds.length }} 张</small>
-                </div>
-                <div
-                  v-if="itemsFor(draft, 'answer').length"
-                  class="zone-items"
-                >
-                  <div
-                    v-for="item in itemsFor(draft, 'answer')"
-                    :key="item.id"
-                    class="assigned-item"
-                  >
-                    <CaptureThumbnail
-                      :item="item"
-                      :data-url="previews[item.id]"
-                      @preview="emit('preview', $event)"
-                    />
-                    <div class="item-actions">
-                      <button
-                        type="button"
-                        title="移到上一题"
-                        :disabled="draftIndex === 0"
-                        @click="moveAcrossDrafts(item, draftIndex, 'answer', -1)"
-                      >
-                        <ChevronLeft :size="13" />
-                      </button>
-                      <button
-                        type="button"
-                        title="前移"
-                        @click="moveWithin(item, draft, 'answer', -1)"
-                      >
-                        前
-                      </button>
-                      <button
-                        type="button"
-                        title="后移"
-                        @click="moveWithin(item, draft, 'answer', 1)"
-                      >
-                        后
-                      </button>
-                      <button
-                        type="button"
-                        title="改为题图"
-                        @click="emit('moveItem', { itemId: item.id, targetDraftId: draft.id, targetRole: 'question', targetPosition: draft.questionItemIds.length })"
-                      >
-                        题
-                      </button>
-                      <button
-                        type="button"
-                        title="移回未分配"
-                        @click="emit('moveItem', { itemId: item.id, targetDraftId: null, targetRole: null, targetPosition: 0 })"
-                      >
-                        <X :size="13" />
-                      </button>
-                      <button
-                        type="button"
-                        title="移到下一题"
-                        :disabled="draftIndex === detail.drafts.length - 1"
-                        @click="moveAcrossDrafts(item, draftIndex, 'answer', 1)"
-                      >
-                        <ChevronRight :size="13" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                <p
-                  v-else
-                  class="zone-empty"
-                >
-                  拖入答案图片
-                </p>
-              </section>
-            </div>
-            <div
-              v-if="draftEdits[draft.id]"
-              class="draft-fields"
+            <img
+              v-if="previews[pointerDrag.drag.itemId]"
+              :src="previews[pointerDrag.drag.itemId]"
+              alt=""
             >
-              <label><span>科目</span><input
-                v-model="draftEdits[draft.id]!.subject"
-                maxlength="40"
-                @change="saveDraft(draft)"
-              ></label>
-              <label><span>标签</span><input
-                v-model="draftEdits[draft.id]!.tags"
-                maxlength="200"
-                placeholder="函数，粗心"
-                @change="saveDraft(draft)"
-              ></label>
-              <label class="note-field"><span>笔记</span><textarea
-                v-model="draftEdits[draft.id]!.note"
-                maxlength="500"
-                rows="2"
-                placeholder="错因或下次提醒"
-                @change="saveDraft(draft)"
-              /></label>
-            </div>
-          </article>
-          <button
-            class="add-draft"
-            type="button"
-            :disabled="busy"
-            @click="emit('createDraft')"
-          >
-            <Plus :size="17" />添加空白草稿
-          </button>
-        </section>
+            <Images
+              v-else
+              :size="24"
+            />
+            <span>{{ itemById.get(pointerDrag.drag.itemId)?.stagedRole === 'answer' ? '答案' : '题面' }}</span>
+          </div>
+        </Teleport>
 
         <footer class="commit-dock">
-          <div><p>原子批量入库</p><strong>{{ readyCount ? `${readyCount} 道已就绪` : '还没有可入库的题目' }}</strong><span>未完成草稿会继续留在采集箱</span></div>
+          <div><p>{{ saveState === 'saving' ? '保存中' : saveState === 'error' ? '保存失败' : '已自动保存' }}</p><strong>{{ readyCount ? `${readyCount} 道完整题卡` : '还没有可加入题库的完整题卡' }}</strong><span>{{ commitMessage || (readyCount ? '点击后正式加入题库；未完成卡仍留在采集箱' : '每张卡需要题面、答案和科目') }}</span></div>
           <button
             type="button"
             :disabled="busy || readyCount === 0"
             @click="emit('commitReady')"
           >
-            <Save :size="18" />保存全部就绪题
+            <Save :size="18" />将 {{ readyCount }} 道题加入题库
           </button>
         </footer>
       </template>
@@ -1118,19 +869,24 @@ input, textarea, select { box-sizing: border-box; padding: 10px 12px; color: var
 .workbench-header { align-items: center; }.back-button { display: inline-flex; gap: 7px; align-items: center; padding: 9px 12px; color: var(--ink-muted); border: 1px solid var(--line); border-radius: 999px; background: rgba(255,253,247,.5); cursor: pointer; }.batch-title { flex: 1; }.batch-title h1 { font-size: clamp(32px,4vw,50px); }.workbench-stats { display: flex; gap: 7px; }.workbench-stats span { display: grid; min-width: 58px; padding: 9px; text-align: center; color: var(--ink-muted); border-radius: 10px; background: rgba(232,221,199,.48); font-size: 10px; }.workbench-stats strong { color: var(--ink); font-family: serif; font-size: 20px; }.workbench-stats .ready strong { color: var(--cinnabar); }
 .capture-toolbar { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)) minmax(180px,.75fr); gap: 10px; margin-top: 31px; }.capture-toolbar button, .tool-hint { display: flex; gap: 11px; align-items: center; min-height: 60px; padding: 0 17px; color: var(--ink); border: 1px solid var(--line); border-radius: 13px; background: rgba(255,253,247,.67); text-align: left; }.capture-toolbar button { justify-content: flex-start; cursor: pointer; }.capture-toolbar .primary-tool { color: var(--paper); border-color: var(--green-deep); background: var(--green-deep); }.capture-toolbar span, .tool-hint span { display: grid; gap: 2px; }.capture-toolbar strong, .tool-hint strong { font-size: 13px; }.capture-toolbar small, .tool-hint small { opacity: .68; font-size: 10px; }
 .external-drop { display: flex; gap: 9px; align-items: center; justify-content: center; min-height: 44px; margin-top: 10px; color: var(--ink-muted); border: 1px dashed rgba(33,51,45,.24); border-radius: 11px; font-size: 11px; transition: background var(--motion-feedback), border-color var(--motion-feedback); }.external-drop.is-active { color: var(--green-deep); border-color: var(--green-deep); background: var(--green-soft); }
-.collecting-panel { display: grid; grid-template-columns: minmax(0,1fr) 240px auto; gap: 20px; align-items: end; margin-top: 24px; padding: 26px; border: 1px solid var(--line); border-radius: 5px 20px 20px; background: rgba(255,253,247,.73); box-shadow: var(--shadow-soft); }.collecting-copy { display: flex; gap: 13px; align-items: flex-start; }.collecting-panel h2,.collecting-panel p { margin: 0; }.collecting-panel p { max-width: 550px; margin-top: 5px; color: var(--ink-muted); font-size: 12px; }.collecting-panel label,.layout-bar label,.draft-fields label { display: grid; gap: 6px; color: var(--ink-muted); font-size: 10px; font-weight: 720; }.collecting-panel .lan-live { grid-column: 1/-1; display: flex; align-items: center; gap: 8px; color: var(--green-deep); font-weight: 720; }.lan-live span { width: 8px; height: 8px; border-radius: 50%; background: #4f806e; box-shadow: 0 0 0 4px rgba(79,128,110,.14); }
+.collecting-panel { display: grid; grid-template-columns: minmax(0,1fr) 240px auto; gap: 20px; align-items: end; margin-top: 24px; padding: 26px; border: 1px solid var(--line); border-radius: 5px 20px 20px; background: rgba(255,253,247,.73); box-shadow: var(--shadow-soft); }.collecting-copy { display: flex; gap: 13px; align-items: flex-start; }.collecting-panel h2,.collecting-panel p { margin: 0; }.collecting-panel p { max-width: 550px; margin-top: 5px; color: var(--ink-muted); font-size: 12px; }.collecting-panel label,.layout-bar label { display: grid; gap: 6px; color: var(--ink-muted); font-size: 10px; font-weight: 720; }.collecting-panel .lan-live { grid-column: 1/-1; display: flex; align-items: center; gap: 8px; color: var(--green-deep); font-weight: 720; }.lan-live span { width: 8px; height: 8px; border-radius: 50%; background: #4f806e; box-shadow: 0 0 0 4px rgba(79,128,110,.14); }
 .lan-overlay { position: fixed; z-index: 80; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(28,38,34,.46); backdrop-filter: blur(9px); }.lan-dialog { position: relative; width: min(760px,100%); max-height: min(780px,calc(100vh - 48px)); overflow: auto; padding: 34px; border: 1px solid rgba(33,51,45,.14); border-radius: 8px 30px 30px; background: var(--paper); box-shadow: 0 30px 90px rgba(20,30,26,.28); }.lan-dialog h2 { margin: 4px 0 0; font-family: var(--font-serif); font-size: 34px; }.lan-intro { margin: 10px 0 24px; color: var(--ink-muted); }.lan-close { position: absolute; top: 17px; right: 17px; display: grid; place-items: center; width: 38px; height: 38px; padding: 0; border: 0; border-radius: 50%; color: var(--ink); background: var(--sand); cursor: pointer; }.lan-session-grid { display: grid; grid-template-columns: minmax(250px,320px) 1fr; gap: 30px; align-items: center; }.qr-paper { padding: 18px; border: 1px solid var(--line); border-radius: 18px; background: #fff; }.qr-paper img { display: block; width: 100%; aspect-ratio: 1; }.lan-session-copy { display: grid; gap: 13px; }.lan-session-copy div { display: grid; gap: 3px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }.lan-session-copy span,.lan-address-label { color: var(--ink-muted); font-size: 11px; font-weight: 720; }.lan-session-copy strong { font-size: 16px; }.lan-session-copy p,.lan-empty { margin: 2px 0; color: var(--ink-muted); font-size: 12px; line-height: 1.65; }.lan-stop,.lan-start { display: inline-flex; gap: 8px; align-items: center; justify-content: center; min-height: 44px; padding: 0 18px; border: 0; border-radius: 999px; color: var(--paper); background: var(--vermillion); font-weight: 760; cursor: pointer; }.lan-stop { justify-self: start; }.lan-start { margin-top: 20px; background: var(--green-deep); }.lan-refresh { min-height: 38px; margin-top: 12px; padding: 0 14px; color: var(--green-deep); border: 1px solid var(--line-strong); border-radius: 999px; background: transparent; font-weight: 720; cursor: pointer; }.lan-address-label { display: grid; gap: 8px; }.lan-address-label select { min-height: 48px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 13px; color: var(--ink); background: #fffdf8; }
 .lan-preflight { min-height: 240px; }.lan-progress { display: flex; gap: 10px; align-items: center; color: var(--ink-muted); font-size: 12px; }.lan-progress span { width: 9px; height: 9px; border-radius: 50%; background: var(--cinnabar); animation: lan-pulse 1.1s ease-in-out infinite alternate; }.lan-state { display: inline-flex; margin-bottom: 11px; padding: 6px 10px; border-radius: 999px; font-size: 10px; font-weight: 800; letter-spacing: .04em; }.lan-state.is-attention { color: #87402f; background: rgba(185,88,63,.12); }.lan-state.is-ready { color: #3f6857; background: var(--green-soft); }.lan-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }.lan-primary,.lan-secondary { min-height: 44px; padding: 0 17px; border-radius: 999px; font-weight: 760; cursor: pointer; }.lan-primary { color: var(--paper); border: 1px solid var(--green-deep); background: var(--green-deep); }.lan-secondary { color: var(--green-deep); border: 1px solid var(--line-strong); background: transparent; }.lan-safety { max-width: 620px; margin: 16px 0 0; padding-left: 12px; color: var(--ink-muted); border-left: 2px solid var(--sand); font-size: 11px; line-height: 1.6; }
-.network-kind { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 9px; margin: 0 0 14px; }.network-kind button { display: grid; gap: 2px; min-height: 58px; padding: 10px 14px; color: var(--ink-muted); text-align: left; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,253,247,.62); cursor: pointer; }.network-kind button.is-selected { color: var(--green-deep); border-color: rgba(33,51,45,.42); background: var(--green-soft); box-shadow: inset 3px 0 0 var(--green-deep); }.network-kind strong { font-size: 13px; }.network-kind span { font-size: 10px; opacity: .72; }.setup-steps { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }.setup-steps li { display: grid; grid-template-columns: 31px minmax(0,1fr); gap: 11px; align-items: start; padding: 12px 13px; border: 1px solid rgba(33,51,45,.1); border-radius: 12px; background: rgba(255,253,247,.54); }.setup-steps li>span { display: grid; width: 28px; height: 28px; color: var(--paper); place-items: center; border-radius: 50%; background: var(--green-deep); font-family: serif; font-size: 14px; font-weight: 800; }.setup-steps strong { display: block; padding-top: 2px; font-size: 12px; }.setup-steps p { margin: 3px 0 0; color: var(--ink-muted); font-size: 11px; line-height: 1.55; }.firewall-steps li>span { background: var(--cinnabar); }.guide-actions { margin-top: 14px; }.lan-troubleshooting { margin-top: 13px; color: var(--ink-muted); border: 1px solid rgba(33,51,45,.12); border-radius: 11px; background: rgba(232,221,199,.18); }.lan-troubleshooting summary { padding: 11px 13px; color: var(--green-deep); font-size: 11px; font-weight: 760; cursor: pointer; }.lan-troubleshooting ul { display: grid; gap: 7px; margin: 0; padding: 0 18px 14px 31px; font-size: 10px; line-height: 1.55; }.lan-primary:focus-visible,.lan-secondary:focus-visible,.network-kind button:focus-visible,.lan-troubleshooting summary:focus-visible { outline: 3px solid rgba(185,88,63,.28); outline-offset: 2px; }
-.guide-detection { display: flex; gap: 9px; align-items: center; margin: 11px 0 0; padding: 10px 12px; color: #416353; border-radius: 10px; background: var(--green-soft); font-size: 10px; line-height: 1.5; }.guide-detection span { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: #4f806e; box-shadow: 0 0 0 4px rgba(79,128,110,.13); }
+.lan-permission-summary { display: flex; gap: 10px; align-items: center; margin: 0 0 14px; padding: 12px 13px; color: var(--green-deep); border: 1px solid rgba(33,51,45,.12); border-radius: 12px; background: var(--green-soft); }.lan-permission-summary p { display: grid; gap: 2px; margin: 0; }.lan-permission-summary strong { font-size: 11px; }.lan-permission-summary span { color: var(--ink-muted); font-size: 10px; line-height: 1.5; }.lan-troubleshooting { margin-top: 13px; color: var(--ink-muted); border: 1px solid rgba(33,51,45,.12); border-radius: 11px; background: rgba(232,221,199,.18); }.lan-troubleshooting summary { padding: 11px 13px; color: var(--green-deep); font-size: 11px; font-weight: 760; cursor: pointer; }.lan-troubleshooting ul { display: grid; gap: 7px; margin: 0; padding: 0 18px 14px 31px; font-size: 10px; line-height: 1.55; }.lan-primary:focus-visible,.lan-secondary:focus-visible,.lan-troubleshooting summary:focus-visible { outline: 3px solid rgba(185,88,63,.28); outline-offset: 2px; }
 @keyframes lan-pulse { to { transform: scale(1.35); opacity: .45; } }
 .layout-bar { display: flex; gap: 11px; align-items: end; margin-top: 25px; padding: 17px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,253,247,.66); }.layout-heading { display: flex; flex: 1; gap: 10px; align-items: flex-start; }.layout-heading h2,.layout-heading p { margin: 0; }.layout-heading h2 { font-size: 16px; }.layout-heading p { margin-top: 3px; color: var(--ink-muted); font-size: 10px; }.layout-bar select { min-width: 210px; }.layout-bar input { width: 78px; }
-.unassigned-strip { margin-top: 17px; padding: 17px; border: 1px dashed rgba(33,51,45,.22); border-radius: 14px; background: rgba(232,221,199,.18); }.strip-heading { display: flex; justify-content: space-between; align-items: center; }.strip-heading div { display: flex; gap: 9px; align-items: baseline; }.strip-heading p { margin: 0; font-weight: 760; }.strip-heading span { color: var(--ink-muted); font-size: 10px; }.strip-heading strong { color: var(--cinnabar); }.thumbnail-row { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; max-height: 290px; margin-top: 12px; overflow: auto; }.quick-assign { display: flex; gap: 5px; margin-top: 4px; }.quick-assign button,.item-actions button { min-height: 25px; padding: 0 7px; color: var(--ink-muted); border: 1px solid rgba(33,51,45,.13); border-radius: 7px; background: rgba(255,253,247,.7); font-size: 9px; cursor: pointer; }.strip-empty { display: flex; gap: 6px; align-items: center; margin: 12px 0 0; color: #537064; font-size: 11px; }
-.draft-stack { display: grid; gap: 14px; margin-top: 18px; }.draft-card { padding: 19px; border: 1px solid var(--line); border-radius: 5px 18px 18px; background: rgba(255,253,247,.75); box-shadow: var(--shadow-soft); }.draft-card.is-ready { border-color: rgba(75,111,94,.33); }.draft-header { display: flex; gap: 10px; align-items: center; }.draft-number { color: var(--cinnabar); font-family: serif; font-size: 21px; }.draft-header div { flex: 1; }.draft-header h3,.draft-header p { margin: 0; }.draft-header h3 { font-size: 16px; }.draft-header p { margin-top: 2px; color: var(--ink-muted); font-size: 10px; }.ready-mark { padding: 5px 8px; color: #4e6f61; border-radius: 999px; background: var(--green-soft); font-size: 9px; font-weight: 800; }
-.draft-zones { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; margin-top: 14px; }.draft-zone { min-height: 118px; padding: 11px; border: 1px dashed rgba(33,51,45,.18); border-radius: 12px; background: rgba(246,241,231,.5); }.answer-zone { background: rgba(232,221,199,.3); }.zone-title { display: flex; justify-content: space-between; margin-bottom: 8px; }.zone-title span { font-size: 11px; font-weight: 800; }.zone-title small { color: var(--ink-muted); }.zone-items { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 7px; }.assigned-item { min-width: 0; }.item-actions { display: flex; gap: 3px; justify-content: center; margin-top: 4px; }.item-actions button { display: grid; flex: 1; padding: 0 3px; place-items: center; }.zone-empty { display: grid; min-height: 70px; margin: 0; place-items: center; color: var(--ink-muted); font-size: 11px; }.draft-fields { display: grid; grid-template-columns: .55fr .75fr 1.7fr; gap: 10px; margin-top: 13px; }.draft-fields textarea { width: 100%; resize: vertical; }.add-draft { display: inline-flex; gap: 7px; align-items: center; justify-content: center; min-height: 43px; color: var(--green-deep); border: 1px dashed rgba(33,51,45,.26); border-radius: 12px; background: transparent; cursor: pointer; }
+.organizer-grid { display:grid; grid-template-columns:minmax(290px,340px) minmax(0,1fr); gap:20px; align-items:start; margin-top:18px; }
+.unassigned-strip { position:sticky; top:18px; max-height:calc(100vh - 120px); padding:17px; overflow:auto; border:1px dashed rgba(33,51,45,.22); border-radius:16px; background:rgba(232,221,199,.24); box-shadow:0 12px 32px rgba(34,48,43,.06); }
+.strip-heading { display:flex; justify-content:space-between; align-items:center; }.strip-heading div { display:grid; gap:2px; }.strip-heading p { margin:0; font-weight:780; }.strip-heading span { color:var(--ink-muted); font-size:10px; }.strip-heading strong { color:var(--cinnabar); font-family:serif; font-size:20px; }
+.unassigned-gallery { display:grid; gap:12px; margin-top:13px; }.unassigned-item { min-width:0; padding:8px; border:2px solid rgba(33,51,45,.22); border-radius:14px; background:rgba(255,253,247,.72); transition:transform var(--motion-feedback) var(--ease-standard),border-color var(--motion-feedback),background var(--motion-feedback); }.unassigned-item:hover { transform:translateY(-2px); }.unassigned-item.is-question { border-color:rgba(33,51,45,.52); background:rgba(225,235,229,.7); }.unassigned-item.is-answer { border-color:rgba(185,88,63,.58); background:rgba(247,225,216,.68); }.role-chip { display:flex; justify-content:space-between; gap:8px; align-items:center; margin-top:7px; }.role-chip span { padding:5px 8px; color:var(--paper); border-radius:999px; background:var(--green-deep); font-size:9px; font-weight:850; }.is-answer .role-chip span { background:var(--cinnabar); }.role-chip small { color:var(--ink-muted); font-size:9px; }.strip-empty { display:flex; gap:7px; align-items:center; margin:15px 0 2px; color:#537064; font-size:11px; }
+.draft-stack { min-width:0; }.card-stack-heading { display:flex; justify-content:space-between; gap:18px; align-items:end; margin:0 2px 12px; }.card-stack-heading p,.card-stack-heading h2 { margin:0; }.card-stack-heading p { color:var(--cinnabar); font-size:10px; font-weight:800; letter-spacing:.12em; }.card-stack-heading h2 { margin-top:3px; font-size:20px; }.card-stack-heading>span { max-width:240px; color:var(--ink-muted); font-size:10px; text-align:right; }.draft-cards { display:grid; gap:18px; }
+.new-card-drop { display:grid; min-height:110px; margin-top:14px; padding:18px; place-content:center; justify-items:center; gap:5px; color:var(--green-deep); border:2px dashed rgba(33,51,45,.3); border-radius:16px; background:rgba(232,221,199,.17); text-align:center; transition:transform var(--motion-feedback),border-color var(--motion-feedback),background var(--motion-feedback); }.new-card-drop strong { font-size:13px; }.new-card-drop span { color:var(--ink-muted); font-size:10px; }.capture-pointer-dragging .new-card-drop { border-color:var(--cinnabar); background:rgba(185,88,63,.08); transform:scale(1.01); }.card-inspector { margin-top:16px; padding:17px; border:1px solid var(--line); border-radius:16px; background:rgba(255,253,247,.72); }.card-inspector header { display:flex; justify-content:space-between; gap:18px; align-items:end; }.card-inspector header p,.card-inspector header h3 { margin:0; }.card-inspector header p { color:var(--cinnabar); font-size:9px; font-weight:850; letter-spacing:.12em; }.card-inspector header h3 { margin-top:3px; font-size:16px; }.card-inspector header>span { color:var(--ink-muted); font-size:9px; }.inspector-fields { display:grid; grid-template-columns:.6fr .8fr 1.6fr; gap:9px; margin-top:12px; }.inspector-fields label { display:grid; gap:5px; color:var(--ink-muted); font-size:9px; font-weight:760; }.inspector-fields input,.inspector-fields textarea { width:100%; }.inspector-fields textarea { resize:vertical; }.capture-drag-ghost { position:fixed; z-index:200; top:0; left:0; display:grid; width:112px; height:88px; overflow:hidden; pointer-events:none; place-items:center; border:2px solid var(--cinnabar); border-radius:13px; color:var(--paper); background:var(--green-deep); box-shadow:0 18px 45px rgba(20,28,25,.3); will-change:transform; }.capture-drag-ghost img { width:100%; height:100%; object-fit:cover; opacity:.86; }.capture-drag-ghost span { position:absolute; right:6px; bottom:6px; padding:4px 7px; border-radius:999px; background:rgba(33,51,45,.86); font-size:9px; font-weight:800; }
+.organizer-move-move,.organizer-move-enter-active,.organizer-move-leave-active { transition:transform var(--motion-page) var(--ease-standard),opacity var(--motion-standard) var(--ease-standard); }.organizer-move-enter-from,.organizer-move-leave-to { opacity:0; transform:translateY(10px) scale(.985); }.organizer-move-leave-active { position:absolute; }
 .commit-dock { position: sticky; z-index: 12; bottom: 14px; display: flex; justify-content: space-between; gap: 20px; align-items: center; margin-top: 22px; padding: 15px 17px; border: 1px solid rgba(33,51,45,.15); border-radius: 15px; background: rgba(246,241,231,.94); box-shadow: 0 16px 45px rgba(34,48,43,.18); backdrop-filter: blur(16px); }.commit-dock div { display: grid; grid-template-columns: auto auto; gap: 2px 9px; }.commit-dock p,.commit-dock strong,.commit-dock span { margin: 0; }.commit-dock p { color: var(--cinnabar); font-size: 9px; font-weight: 800; letter-spacing: .1em; }.commit-dock strong { font-size: 16px; }.commit-dock span { grid-column: 1/-1; color: var(--ink-muted); font-size: 10px; }
 .completed-panel { display: grid; min-height: 420px; place-content: center; justify-items: center; text-align: center; }.completed-panel h2 { margin: 14px 0 5px; }.completed-panel p { margin: 0; color: var(--ink-muted); }.completed-panel button { margin-top: 18px; padding: 10px 16px; color: var(--paper); border: 0; border-radius: 999px; background: var(--green-deep); }
-@media (max-width: 980px) { .batch-grid,.thumbnail-row { grid-template-columns: repeat(2,minmax(0,1fr)); }.collecting-panel { grid-template-columns: 1fr; }.layout-bar { align-items: stretch; flex-wrap: wrap; }.draft-fields { grid-template-columns: 1fr 1fr; }.note-field { grid-column: 1/-1; }.lan-session-grid { grid-template-columns: 1fr; }.qr-paper { width: min(320px,100%); margin: auto; } }
-@media (max-width: 720px) { .capture-next { padding: 30px 20px 110px; }.inbox-hero,.workbench-header,.new-batch-card { align-items: stretch; flex-direction: column; }.new-batch-card form,.capture-toolbar { grid-template-columns: 1fr; flex-direction: column; }.new-batch-card input { width: 100%; }.batch-grid,.thumbnail-row,.draft-zones,.zone-items,.draft-fields,.network-kind { grid-template-columns: 1fr; }.capture-toolbar { display: grid; }.workbench-stats { align-self: stretch; }.workbench-stats span { flex: 1; }.layout-bar select { min-width: 100%; }.commit-dock { align-items: stretch; flex-direction: column; }.commit-dock button { width: 100%; }.lan-dialog { padding: 28px 20px; }.lan-dialog h2 { font-size: 28px; }.lan-actions>* { width: 100%; } }
-@media (prefers-reduced-motion: reduce) { .batch-card,.external-drop { transition: none; }.lan-progress span { animation: none; } }
+@media (max-width: 980px) { .batch-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }.collecting-panel { grid-template-columns: 1fr; }.layout-bar { align-items: stretch; flex-wrap: wrap; }.lan-session-grid { grid-template-columns: 1fr; }.qr-paper { width: min(320px,100%); margin: auto; } }
+@media (max-width: 900px) { .organizer-grid { grid-template-columns:1fr; }.unassigned-strip { position:static; max-height:none; }.unassigned-gallery { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media (max-width: 720px) { .capture-next { padding: 30px 20px 110px; }.inbox-hero,.workbench-header,.new-batch-card { align-items: stretch; flex-direction: column; }.new-batch-card form,.capture-toolbar { grid-template-columns: 1fr; flex-direction: column; }.new-batch-card input { width: 100%; }.batch-grid { grid-template-columns: 1fr; }.capture-toolbar { display: grid; }.workbench-stats { align-self: stretch; }.workbench-stats span { flex: 1; }.layout-bar select { min-width: 100%; }.commit-dock { align-items: stretch; flex-direction: column; }.commit-dock button { width: 100%; }.lan-dialog { padding: 28px 20px; }.lan-dialog h2 { font-size: 28px; }.lan-actions>* { width: 100%; } }
+@media (max-width: 560px) { .unassigned-gallery { grid-template-columns:1fr; }.card-stack-heading { align-items:start; flex-direction:column; }.card-stack-heading>span { text-align:left; } }
+@media (prefers-reduced-motion: reduce) { .batch-card,.external-drop,.organizer-move-move,.organizer-move-enter-active,.organizer-move-leave-active { transition: none; }.lan-progress span { animation: none; } }
 </style>

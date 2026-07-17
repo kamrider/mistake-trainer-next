@@ -11,7 +11,6 @@ import {
   type CaptureLanAddress,
   type CaptureLanPreflight,
   type CaptureLanSession,
-  type CaptureLanSettingsPage,
   type CaptureLayoutMode,
 } from '../../shared/api/bindings'
 import { normalizeAppResult } from '../../shared/api/normalize-result'
@@ -20,27 +19,21 @@ const batches = ref<CaptureBatchSummary[]>([])
 const detail = ref<CaptureBatchDetail>()
 const busy = ref(false)
 const errorMessage = ref('')
+const saveState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
+const commitMessage = ref('')
 const previews = reactive<Record<string, string>>({})
 const lanAddresses = ref<CaptureLanAddress[]>([])
 const lanPreflight = ref<CaptureLanPreflight>()
 const lanPreflightBusy = ref(false)
-const lanGuidePolling = ref(false)
 const lanSession = ref<CaptureLanSession>()
 const previewOrder: string[] = []
 const desktopAvailable = isTauri()
 let unlisten: UnlistenFn | undefined
 let refreshTimer: ReturnType<typeof setTimeout> | undefined
 let lanPollTimer: ReturnType<typeof setInterval> | undefined
-let lanGuidePollTimer: ReturnType<typeof setTimeout> | undefined
-let lanGuideDeadlineTimer: ReturnType<typeof setTimeout> | undefined
-let lanGuidePollDeadline = 0
-let lanGuidePollGeneration = 0
 let viewMounted = false
 type LanPreflightCommandResult = Awaited<ReturnType<typeof commands.captureLanPreflight>>
-let lanPreflightRequest: {
-  generation: number | undefined
-  promise: Promise<LanPreflightCommandResult>
-} | undefined
+let lanPreflightRequest: Promise<LanPreflightCommandResult> | undefined
 
 function showError(message: string) {
   errorMessage.value = message
@@ -206,41 +199,94 @@ async function applyLayout(mode: CaptureLayoutMode, questions: number, answers: 
   }
 }
 
-async function createDraft() {
-  const current = detail.value
-  if (!desktopAvailable || !current || busy.value) return
-  busy.value = true
-  try {
-    const result = normalizeAppResult(await commands.captureDraftCreate(current.batch.id, current.batch.revision))
-    if (result.ok) detail.value = result.data
-    else showError(result.error.userMessage)
-  }
-  catch {
-    showError('空白草稿没有创建成功。')
-  }
-  finally {
-    busy.value = false
-  }
-}
-
 async function moveItem(target: { itemId: string, targetDraftId: string | null, targetRole: 'question' | 'answer' | null, targetPosition: number }) {
   const current = detail.value
   if (!desktopAvailable || !current || busy.value) return
   busy.value = true
+  saveState.value = 'saving'
   try {
     const result = normalizeAppResult(await commands.captureItemMove({
       batchId: current.batch.id,
       expectedRevision: current.batch.revision,
       ...target,
     }))
-    if (result.ok) detail.value = result.data
+    if (result.ok) {
+      detail.value = result.data
+      saveState.value = 'saved'
+    }
     else {
+      saveState.value = 'error'
       showError(result.error.userMessage)
       if (result.error.code === 'capture_revision_conflict') await loadDetail(current.batch.id)
     }
   }
   catch {
+    saveState.value = 'error'
     showError('图片没有移动成功，请刷新批次后重试。')
+  }
+  finally {
+    busy.value = false
+  }
+}
+
+async function stageItemRole(itemId: string, stagedRole: 'question' | 'answer') {
+  const current = detail.value
+  if (!desktopAvailable || !current || busy.value) return
+  busy.value = true
+  saveState.value = 'saving'
+  errorMessage.value = ''
+  try {
+    const result = normalizeAppResult(await commands.captureItemStageRole({
+      batchId: current.batch.id,
+      expectedRevision: current.batch.revision,
+      itemId,
+      stagedRole,
+    }))
+    if (result.ok) {
+      detail.value = result.data
+      saveState.value = 'saved'
+    }
+    else {
+      saveState.value = 'error'
+      showError(result.error.userMessage)
+      if (result.error.code === 'capture_revision_conflict') await loadDetail(current.batch.id)
+    }
+  }
+  catch {
+    saveState.value = 'error'
+    showError('图片角色没有保存成功，请重试。')
+  }
+  finally {
+    busy.value = false
+  }
+}
+
+async function mergeCard(itemIds: string[], targetDraftId: string | null) {
+  const current = detail.value
+  if (!desktopAvailable || !current || busy.value || !itemIds.length) return
+  busy.value = true
+  saveState.value = 'saving'
+  errorMessage.value = ''
+  try {
+    const result = normalizeAppResult(await commands.captureCardMerge({
+      batchId: current.batch.id,
+      expectedRevision: current.batch.revision,
+      targetDraftId,
+      itemIds,
+    }))
+    if (result.ok) {
+      detail.value = result.data
+      saveState.value = 'saved'
+    }
+    else {
+      saveState.value = 'error'
+      showError(result.error.userMessage)
+      if (result.error.code === 'capture_revision_conflict') await loadDetail(current.batch.id)
+    }
+  }
+  catch {
+    saveState.value = 'error'
+    showError('题卡没有保存成功，图片仍保留在原位置。')
   }
   finally {
     busy.value = false
@@ -251,6 +297,7 @@ async function updateDraft(draft: CaptureDraftSummary, subject: string, tags: st
   const current = detail.value
   if (!desktopAvailable || !current || busy.value) return
   busy.value = true
+  saveState.value = 'saving'
   try {
     const result = normalizeAppResult(await commands.captureDraftUpdate({
       batchId: current.batch.id,
@@ -260,10 +307,17 @@ async function updateDraft(draft: CaptureDraftSummary, subject: string, tags: st
       tags,
       note,
     }))
-    if (result.ok) detail.value = result.data
-    else showError(result.error.userMessage)
+    if (result.ok) {
+      detail.value = result.data
+      saveState.value = 'saved'
+    }
+    else {
+      saveState.value = 'error'
+      showError(result.error.userMessage)
+    }
   }
   catch {
+    saveState.value = 'error'
     showError('草稿文字没有保存成功，请重试。')
   }
   finally {
@@ -296,9 +350,13 @@ async function commitReady() {
   const current = detail.value
   if (!desktopAvailable || !current || busy.value) return
   busy.value = true
+  commitMessage.value = ''
   try {
     const result = normalizeAppResult(await commands.captureCommitReady(current.batch.id, current.batch.revision))
     if (result.ok) {
+      commitMessage.value = result.data.committedCount
+        ? `已将 ${result.data.committedCount} 道题加入题库。`
+        : '没有可加入题库的完整题卡。'
       await loadDetail(current.batch.id)
       await loadBatches()
     }
@@ -330,155 +388,77 @@ async function loadPreview(itemId: string) {
   }
 }
 
-function canApplyLanGuideResult(generation?: number) {
-  return viewMounted
-    && (generation === undefined
-      || (generation === lanGuidePollGeneration && Date.now() < lanGuidePollDeadline))
-}
-
-async function requestLanPreflight(generation?: number): Promise<LanPreflightCommandResult> {
-  while (lanPreflightRequest) {
-    const activeRequest = lanPreflightRequest
-    const result = await activeRequest.promise
-    if (generation === undefined || activeRequest.generation === generation) return result
-    // A restarted guide must not accept the result of the generation it invalidated.
-    if (lanPreflightRequest === activeRequest) lanPreflightRequest = undefined
-  }
-  const promise = commands.captureLanPreflight()
-  const request = { generation, promise }
+async function requestLanPreflight(): Promise<LanPreflightCommandResult> {
+  if (lanPreflightRequest) return lanPreflightRequest
+  const request = commands.captureLanPreflight()
   lanPreflightRequest = request
   try {
-    return await promise
+    return await request
   }
   finally {
     if (lanPreflightRequest === request) lanPreflightRequest = undefined
   }
 }
 
-async function loadLanAddresses(generation?: number) {
-  if (!desktopAvailable) return
+async function loadLanAddresses(): Promise<CaptureLanAddress[]> {
+  if (!desktopAvailable) return []
   try {
     const result = normalizeAppResult(await commands.captureLanAddresses())
-    if (!canApplyLanGuideResult(generation)) return
-    if (result.ok) lanAddresses.value = result.data
+    if (!viewMounted) return []
+    if (result.ok) {
+      lanAddresses.value = result.data
+      return result.data
+    }
   }
   catch {
-    if (canApplyLanGuideResult(generation)) lanAddresses.value = []
+    if (viewMounted) lanAddresses.value = []
   }
+  return []
 }
 
-async function loadLanPreflight(options: {
-  silent?: boolean
-  generation?: number
-} = {}): Promise<CaptureLanPreflight | undefined> {
+async function loadLanPreflight(): Promise<CaptureLanPreflight | undefined> {
   if (!desktopAvailable) return lanPreflight.value
-  const { silent = false, generation } = options
-  if (!silent) lanPreflightBusy.value = true
+  lanPreflightBusy.value = true
   try {
-    const result = normalizeAppResult(await requestLanPreflight(generation))
-    if (!canApplyLanGuideResult(generation)) return undefined
+    const result = normalizeAppResult(await requestLanPreflight())
+    if (!viewMounted) return undefined
     if (result.ok) {
       lanPreflight.value = result.data
       return result.data
     }
-    if (!silent) {
-      lanPreflight.value = undefined
-      showError(result.error.userMessage)
-    }
+    lanPreflight.value = undefined
+    showError(result.error.userMessage)
   }
   catch {
-    if (canApplyLanGuideResult(generation) && !silent) {
+    if (viewMounted) {
       lanPreflight.value = undefined
       showError('没有读取到 Windows 手机连接权限，请重新检测。')
     }
   }
   finally {
-    if (!silent && canApplyLanGuideResult(generation)) lanPreflightBusy.value = false
+    if (viewMounted) lanPreflightBusy.value = false
   }
   return undefined
 }
 
-async function refreshLanSetup(options: {
-  silent?: boolean
-  generation?: number
-} = {}) {
-  const status = await loadLanPreflight(options)
-  if (!status || status.needsNetworkChange || !canApplyLanGuideResult(options.generation)) return status
-  await loadLanAddresses(options.generation)
-  if (canApplyLanGuideResult(options.generation)) stopLanGuidePolling()
-  return status
-}
-
-async function repairLanFirewall() {
-  if (!desktopAvailable || busy.value) return
-  busy.value = true
+async function requestLanPermission(): Promise<CaptureLanPreflight | undefined> {
+  if (!desktopAvailable) return undefined
   lanPreflightBusy.value = true
-  errorMessage.value = ''
   try {
     const result = normalizeAppResult(await commands.captureLanFirewallRepair())
     if (result.ok) {
       lanPreflight.value = result.data
-      await loadLanAddresses()
+      return result.data
     }
-    else {
-      showError(result.error.userMessage)
-    }
+    showError(result.error.userMessage)
   }
   catch {
-    showError('Windows 没有完成手机连接修复，请稍后再试。')
+    showError('Windows 授权没有完成；下次点击“手机扫码”时会再次请求。')
   }
   finally {
-    lanPreflightBusy.value = false
-    busy.value = false
+    if (viewMounted) lanPreflightBusy.value = false
   }
-}
-
-async function openLanNetworkSettings(page: CaptureLanSettingsPage) {
-  if (!desktopAvailable) return
-  try {
-    const result = normalizeAppResult(await commands.captureLanOpenNetworkSettings(page))
-    if (result.ok) startLanGuidePolling()
-    else showError(result.error.userMessage)
-  }
-  catch {
-    showError('没有打开 Windows 网络设置，请从系统设置中进入“网络和 Internet”。')
-  }
-}
-
-function stopLanGuidePolling() {
-  lanGuidePollGeneration += 1
-  if (lanGuidePollTimer) clearTimeout(lanGuidePollTimer)
-  if (lanGuideDeadlineTimer) clearTimeout(lanGuideDeadlineTimer)
-  lanGuidePollTimer = undefined
-  lanGuideDeadlineTimer = undefined
-  lanGuidePollDeadline = 0
-  lanGuidePolling.value = false
-}
-
-function scheduleLanGuidePoll(generation: number) {
-  lanGuidePollTimer = setTimeout(async () => {
-    if (!canApplyLanGuideResult(generation)) {
-      if (generation === lanGuidePollGeneration) stopLanGuidePolling()
-      return
-    }
-    const status = await refreshLanSetup({ silent: true, generation })
-    if (!canApplyLanGuideResult(generation)) {
-      if (generation === lanGuidePollGeneration) stopLanGuidePolling()
-      return
-    }
-    if (!status || status.needsNetworkChange) scheduleLanGuidePoll(generation)
-  }, 2_000)
-}
-
-function startLanGuidePolling() {
-  stopLanGuidePolling()
-  lanGuidePolling.value = true
-  lanGuidePollDeadline = Date.now() + 90_000
-  const generation = lanGuidePollGeneration
-  lanGuideDeadlineTimer = setTimeout(() => {
-    if (generation === lanGuidePollGeneration) stopLanGuidePolling()
-  }, 90_000)
-  scheduleLanGuidePoll(generation)
+  return undefined
 }
 
 async function loadLanStatus() {
@@ -495,15 +475,20 @@ async function loadLanStatus() {
 async function startMobileCapture(selectedAddress: string | null) {
   const requestedBatchId = detail.value?.batch.id
   if (!desktopAvailable || !requestedBatchId || busy.value) return
-  const preflight = await loadLanPreflight()
-  const current = detail.value
-  if (!preflight?.canStart || !current || current.batch.id !== requestedBatchId || busy.value) return
   busy.value = true
   errorMessage.value = ''
   try {
+    let preflight = await loadLanPreflight()
+    if (preflight?.needsFirewallRepair) preflight = await requestLanPermission()
+    const current = detail.value
+    if (!preflight?.canStart || !current || current.batch.id !== requestedBatchId) return
+    const addresses = await loadLanAddresses()
+    const currentAddress = selectedAddress && addresses.some(address => address.address === selectedAddress)
+      ? selectedAddress
+      : addresses[0]?.address ?? null
     const result = normalizeAppResult(await commands.captureLanStart({
       batchId: current.batch.id,
-      selectedAddress,
+      selectedAddress: currentAddress,
     }))
     if (result.ok) lanSession.value = result.data
     else showError(result.error.userMessage)
@@ -567,7 +552,6 @@ onBeforeUnmount(() => {
   window.removeEventListener('paste', handlePaste)
   if (refreshTimer) clearTimeout(refreshTimer)
   if (lanPollTimer) clearInterval(lanPollTimer)
-  stopLanGuidePolling()
   unlisten?.()
 })
 </script>
@@ -578,12 +562,13 @@ onBeforeUnmount(() => {
     :detail="detail"
     :previews="previews"
     :busy="busy"
+    :save-state="saveState"
+    :commit-message="commitMessage"
     :error-message="errorMessage"
     :desktop-available="desktopAvailable"
     :lan-addresses="lanAddresses"
     :lan-preflight="lanPreflight"
     :lan-preflight-busy="lanPreflightBusy"
-    :lan-guide-polling="lanGuidePolling"
     :lan-session="lanSession"
     @create-batch="createBatch"
     @open-batch="loadDetail"
@@ -593,17 +578,16 @@ onBeforeUnmount(() => {
     @import-files="importFiles"
     @finish-collecting="finishCollecting"
     @apply-layout="applyLayout"
-    @create-draft="createDraft"
     @move-item="moveItem"
+    @stage-item-role="stageItemRole"
+    @merge-card="mergeCard"
     @update-draft="updateDraft"
     @remove-item="removeItem"
     @commit-ready="commitReady"
     @preview="loadPreview"
     @mobile-capture="startMobileCapture"
     @refresh-lan-addresses="loadLanAddresses"
-    @refresh-lan-preflight="refreshLanSetup"
-    @repair-lan-firewall="repairLanFirewall"
-    @open-lan-network-settings="openLanNetworkSettings"
+    @refresh-lan-preflight="loadLanPreflight"
     @stop-mobile-capture="stopMobileCapture()"
   />
 </template>

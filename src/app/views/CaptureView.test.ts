@@ -1,13 +1,15 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/vue'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import CaptureView from './CaptureView.vue'
 
 const api = vi.hoisted(() => ({
   captureBatchList: vi.fn(),
+  captureBatchDetail: vi.fn(),
   captureLanAddresses: vi.fn(),
   captureLanPreflight: vi.fn(),
+  captureLanFirewallRepair: vi.fn(),
+  captureLanStart: vi.fn(),
   captureLanStatus: vi.fn(),
-  captureLanOpenNetworkSettings: vi.fn(),
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => true }))
@@ -15,156 +17,114 @@ vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn().mockResolvedValue(vi.f
 vi.mock('../../shared/api/bindings', () => ({ commands: api }))
 vi.mock('../../modules/capture/components/CaptureWorkspace.vue', () => ({
   default: {
-    props: ['lanAddresses', 'lanPreflight', 'lanPreflightBusy', 'lanGuidePolling'],
-    emits: ['refreshLanPreflight', 'openLanNetworkSettings'],
+    props: ['batches', 'detail', 'busy', 'errorMessage', 'lanSession'],
+    emits: ['openBatch', 'mobileCapture'],
     template: `
       <div>
-        <span data-testid="addresses">{{ lanAddresses.map(address => address.address).join(',') }}</span>
-        <span data-testid="preflight">{{ lanPreflight?.needsNetworkChange ? 'public' : 'private' }}</span>
-        <span data-testid="busy">{{ lanPreflightBusy ? 'busy' : 'idle' }}</span>
-        <span data-testid="polling">{{ lanGuidePolling ? 'polling' : 'stopped' }}</span>
-        <button @click="$emit('refreshLanPreflight')">manual refresh</button>
-        <button @click="$emit('openLanNetworkSettings', 'wifi')">open settings</button>
+        <button @click="$emit('openBatch', 'batch-1')">open batch</button>
+        <button :disabled="busy" @click="$emit('mobileCapture', '192.168.1.20')">scan</button>
+        <span data-testid="error">{{ errorMessage }}</span>
+        <span data-testid="session">{{ lanSession?.sessionId ?? 'none' }}</span>
       </div>
     `,
   },
 }))
 
-const publicPreflight = {
+const batch = {
+  id: 'batch-1', subject: '数学', state: 'collecting', itemCount: 0,
+  draftCount: 0, readyCount: 0, updatedAtUtcMs: 1, revision: 1,
+}
+const detail = { batch, items: [], drafts: [], unassignedItemIds: [] }
+const missingRule = {
   supported: true,
   activeProfiles: ['public'],
-  firewallRule: 'ready',
+  firewallRule: 'missing',
   canStart: false,
-  needsNetworkChange: true,
+  needsNetworkChange: false,
+  needsFirewallRepair: true,
+}
+const readyRule = {
+  ...missingRule,
+  firewallRule: 'ready',
+  canStart: true,
   needsFirewallRepair: false,
 }
-
-const privatePreflight = {
-  ...publicPreflight,
-  activeProfiles: ['private'],
-  canStart: true,
-  needsNetworkChange: false,
+const session = {
+  sessionId: 'session-1', batchId: 'batch-1', qrSvgDataUrl: 'data:image/svg+xml,test',
+  selectedAddress: '192.168.1.20', expiresAtUtcMs: 100_000,
+  receivedItemCount: 0, receivedBytes: 0,
 }
 
-function resolved<T>(data: T) {
+function success<T>(data: T) {
   return { ok: true, data }
+}
+
+function failure(userMessage: string) {
+  return {
+    ok: false,
+    error: { code: 'capture_lan_firewall_cancelled', userMessage, retryable: true, diagnosticId: 'diag-1' },
+  }
+}
+
+async function openBatchAndScan() {
+  await fireEvent.click(screen.getByRole('button', { name: 'open batch' }))
+  await waitFor(() => expect(api.captureBatchDetail).toHaveBeenCalledWith('batch-1'))
+  await fireEvent.click(screen.getByRole('button', { name: 'scan' }))
 }
 
 beforeEach(() => {
   vi.clearAllMocks()
-  api.captureBatchList.mockResolvedValue(resolved([]))
-  api.captureLanStatus.mockResolvedValue(resolved(null))
-  api.captureLanOpenNetworkSettings.mockResolvedValue(resolved(true))
+  api.captureBatchList.mockResolvedValue(success([batch]))
+  api.captureBatchDetail.mockResolvedValue(success(detail))
+  api.captureLanAddresses.mockResolvedValue(success([{ label: 'Wi-Fi', address: '192.168.1.20' }]))
+  api.captureLanStatus.mockResolvedValue(success(null))
+  api.captureLanStart.mockResolvedValue(success(session))
 })
 
-afterEach(() => vi.useRealTimers())
-
-describe('CaptureView Windows LAN guide', () => {
-  it('refreshes network addresses after a manual public-to-hotspot transition', async () => {
-    api.captureLanPreflight
-      .mockResolvedValueOnce(resolved(publicPreflight))
-      .mockResolvedValueOnce(resolved(privatePreflight))
-    api.captureLanAddresses
-      .mockResolvedValueOnce(resolved([{ label: 'old Wi-Fi', address: '192.168.1.20' }]))
-      .mockResolvedValueOnce(resolved([{ label: 'phone hotspot', address: '172.20.10.2' }]))
-
+describe('CaptureView one-time Windows LAN permission', () => {
+  it('repairs once on the first scan and immediately starts the QR session', async () => {
+    api.captureLanPreflight.mockResolvedValue(success(missingRule))
+    api.captureLanFirewallRepair.mockResolvedValue(success(readyRule))
     render(CaptureView)
-    expect(await screen.findByText('public')).toBeVisible()
-    expect(screen.getByTestId('addresses')).toHaveTextContent('192.168.1.20')
 
-    await fireEvent.click(screen.getByRole('button', { name: 'manual refresh' }))
+    await openBatchAndScan()
 
-    await waitFor(() => expect(screen.getByTestId('preflight')).toHaveTextContent('private'))
-    await waitFor(() => expect(screen.getByTestId('addresses')).toHaveTextContent('172.20.10.2'))
-    expect(api.captureLanAddresses).toHaveBeenCalledTimes(2)
+    await waitFor(() => expect(api.captureLanFirewallRepair).toHaveBeenCalledOnce())
+    await waitFor(() => expect(api.captureLanStart).toHaveBeenCalledWith({
+        batchId: 'batch-1',
+        selectedAddress: '192.168.1.20',
+      }))
+    expect(await screen.findByTestId('session')).toHaveTextContent('session-1')
   })
 
-  it('keeps polling silent, serial, and unable to apply after unmount', async () => {
-    let resolvePoll!: (value: ReturnType<typeof resolved>) => void
-    const pendingPoll = new Promise<ReturnType<typeof resolved>>(resolve => {
-      resolvePoll = resolve
-    })
-    api.captureLanPreflight
-      .mockResolvedValueOnce(resolved(publicPreflight))
-      .mockReturnValueOnce(pendingPoll)
-    api.captureLanAddresses.mockResolvedValue(resolved([{ label: 'Wi-Fi', address: '192.168.1.20' }]))
+  it('starts directly without authorization when the persistent rule is ready', async () => {
+    api.captureLanPreflight.mockResolvedValue(success(readyRule))
+    render(CaptureView)
 
-    const view = render(CaptureView)
-    expect(await screen.findByText('public')).toBeVisible()
-    vi.useFakeTimers()
-    await fireEvent.click(screen.getByRole('button', { name: 'open settings' }))
-    expect(screen.getByTestId('polling')).toHaveTextContent('polling')
+    await openBatchAndScan()
 
-    await vi.advanceTimersByTimeAsync(2_000)
-    expect(api.captureLanPreflight).toHaveBeenCalledTimes(2)
-    expect(screen.getByTestId('busy')).toHaveTextContent('idle')
-    await vi.advanceTimersByTimeAsync(10_000)
-    expect(api.captureLanPreflight).toHaveBeenCalledTimes(2)
-
-    view.unmount()
-    resolvePoll(resolved(privatePreflight))
-    await Promise.resolve()
-    await Promise.resolve()
-
-    expect(api.captureLanAddresses).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(api.captureLanStart).toHaveBeenCalledOnce())
+    expect(api.captureLanFirewallRepair).not.toHaveBeenCalled()
+    expect(screen.getByTestId('session')).toHaveTextContent('session-1')
   })
 
-  it('expires a pending background check without applying its stale result', async () => {
-    let resolvePoll!: (value: ReturnType<typeof resolved>) => void
-    const pendingPoll = new Promise<ReturnType<typeof resolved>>(resolve => {
-      resolvePoll = resolve
-    })
-    api.captureLanPreflight
-      .mockResolvedValueOnce(resolved(publicPreflight))
-      .mockReturnValueOnce(pendingPoll)
-    api.captureLanAddresses.mockResolvedValue(resolved([{ label: 'Wi-Fi', address: '192.168.1.20' }]))
+  it('does not mark cancellation as success and retries authorization on the next scan', async () => {
+    api.captureLanPreflight.mockResolvedValue(success(missingRule))
+    api.captureLanFirewallRepair
+      .mockResolvedValueOnce(failure('没有更改 Windows 权限；下次扫码会再次请求。'))
+      .mockResolvedValueOnce(success(readyRule))
+    render(CaptureView)
 
-    const view = render(CaptureView)
-    expect(await screen.findByText('public')).toBeVisible()
-    vi.useFakeTimers()
-    await fireEvent.click(screen.getByRole('button', { name: 'open settings' }))
-    await vi.advanceTimersByTimeAsync(90_000)
-    expect(api.captureLanPreflight).toHaveBeenCalledTimes(2)
-    expect(screen.getByTestId('polling')).toHaveTextContent('stopped')
+    await openBatchAndScan()
+    await waitFor(() => expect(api.captureLanFirewallRepair).toHaveBeenCalledTimes(1))
+    expect(api.captureLanStart).not.toHaveBeenCalled()
+    await waitFor(() => expect(screen.getByTestId('error')).toHaveTextContent('下次扫码会再次请求'))
 
-    resolvePoll(resolved(privatePreflight))
-    await vi.advanceTimersByTimeAsync(0)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'scan' })).toBeEnabled())
+    await fireEvent.click(screen.getByRole('button', { name: 'scan' }))
 
-    expect(screen.getByTestId('preflight')).toHaveTextContent('public')
-    expect(api.captureLanAddresses).toHaveBeenCalledTimes(1)
-    view.unmount()
-  })
-
-  it('runs a fresh check when polling is restarted during an older request', async () => {
-    let resolveOldPoll!: (value: ReturnType<typeof resolved>) => void
-    const oldPoll = new Promise<ReturnType<typeof resolved>>(resolve => {
-      resolveOldPoll = resolve
-    })
-    api.captureLanPreflight
-      .mockResolvedValueOnce(resolved(publicPreflight))
-      .mockReturnValueOnce(oldPoll)
-      .mockResolvedValueOnce(resolved(privatePreflight))
-    api.captureLanAddresses
-      .mockResolvedValueOnce(resolved([{ label: 'old Wi-Fi', address: '192.168.1.20' }]))
-      .mockResolvedValueOnce(resolved([{ label: 'new hotspot', address: '172.20.10.2' }]))
-
-    const view = render(CaptureView)
-    expect(await screen.findByText('public')).toBeVisible()
-    vi.useFakeTimers()
-    await fireEvent.click(screen.getByRole('button', { name: 'open settings' }))
-    await vi.advanceTimersByTimeAsync(2_000)
-    expect(api.captureLanPreflight).toHaveBeenCalledTimes(2)
-
-    await fireEvent.click(screen.getByRole('button', { name: 'open settings' }))
-    await vi.advanceTimersByTimeAsync(2_000)
-    expect(api.captureLanPreflight).toHaveBeenCalledTimes(2)
-    resolveOldPoll(resolved(publicPreflight))
-    await vi.advanceTimersByTimeAsync(0)
-
-    await vi.waitFor(() => expect(api.captureLanPreflight).toHaveBeenCalledTimes(3))
-    await vi.waitFor(() => expect(screen.getByTestId('preflight')).toHaveTextContent('private'))
-    expect(screen.getByTestId('addresses')).toHaveTextContent('172.20.10.2')
-    expect(screen.getByTestId('polling')).toHaveTextContent('stopped')
-    view.unmount()
+    await waitFor(() => expect(api.captureLanFirewallRepair).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(api.captureLanStart).toHaveBeenCalledOnce())
+    await waitFor(() => expect(screen.getByTestId('session')).toHaveTextContent('session-1'))
   })
 })

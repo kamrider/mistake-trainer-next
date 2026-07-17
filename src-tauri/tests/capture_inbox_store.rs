@@ -1,15 +1,17 @@
 use std::io::Cursor;
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::{DynamicImage, ImageBuffer, ImageFormat, Rgba};
 use mistake_trainer_next_lib::{
     infrastructure::database::{open_encrypted_database, run_migrations},
     modules::{
         capture_inbox::{
             ApplyCaptureLayout, CaptureBatchState, CaptureInboxError, CaptureLayoutMode,
-            CreateCaptureBatch, IngestCaptureItem, MoveCaptureItem, apply_capture_layout,
-            commit_ready_capture_drafts, create_capture_batch, discard_capture_batch,
-            get_capture_batch_detail, get_capture_item_preview, ingest_capture_item,
-            move_capture_item, update_capture_batch,
+            CreateCaptureBatch, IngestCaptureItem, MergeCaptureCard, MoveCaptureItem,
+            StageCaptureItemRole, apply_capture_layout, commit_ready_capture_drafts,
+            create_capture_batch, discard_capture_batch, get_capture_batch_detail,
+            get_capture_item_preview, ingest_capture_item, merge_capture_card, move_capture_item,
+            stage_capture_item_role, update_capture_batch,
         },
         profiles::{CreateProfile, create_profile},
     },
@@ -61,14 +63,62 @@ impl TestLibrary {
 }
 
 fn png(seed: u8) -> Vec<u8> {
+    png_sized(seed, 4, 3)
+}
+
+fn png_sized(seed: u8, width: u32, height: u32) -> Vec<u8> {
     let image = DynamicImage::ImageRgba8(ImageBuffer::from_pixel(
-        4,
-        3,
+        width,
+        height,
         Rgba([seed, seed.wrapping_add(1), seed.wrapping_add(2), 255]),
     ));
     let mut output = Cursor::new(Vec::new());
     image.write_to(&mut output, ImageFormat::Png).unwrap();
     output.into_inner()
+}
+
+#[test]
+fn capture_preview_uses_readable_960_pixel_edge() {
+    let library = TestLibrary::new();
+    let mut connection = library.open();
+    let batch = create_batch(
+        &library,
+        &mut connection,
+        "math",
+        CaptureBatchState::Collecting,
+    );
+    let item = ingest_capture_item(
+        &mut connection,
+        &library.blob_root(),
+        &ASSET_KEY,
+        IngestCaptureItem {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch.id.clone(),
+            client_upload_id: "large-preview".to_owned(),
+            source_name: "large.png".to_owned(),
+            source_sequence: None,
+            bytes: png_sized(17, 1200, 800),
+            now_utc_ms: 20,
+        },
+    )
+    .expect("ingest large image");
+
+    let preview = get_capture_item_preview(
+        &connection,
+        &library.blob_root(),
+        &ASSET_KEY,
+        ACCOUNT,
+        &library.profile_id,
+        &batch.id,
+        &item.id,
+    )
+    .expect("derive preview");
+    let encoded = preview.data_url.split_once(',').expect("data url").1;
+    let bytes = STANDARD.decode(encoded).expect("base64 preview");
+    let image = image::load_from_memory(&bytes).expect("decode preview");
+
+    assert_eq!((image.width(), image.height()), (960, 640));
 }
 
 fn create_batch(
@@ -134,6 +184,83 @@ fn organize(
     )
     .expect("finish collecting")
     .revision
+}
+
+#[test]
+fn loose_roles_persist_and_card_merge_is_atomic() {
+    let library = TestLibrary::new();
+    let mut connection = library.open();
+    let batch = create_batch(
+        &library,
+        &mut connection,
+        "math",
+        CaptureBatchState::Collecting,
+    );
+    let question = ingest(&library, &mut connection, &batch.id, "question", 31, 20);
+    let answer = ingest(&library, &mut connection, &batch.id, "answer", 32, 21);
+    let revision = organize(&library, &mut connection, &batch.id, batch.revision + 2);
+
+    let staged = stage_capture_item_role(
+        &mut connection,
+        StageCaptureItemRole {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch.id.clone(),
+            expected_revision: revision,
+            item_id: answer.id.clone(),
+            staged_role: "answer".to_owned(),
+            now_utc_ms: 60,
+        },
+    )
+    .expect("persist answer role");
+    let created = merge_capture_card(
+        &mut connection,
+        MergeCaptureCard {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch.id.clone(),
+            expected_revision: staged.batch.revision,
+            target_draft_id: None,
+            item_ids: vec![question.id.clone()],
+            now_utc_ms: 61,
+        },
+    )
+    .expect("create card and attach question in one revision");
+    let draft_id = created.drafts[0].id.clone();
+    let merged = merge_capture_card(
+        &mut connection,
+        MergeCaptureCard {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch.id.clone(),
+            expected_revision: created.batch.revision,
+            target_draft_id: Some(draft_id.clone()),
+            item_ids: vec![answer.id.clone()],
+            now_utc_ms: 62,
+        },
+    )
+    .expect("merge answer into existing card");
+
+    assert_eq!(merged.drafts.len(), 1);
+    assert_eq!(merged.drafts[0].question_item_ids, vec![question.id]);
+    assert_eq!(merged.drafts[0].answer_item_ids, vec![answer.id.clone()]);
+    assert!(merged.drafts[0].ready);
+    assert_eq!(
+        merged
+            .items
+            .iter()
+            .find(|item| item.id == answer.id)
+            .unwrap()
+            .staged_role,
+        "answer"
+    );
+
+    drop(connection);
+    let reopened = library.open();
+    let restored = get_capture_batch_detail(&reopened, ACCOUNT, &library.profile_id, &batch.id)
+        .expect("restore organized batch");
+    assert_eq!(restored.drafts[0].id, draft_id);
+    assert_eq!(restored.items[1].staged_role, "answer");
 }
 
 #[test]

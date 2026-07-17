@@ -2,7 +2,9 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use thiserror::Error;
 
-pub const CAPTURE_FIREWALL_RULE_NAME: &str = "Mistake Trainer Next - Mobile Capture (Private)";
+pub const CAPTURE_FIREWALL_RULE_NAME: &str = "Mistake Trainer Next - Mobile Capture";
+pub const LEGACY_CAPTURE_FIREWALL_RULE_NAME: &str =
+    "Mistake Trainer Next - Mobile Capture (Private)";
 pub const CAPTURE_FIREWALL_HELPER_ARGUMENT: &str = "--configure-capture-firewall";
 
 fn remote_scope_is_exact_local_subnet(value: &str) -> bool {
@@ -15,24 +17,6 @@ pub enum CaptureLanProfile {
     Domain,
     Private,
     Public,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, Type, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum CaptureLanSettingsPage {
-    Overview,
-    Wifi,
-    Ethernet,
-}
-
-impl CaptureLanSettingsPage {
-    fn uri(self) -> &'static str {
-        match self {
-            Self::Overview => "ms-settings:network-status",
-            Self::Wifi => "ms-settings:network-wifi",
-            Self::Ethernet => "ms-settings:network-ethernet",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Type, PartialEq, Eq)]
@@ -65,8 +49,6 @@ pub enum CaptureFirewallError {
     Cancelled,
     #[error("Windows firewall repair failed: {0}")]
     Repair(String),
-    #[error("Windows network settings could not be opened: {0}")]
-    SettingsLaunch(String),
 }
 
 pub fn evaluate_preflight(
@@ -74,23 +56,15 @@ pub fn evaluate_preflight(
     active_profiles: &[CaptureLanProfile],
     firewall_rule: CaptureLanFirewallRuleState,
 ) -> CaptureLanPreflight {
-    // The repair rule is deliberately scoped to NET_FW_PROFILE2_PRIVATE only.
-    // Never claim the listener is reachable on a profile where Windows will
-    // not apply that rule.
-    let has_only_private_profiles = !active_profiles.is_empty()
-        && active_profiles
-            .iter()
-            .all(|profile| matches!(profile, CaptureLanProfile::Private));
-    let needs_network_change = supported && !has_only_private_profiles;
-    let needs_firewall_repair = supported
-        && !matches!(firewall_rule, CaptureLanFirewallRuleState::Ready);
+    let needs_firewall_repair =
+        supported && !matches!(firewall_rule, CaptureLanFirewallRuleState::Ready);
 
     CaptureLanPreflight {
         supported,
         active_profiles: active_profiles.to_vec(),
         firewall_rule,
-        can_start: supported && has_only_private_profiles && !needs_firewall_repair,
-        needs_network_change,
+        can_start: supported && !needs_firewall_repair,
+        needs_network_change: false,
         needs_firewall_repair,
     }
 }
@@ -145,18 +119,6 @@ pub fn repair_capture_firewall() -> Result<CaptureLanPreflight, CaptureFirewallE
 }
 
 #[cfg(windows)]
-pub fn open_network_settings(page: CaptureLanSettingsPage) -> Result<bool, CaptureFirewallError> {
-    windows_impl::open_network_settings(page)
-}
-
-#[cfg(not(windows))]
-pub fn open_network_settings(
-    _page: CaptureLanSettingsPage,
-) -> Result<bool, CaptureFirewallError> {
-    Err(CaptureFirewallError::Unsupported)
-}
-
-#[cfg(windows)]
 fn install_capture_firewall_rule() -> Result<(), CaptureFirewallError> {
     windows_impl::install_rule()
 }
@@ -168,12 +130,7 @@ fn install_capture_firewall_rule() -> Result<(), CaptureFirewallError> {
 
 #[cfg(windows)]
 mod windows_impl {
-    use std::{
-        ffi::OsStr,
-        os::windows::ffi::OsStrExt,
-        path::Path,
-        time::Duration,
-    };
+    use std::{ffi::OsStr, os::windows::ffi::OsStrExt, path::Path, time::Duration};
 
     use windows::{
         Win32::{
@@ -198,8 +155,8 @@ mod windows_impl {
 
     use super::{
         CAPTURE_FIREWALL_RULE_NAME, CaptureFirewallError, CaptureLanFirewallRuleState,
-        CaptureLanPreflight, CaptureLanProfile, CaptureLanSettingsPage, evaluate_preflight,
-        remote_scope_is_exact_local_subnet,
+        CaptureLanPreflight, CaptureLanProfile, LEGACY_CAPTURE_FIREWALL_RULE_NAME,
+        evaluate_preflight, remote_scope_is_exact_local_subnet,
     };
 
     struct ComGuard(bool);
@@ -267,6 +224,12 @@ mod windows_impl {
                 .Rules()
                 .map_err(|error| CaptureFirewallError::Repair(error.to_string()))?
         };
+        let legacy_name = BSTR::from(LEGACY_CAPTURE_FIREWALL_RULE_NAME);
+        match unsafe { rules.Remove(&legacy_name) } {
+            Ok(()) => {}
+            Err(error) if error.code() == HRESULT::from_win32(ERROR_FILE_NOT_FOUND.0) => {}
+            Err(error) => return Err(CaptureFirewallError::Repair(error.to_string())),
+        }
         let name = BSTR::from(CAPTURE_FIREWALL_RULE_NAME);
         let rule: INetFwRule = unsafe {
             CoCreateInstance(&NetFwRule, None, CLSCTX_INPROC_SERVER)
@@ -276,9 +239,11 @@ mod windows_impl {
             .map_err(|error| CaptureFirewallError::Repair(error.to_string()))?;
         let application = BSTR::from(current_exe.to_string_lossy().as_ref());
         let description = BSTR::from(
-            "Allow Mistake Trainer phone capture only from this computer's private local network.",
+            "Allow Mistake Trainer phone capture from this computer's local subnet only.",
         );
         let local_subnet = BSTR::from("LocalSubnet");
+        let all_profiles =
+            NET_FW_PROFILE2_DOMAIN.0 | NET_FW_PROFILE2_PRIVATE.0 | NET_FW_PROFILE2_PUBLIC.0;
         unsafe {
             rule.SetName(&name)
                 .and_then(|_| rule.SetDescription(&description))
@@ -286,7 +251,7 @@ mod windows_impl {
                 .and_then(|_| rule.SetProtocol(NET_FW_IP_PROTOCOL_TCP.0))
                 .and_then(|_| rule.SetDirection(NET_FW_RULE_DIR_IN))
                 .and_then(|_| rule.SetAction(NET_FW_ACTION_ALLOW))
-                .and_then(|_| rule.SetProfiles(NET_FW_PROFILE2_PRIVATE.0))
+                .and_then(|_| rule.SetProfiles(all_profiles))
                 .and_then(|_| rule.SetRemoteAddresses(&local_subnet))
                 .and_then(|_| rule.SetEdgeTraversal(VARIANT_FALSE))
                 .and_then(|_| rule.SetEnabled(VARIANT_TRUE))
@@ -342,20 +307,6 @@ mod windows_impl {
         Ok(())
     }
 
-    pub(super) fn open_network_settings(
-        page: CaptureLanSettingsPage,
-    ) -> Result<bool, CaptureFirewallError> {
-        let settings_uri = wide(OsStr::new(page.uri()));
-        let mut execute_info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
-        execute_info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
-        execute_info.lpVerb = w!("open");
-        execute_info.lpFile = PCWSTR(settings_uri.as_ptr());
-        execute_info.nShow = 1;
-        unsafe { ShellExecuteExW(&mut execute_info) }
-            .map(|_| true)
-            .map_err(|error| CaptureFirewallError::SettingsLaunch(error.to_string()))
-    }
-
     fn inspect_named_rule(
         policy: &INetFwPolicy2,
         current_exe: &Path,
@@ -391,11 +342,13 @@ mod windows_impl {
             .map_err(|error| CaptureFirewallError::Inspection(error.to_string()))?;
         let edge_traversal = unsafe { rule.EdgeTraversal() }
             .map_err(|error| CaptureFirewallError::Inspection(error.to_string()))?;
+        let all_profiles =
+            NET_FW_PROFILE2_DOMAIN.0 | NET_FW_PROFILE2_PRIVATE.0 | NET_FW_PROFILE2_PUBLIC.0;
         let is_ready = enabled == VARIANT_TRUE
             && action == NET_FW_ACTION_ALLOW
             && direction == NET_FW_RULE_DIR_IN
             && protocol == NET_FW_IP_PROTOCOL_TCP.0
-            && profiles == NET_FW_PROFILE2_PRIVATE.0
+            && profiles == all_profiles
             && edge_traversal == VARIANT_FALSE
             && application == expected_path
             && remote_scope_is_exact_local_subnet(&remote_addresses);
@@ -427,52 +380,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn public_only_profile_blocks_qr_even_with_a_rule() {
+    fn public_profile_allows_qr_after_the_persistent_rule_is_ready() {
         let value = evaluate_preflight(
             true,
             &[CaptureLanProfile::Public],
             CaptureLanFirewallRuleState::Ready,
         );
-        assert!(!value.can_start);
-        assert!(value.needs_network_change);
+        assert!(value.can_start);
+        assert!(!value.needs_network_change);
         assert!(!value.needs_firewall_repair);
     }
 
     #[test]
-    fn domain_only_profile_does_not_bypass_private_only_rule() {
+    fn domain_profile_allows_qr_after_the_persistent_rule_is_ready() {
         let value = evaluate_preflight(
             true,
             &[CaptureLanProfile::Domain],
             CaptureLanFirewallRuleState::Ready,
         );
-        assert!(!value.can_start);
-        assert!(value.needs_network_change);
+        assert!(value.can_start);
+        assert!(!value.needs_network_change);
     }
 
     #[test]
-    fn mixed_public_and_private_profiles_are_blocked_conservatively() {
+    fn mixed_profiles_allow_qr_after_the_persistent_rule_is_ready() {
         let value = evaluate_preflight(
             true,
             &[CaptureLanProfile::Private, CaptureLanProfile::Public],
             CaptureLanFirewallRuleState::Ready,
         );
-        assert!(!value.can_start);
-        assert!(value.needs_network_change);
+        assert!(value.can_start);
+        assert!(!value.needs_network_change);
     }
 
     #[test]
     fn remote_scope_rejects_any_broader_address_list() {
         assert!(remote_scope_is_exact_local_subnet(" LocalSubnet "));
-        assert!(!remote_scope_is_exact_local_subnet("LocalSubnet,203.0.113.7"));
+        assert!(!remote_scope_is_exact_local_subnet(
+            "LocalSubnet,203.0.113.7"
+        ));
         assert!(!remote_scope_is_exact_local_subnet("*"));
         assert!(!remote_scope_is_exact_local_subnet("LocalSubnet,"));
-    }
-
-    #[test]
-    fn settings_pages_use_documented_windows_uris() {
-        assert_eq!(CaptureLanSettingsPage::Overview.uri(), "ms-settings:network-status");
-        assert_eq!(CaptureLanSettingsPage::Wifi.uri(), "ms-settings:network-wifi");
-        assert_eq!(CaptureLanSettingsPage::Ethernet.uri(), "ms-settings:network-ethernet");
     }
 
     #[test]
@@ -500,11 +448,7 @@ mod tests {
 
     #[test]
     fn non_windows_status_never_allows_qr() {
-        let value = evaluate_preflight(
-            false,
-            &[],
-            CaptureLanFirewallRuleState::Unavailable,
-        );
+        let value = evaluate_preflight(false, &[], CaptureLanFirewallRuleState::Unavailable);
         assert!(!value.supported);
         assert!(!value.can_start);
     }

@@ -8,25 +8,19 @@ const props = defineProps<{
   dataUrl: string | undefined
   disabled?: boolean
   removable?: boolean
+  variant?: 'compact' | 'gallery' | 'filmstrip'
+  active?: boolean
 }>()
 
 const emit = defineEmits<{
   preview: [itemId: string]
   remove: [itemId: string]
+  activate: [itemId: string]
+  pointerStart: [itemId: string, event: PointerEvent]
 }>()
 
 const root = ref<HTMLElement>()
 let observer: IntersectionObserver | undefined
-
-function startDrag(event: DragEvent) {
-  if (props.disabled || !event.dataTransfer) {
-    event.preventDefault()
-    return
-  }
-  event.dataTransfer.effectAllowed = 'move'
-  event.dataTransfer.setData('application/x-mistake-capture-item', props.item.id)
-  event.dataTransfer.setData('text/plain', props.item.id)
-}
 
 onMounted(() => {
   if (!root.value) return
@@ -45,17 +39,19 @@ onBeforeUnmount(() => observer?.disconnect())
   <article
     ref="root"
     class="capture-thumbnail"
-    :class="{ 'is-disabled': disabled }"
-    :draggable="!disabled"
+    :class="[`is-${variant ?? 'compact'}`, { 'is-disabled': disabled, 'is-active': active }]"
     :aria-label="item.sourceName"
     tabindex="0"
-    @dragstart="startDrag"
+    @pointerdown="!disabled && emit('pointerStart', item.id, $event)"
+    @click="emit('activate', item.id)"
+    @keydown.enter.prevent="emit('activate', item.id)"
+    @keydown.space.prevent="emit('activate', item.id)"
   >
     <div class="thumb-media">
       <img
         v-if="dataUrl"
         :src="dataUrl"
-        :alt="item.sourceName"
+        :alt="variant === 'filmstrip' ? '' : item.sourceName"
         draggable="false"
       >
       <ImageIcon
@@ -91,7 +87,7 @@ onBeforeUnmount(() => observer?.disconnect())
 </template>
 
 <style scoped>
-.capture-thumbnail { position: relative; display: grid; grid-template-columns: 74px minmax(0,1fr) auto; gap: 10px; align-items: center; min-width: 0; padding: 7px; border: 1px solid rgba(33,51,45,.12); border-radius: 12px; background: rgba(255,253,247,.82); cursor: grab; transition: transform var(--motion-feedback) var(--ease-standard), border-color var(--motion-feedback), box-shadow var(--motion-feedback); }
+.capture-thumbnail { position: relative; display: grid; grid-template-columns: 74px minmax(0,1fr) auto; gap: 10px; align-items: center; min-width: 0; padding: 7px; border: 1px solid rgba(33,51,45,.12); border-radius: 12px; background: rgba(255,253,247,.82); cursor: grab; user-select:none; -webkit-user-drag:none; transition: transform var(--motion-feedback) var(--ease-standard), border-color var(--motion-feedback), box-shadow var(--motion-feedback); }
 .capture-thumbnail:hover, .capture-thumbnail:focus-visible { border-color: rgba(33,51,45,.3); box-shadow: 0 8px 22px rgba(34,48,43,.08); outline: none; transform: translateY(-1px); }
 .capture-thumbnail:active { cursor: grabbing; }
 .capture-thumbnail.is-disabled { cursor: default; opacity: .72; }
@@ -103,5 +99,7 @@ onBeforeUnmount(() => observer?.disconnect())
 .thumb-copy small { color: var(--ink-muted); font-size: 10px; }
 .remove-button { display: grid; width: 29px; height: 29px; place-items: center; color: var(--ink-muted); border: 0; border-radius: 50%; background: transparent; cursor: pointer; }
 .remove-button:hover { color: var(--cinnabar); background: rgba(185,88,63,.1); }
+.capture-thumbnail.is-gallery { display:block; padding:8px; }.is-gallery .thumb-media { height:180px; }.is-gallery .thumb-media img { object-fit:contain; }.is-gallery .thumb-copy { margin-top:8px; }.is-gallery .remove-button { position:absolute; top:12px; right:12px; color:var(--paper); background:rgba(33,51,45,.72); }
+.capture-thumbnail.is-filmstrip { flex:0 0 88px; display:block; padding:4px; border-radius:10px; }.is-filmstrip .thumb-media { height:66px; }.is-filmstrip .thumb-media img { object-fit:cover; }.is-filmstrip .thumb-copy { display:none; }.is-filmstrip .drag-mark { display:none; }.capture-thumbnail.is-filmstrip.is-active { border-color:var(--cinnabar); box-shadow:0 0 0 2px rgba(185,88,63,.18); transform:translateY(-1px); }
 @media (prefers-reduced-motion: reduce) { .capture-thumbnail { transition: none; } }
 </style>
