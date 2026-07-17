@@ -21,16 +21,16 @@ const items: CaptureItemSummary[] = [
   { id: 'a-1', sourceName: '完整答案.png', sourceSequence: 2, mediaType: 'image/png', byteLength: 1, width: 1200, height: 900, stagedRole: 'answer', draftId: draft.id, role: 'answer', position: 0 },
 ]
 
-function renderCard() {
+function renderCard(card = draft, cardItems = items) {
   vi.stubGlobal('IntersectionObserver', class {
     observe() {}
     disconnect() {}
   })
   return render(CaptureDraftCard, {
     props: {
-      draft,
+      draft: card,
       draftIndex: 0,
-      items,
+      items: cardItems,
       previews: {
         'q-1': 'data:image/png;base64,cTE=',
         'q-2': 'data:image/png;base64,cTI=',
@@ -62,5 +62,28 @@ describe('CaptureDraftCard', () => {
 
     await user.click(screen.getByRole('button', { name: '把当前题图移回待配对' }))
     expect(view.emitted('returnItem')).toEqual([['q-1']])
+  })
+
+  it('explains why a card is incomplete and corrects an assigned image in place', async () => {
+    const user = userEvent.setup()
+    const incomplete: CaptureDraftSummary = {
+      ...draft,
+      subject: '',
+      answerItemIds: [],
+      ready: false,
+    }
+    const view = renderCard(incomplete, items.filter(item => item.id !== 'a-1'))
+
+    expect(screen.getByText('缺答案 · 缺科目')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '把当前题图转为答案' }))
+    expect(view.emitted('changeItemRole')).toEqual([['q-1', 'answer', 0]])
+  })
+
+  it('offers a reversible whole-card action', async () => {
+    const user = userEvent.setup()
+    const view = renderCard()
+
+    await user.click(screen.getByRole('button', { name: '撤销这张卡' }))
+    expect(view.emitted('deleteDraft')).toEqual([['draft-1']])
   })
 })

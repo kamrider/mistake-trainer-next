@@ -181,6 +181,7 @@ pub struct MergeCaptureCard {
     pub expected_revision: u32,
     pub target_draft_id: Option<String>,
     pub item_ids: Vec<String>,
+    pub new_draft_subject: Option<String>,
     pub now_utc_ms: i64,
 }
 
@@ -733,18 +734,58 @@ fn insert_draft(
     position: usize,
     now_utc_ms: i64,
 ) -> Result<String, rusqlite::Error> {
+    insert_draft_with_subject(transaction, batch_id, position, None, now_utc_ms)
+}
+
+fn insert_draft_with_subject(
+    transaction: &Transaction<'_>,
+    batch_id: &str,
+    position: usize,
+    subject_override: Option<&str>,
+    now_utc_ms: i64,
+) -> Result<String, rusqlite::Error> {
     let id = Uuid::now_v7().to_string();
     transaction.execute(
-        "INSERT INTO capture_drafts(id, batch_id, position, created_at_utc_ms, updated_at_utc_ms)
-         VALUES(?1, ?2, ?3, ?4, ?4)",
+        "INSERT INTO capture_drafts(
+             id, batch_id, position, subject_override, created_at_utc_ms, updated_at_utc_ms
+         ) VALUES(?1, ?2, ?3, ?4, ?5, ?5)",
         params![
             id,
             batch_id,
             i64::try_from(position).unwrap_or(i64::MAX),
-            now_utc_ms
+            subject_override,
+            now_utc_ms,
         ],
     )?;
     Ok(id)
+}
+
+fn repack_draft_positions(
+    transaction: &Transaction<'_>,
+    batch_id: &str,
+) -> Result<(), rusqlite::Error> {
+    transaction.execute(
+        "UPDATE capture_drafts SET position = position + 1000 WHERE batch_id = ?1",
+        [batch_id],
+    )?;
+    let draft_ids = {
+        let mut statement = transaction
+            .prepare("SELECT id FROM capture_drafts WHERE batch_id = ?1 ORDER BY position, id")?;
+        statement
+            .query_map([batch_id], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    for (position, draft_id) in draft_ids.iter().enumerate() {
+        transaction.execute(
+            "UPDATE capture_drafts SET position = ?1 WHERE id = ?2 AND batch_id = ?3",
+            params![
+                i64::try_from(position).unwrap_or(i64::MAX),
+                draft_id,
+                batch_id,
+            ],
+        )?;
+    }
+    Ok(())
 }
 
 fn insert_link(
@@ -900,6 +941,12 @@ pub fn merge_capture_card(
         &input.batch_id,
     )?;
     ensure_organizing_revision(&batch, input.expected_revision)?;
+    let new_draft_subject = normalize_subject(input.new_draft_subject.as_deref().unwrap_or(""))?;
+    let subject_override = if new_draft_subject.is_empty() || new_draft_subject == batch.subject {
+        None
+    } else {
+        Some(new_draft_subject.as_str())
+    };
     let transaction = connection.transaction()?;
     let target_draft_id = if let Some(target_draft_id) = input.target_draft_id {
         let target_exists: bool = transaction.query_row(
@@ -917,10 +964,11 @@ pub fn merge_capture_card(
             [input.batch_id.as_str()],
             |row| row.get(0),
         )?;
-        insert_draft(
+        insert_draft_with_subject(
             &transaction,
             &input.batch_id,
             usize::try_from(next_position).unwrap_or(usize::MAX),
+            subject_override,
             input.now_utc_ms,
         )?
     };
@@ -967,6 +1015,31 @@ pub fn merge_capture_card(
         &input.profile_id,
         &input.batch_id,
     )
+}
+
+pub fn delete_capture_draft(
+    connection: &mut Connection,
+    account_id: &str,
+    profile_id: &str,
+    batch_id: &str,
+    draft_id: &str,
+    expected_revision: u32,
+    now_utc_ms: i64,
+) -> Result<CaptureBatchDetail, CaptureInboxError> {
+    let batch = query_batch(connection, account_id, profile_id, batch_id)?;
+    ensure_organizing_revision(&batch, expected_revision)?;
+    let transaction = connection.transaction()?;
+    let changed = transaction.execute(
+        "DELETE FROM capture_drafts WHERE id = ?1 AND batch_id = ?2",
+        params![draft_id, batch_id],
+    )?;
+    if changed != 1 {
+        return Err(CaptureInboxError::DraftNotFound);
+    }
+    repack_draft_positions(&transaction, batch_id)?;
+    touch_batch(&transaction, batch_id, now_utc_ms)?;
+    transaction.commit()?;
+    get_capture_batch_detail(connection, account_id, profile_id, batch_id)
 }
 
 pub fn update_capture_draft(

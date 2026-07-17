@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/vue'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import type { CaptureBatchDetail, CaptureBatchSummary, CaptureLanPreflight } from '../../../shared/api/bindings'
@@ -122,6 +122,47 @@ describe('CaptureWorkspace Next', () => {
     await user.click(within(loose).getByLabelText('待配对超长文件名图片.png'))
     expect(view.emitted('stageItemRole')).toEqual([['loose', 'answer']])
     expect(screen.queryByText(/双击/)).not.toBeInTheDocument()
+  })
+
+  it('corrects an assigned image role and reverses a whole card', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const view = renderWorkspace(organizingDetail())
+    const secondCard = screen.getByLabelText('第 2 道错题卡')
+
+    expect(within(secondCard).getByText('缺答案')).toBeVisible()
+    await user.click(within(secondCard).getByRole('button', { name: '把当前题图转为答案' }))
+    expect(view.emitted('moveItem')).toContainEqual([{
+      itemId: 'q2',
+      targetDraftId: 'd2',
+      targetRole: 'answer',
+      targetPosition: 0,
+    }])
+
+    await user.click(within(secondCard).getByRole('button', { name: '撤销这张卡' }))
+    expect(view.emitted('deleteDraft')).toEqual([['d2']])
+  })
+
+  it('inherits the selected card subject when a loose image creates a new card', async () => {
+    const detail = organizingDetail()
+    detail.drafts[1] = { ...detail.drafts[1]!, subject: '' }
+    const user = userEvent.setup()
+    const view = renderWorkspace(detail)
+    const secondCard = screen.getByLabelText('第 2 道错题卡')
+    await user.click(within(secondCard).getByRole('button', { name: /未填写科目/ }))
+    const loose = screen.getByLabelText('待配对图片：待配对超长文件名图片.png')
+    const source = within(loose).getByLabelText('待配对超长文件名图片.png')
+    const target = screen.getByText(/自动生成一道新题/).closest<HTMLElement>('[data-capture-drop]')!
+    Object.defineProperty(document, 'elementFromPoint', {
+      configurable: true,
+      value: vi.fn(() => target),
+    })
+
+    await fireEvent.pointerDown(source, { pointerId: 17, button: 0, clientX: 10, clientY: 10 })
+    await fireEvent.pointerMove(window, { pointerId: 17, clientX: 20, clientY: 10 })
+    await fireEvent.pointerUp(window, { pointerId: 17, clientX: 20, clientY: 10 })
+
+    expect(view.emitted('mergeCard')).toEqual([[['loose'], null, '数学']])
   })
 
   it('enables atomic commit only for ready cards', async () => {

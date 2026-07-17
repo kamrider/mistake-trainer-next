@@ -10,6 +10,9 @@ const api = vi.hoisted(() => ({
   captureLanFirewallRepair: vi.fn(),
   captureLanStart: vi.fn(),
   captureLanStatus: vi.fn(),
+  captureCardMerge: vi.fn(),
+  captureDraftDelete: vi.fn(),
+  captureItemMove: vi.fn(),
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => true }))
@@ -18,11 +21,14 @@ vi.mock('../../shared/api/bindings', () => ({ commands: api }))
 vi.mock('../../modules/capture/components/CaptureWorkspace.vue', () => ({
   default: {
     props: ['batches', 'detail', 'busy', 'errorMessage', 'lanSession'],
-    emits: ['openBatch', 'mobileCapture'],
+    emits: ['openBatch', 'mobileCapture', 'mergeCard', 'deleteDraft', 'moveItem'],
     template: `
       <div>
         <button @click="$emit('openBatch', 'batch-1')">open batch</button>
         <button :disabled="busy" @click="$emit('mobileCapture', '192.168.1.20')">scan</button>
+        <button :disabled="busy" @click="$emit('mergeCard', ['item-1'], null, '数学')">merge card</button>
+        <button :disabled="busy" @click="$emit('deleteDraft', 'draft-1')">delete card</button>
+        <button :disabled="busy" @click="$emit('moveItem', { itemId: 'item-1', targetDraftId: 'draft-1', targetRole: 'answer', targetPosition: 0 })">change role</button>
         <span data-testid="error">{{ errorMessage }}</span>
         <span data-testid="session">{{ lanSession?.sessionId ?? 'none' }}</span>
       </div>
@@ -79,9 +85,43 @@ beforeEach(() => {
   api.captureLanAddresses.mockResolvedValue(success([{ label: 'Wi-Fi', address: '192.168.1.20' }]))
   api.captureLanStatus.mockResolvedValue(success(null))
   api.captureLanStart.mockResolvedValue(success(session))
+  api.captureCardMerge.mockResolvedValue(success(detail))
+  api.captureDraftDelete.mockResolvedValue(success(detail))
+  api.captureItemMove.mockResolvedValue(success(detail))
 })
 
 describe('CaptureView one-time Windows LAN permission', () => {
+  it('persists card creation, in-card role changes, and reversible deletion', async () => {
+    api.captureLanPreflight.mockResolvedValue(success(readyRule))
+    render(CaptureView)
+    await fireEvent.click(screen.getByRole('button', { name: 'open batch' }))
+    await waitFor(() => expect(api.captureBatchDetail).toHaveBeenCalledWith('batch-1'))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'merge card' }))
+    await waitFor(() => expect(api.captureCardMerge).toHaveBeenCalledWith({
+      batchId: 'batch-1',
+      expectedRevision: 1,
+      targetDraftId: null,
+      itemIds: ['item-1'],
+      newDraftSubject: '数学',
+    }))
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'change role' })).toBeEnabled())
+    await fireEvent.click(screen.getByRole('button', { name: 'change role' }))
+    await waitFor(() => expect(api.captureItemMove).toHaveBeenCalledWith({
+      batchId: 'batch-1',
+      expectedRevision: 1,
+      itemId: 'item-1',
+      targetDraftId: 'draft-1',
+      targetRole: 'answer',
+      targetPosition: 0,
+    }))
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'delete card' })).toBeEnabled())
+    await fireEvent.click(screen.getByRole('button', { name: 'delete card' }))
+    await waitFor(() => expect(api.captureDraftDelete).toHaveBeenCalledWith('batch-1', 1, 'draft-1'))
+  })
+
   it('repairs once on the first scan and immediately starts the QR session', async () => {
     api.captureLanPreflight.mockResolvedValue(success(missingRule))
     api.captureLanFirewallRepair.mockResolvedValue(success(readyRule))

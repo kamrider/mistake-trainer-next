@@ -9,9 +9,9 @@ use mistake_trainer_next_lib::{
             ApplyCaptureLayout, CaptureBatchState, CaptureInboxError, CaptureLayoutMode,
             CreateCaptureBatch, IngestCaptureItem, MergeCaptureCard, MoveCaptureItem,
             StageCaptureItemRole, apply_capture_layout, commit_ready_capture_drafts,
-            create_capture_batch, discard_capture_batch, get_capture_batch_detail,
-            get_capture_item_preview, ingest_capture_item, merge_capture_card, move_capture_item,
-            stage_capture_item_role, update_capture_batch,
+            create_capture_batch, delete_capture_draft, discard_capture_batch,
+            get_capture_batch_detail, get_capture_item_preview, ingest_capture_item,
+            merge_capture_card, move_capture_item, stage_capture_item_role, update_capture_batch,
         },
         profiles::{CreateProfile, create_profile},
     },
@@ -222,6 +222,7 @@ fn loose_roles_persist_and_card_merge_is_atomic() {
             expected_revision: staged.batch.revision,
             target_draft_id: None,
             item_ids: vec![question.id.clone()],
+            new_draft_subject: None,
             now_utc_ms: 61,
         },
     )
@@ -236,6 +237,7 @@ fn loose_roles_persist_and_card_merge_is_atomic() {
             expected_revision: created.batch.revision,
             target_draft_id: Some(draft_id.clone()),
             item_ids: vec![answer.id.clone()],
+            new_draft_subject: None,
             now_utc_ms: 62,
         },
     )
@@ -261,6 +263,177 @@ fn loose_roles_persist_and_card_merge_is_atomic() {
         .expect("restore organized batch");
     assert_eq!(restored.drafts[0].id, draft_id);
     assert_eq!(restored.items[1].staged_role, "answer");
+}
+
+#[test]
+fn new_card_inherits_subject_and_deleting_it_returns_images_without_deleting_assets() {
+    let library = TestLibrary::new();
+    let mut connection = library.open();
+    let batch = create_batch(&library, &mut connection, "", CaptureBatchState::Collecting);
+    let question = ingest(
+        &library,
+        &mut connection,
+        &batch.id,
+        "undo-question",
+        33,
+        20,
+    );
+    let answer = ingest(&library, &mut connection, &batch.id, "undo-answer", 34, 21);
+    let organized = update_capture_batch(
+        &mut connection,
+        ACCOUNT,
+        &library.profile_id,
+        &batch.id,
+        batch.revision + 2,
+        "",
+        true,
+        50,
+    )
+    .expect("finish collecting");
+    let staged = stage_capture_item_role(
+        &mut connection,
+        StageCaptureItemRole {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch.id.clone(),
+            expected_revision: organized.revision,
+            item_id: answer.id.clone(),
+            staged_role: "answer".to_owned(),
+            now_utc_ms: 60,
+        },
+    )
+    .expect("stage answer");
+    let created = merge_capture_card(
+        &mut connection,
+        MergeCaptureCard {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch.id.clone(),
+            expected_revision: staged.batch.revision,
+            target_draft_id: None,
+            item_ids: vec![question.id.clone()],
+            new_draft_subject: Some("physics".to_owned()),
+            now_utc_ms: 61,
+        },
+    )
+    .expect("create card with inherited subject");
+    let draft_id = created.drafts[0].id.clone();
+    let ready = merge_capture_card(
+        &mut connection,
+        MergeCaptureCard {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch.id.clone(),
+            expected_revision: created.batch.revision,
+            target_draft_id: Some(draft_id.clone()),
+            item_ids: vec![answer.id.clone()],
+            new_draft_subject: None,
+            now_utc_ms: 62,
+        },
+    )
+    .expect("attach answer");
+
+    assert_eq!(ready.drafts[0].subject, "physics");
+    assert!(ready.drafts[0].ready);
+
+    let undone = delete_capture_draft(
+        &mut connection,
+        ACCOUNT,
+        &library.profile_id,
+        &batch.id,
+        &draft_id,
+        ready.batch.revision,
+        63,
+    )
+    .expect("undo card");
+    assert!(undone.drafts.is_empty());
+    assert_eq!(undone.unassigned_item_ids.len(), 2);
+    assert!(undone.unassigned_item_ids.contains(&question.id));
+    assert!(undone.unassigned_item_ids.contains(&answer.id));
+
+    let counts: (i64, i64, i64) = connection
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM capture_items WHERE batch_id = ?1),
+                    (SELECT COUNT(*) FROM capture_draft_items),
+                    (SELECT COUNT(*) FROM assets WHERE account_id = ?2)",
+            rusqlite::params![batch.id, ACCOUNT],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("count retained data");
+    assert_eq!(counts, (2, 0, 2));
+}
+
+#[test]
+fn deleting_a_card_compacts_remaining_positions_and_keeps_all_images() {
+    let library = TestLibrary::new();
+    let mut connection = library.open();
+    let batch = create_batch(
+        &library,
+        &mut connection,
+        "math",
+        CaptureBatchState::Collecting,
+    );
+    for index in 0..4 {
+        ingest(
+            &library,
+            &mut connection,
+            &batch.id,
+            &format!("delete-position-{index}"),
+            40 + index,
+            20 + i64::from(index),
+        );
+    }
+    let collected =
+        get_capture_batch_detail(&connection, ACCOUNT, &library.profile_id, &batch.id).unwrap();
+    let revision = organize(
+        &library,
+        &mut connection,
+        &batch.id,
+        collected.batch.revision,
+    );
+    let arranged = apply_capture_layout(
+        &mut connection,
+        ApplyCaptureLayout {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch.id.clone(),
+            expected_revision: revision,
+            mode: CaptureLayoutMode::Alternating,
+            question_images_per_draft: 1,
+            answer_images_per_draft: 1,
+            split_index: None,
+            now_utc_ms: 60,
+        },
+    )
+    .expect("arrange two cards");
+    let first_draft_id = arranged.drafts[0].id.clone();
+    let second_draft_id = arranged.drafts[1].id.clone();
+    let deleted_item_ids = [
+        arranged.drafts[0].question_item_ids[0].clone(),
+        arranged.drafts[0].answer_item_ids[0].clone(),
+    ];
+
+    let undone = delete_capture_draft(
+        &mut connection,
+        ACCOUNT,
+        &library.profile_id,
+        &batch.id,
+        &first_draft_id,
+        arranged.batch.revision,
+        61,
+    )
+    .expect("delete first card");
+
+    assert_eq!(undone.drafts.len(), 1);
+    assert_eq!(undone.drafts[0].id, second_draft_id);
+    assert_eq!(undone.drafts[0].position, 0);
+    assert_eq!(undone.items.len(), 4);
+    assert_eq!(undone.unassigned_item_ids.len(), 2);
+    assert!(
+        deleted_item_ids
+            .iter()
+            .all(|item_id| undone.unassigned_item_ids.contains(item_id))
+    );
 }
 
 #[test]

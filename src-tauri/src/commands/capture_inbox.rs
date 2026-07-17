@@ -13,10 +13,11 @@ use crate::{
             CaptureCommitReport, CaptureInboxError, CaptureItemPreview, CaptureItemSummary,
             CaptureLayoutMode, CreateCaptureBatch, IngestCaptureItem, MergeCaptureCard,
             MoveCaptureItem, StageCaptureItemRole, UpdateCaptureDraft, apply_capture_layout,
-            commit_ready_capture_drafts, create_capture_batch, discard_capture_batch,
-            get_capture_batch_detail, get_capture_item_preview, ingest_capture_item,
-            list_capture_batches, merge_capture_card, move_capture_item, remove_capture_item,
-            stage_capture_item_role, update_capture_batch, update_capture_draft,
+            commit_ready_capture_drafts, create_capture_batch, delete_capture_draft,
+            discard_capture_batch, get_capture_batch_detail, get_capture_item_preview,
+            ingest_capture_item, list_capture_batches, merge_capture_card, move_capture_item,
+            remove_capture_item, stage_capture_item_role, update_capture_batch,
+            update_capture_draft,
         },
     },
 };
@@ -84,6 +85,7 @@ pub struct CaptureCardMergeInput {
     pub expected_revision: u32,
     pub target_draft_id: Option<String>,
     pub item_ids: Vec<String>,
+    pub new_draft_subject: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Type)]
@@ -518,8 +520,35 @@ pub fn capture_card_merge(
             expected_revision: input.expected_revision,
             target_draft_id: input.target_draft_id,
             item_ids: input.item_ids,
+            new_draft_subject: input.new_draft_subject,
             now_utc_ms: current_utc_millis(),
         },
+    ));
+    emit_batch_changed(&app, &batch_id);
+    result
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn capture_draft_delete(
+    app: AppHandle,
+    state: State<'_, LibraryRuntime>,
+    batch_id: String,
+    expected_revision: u32,
+    draft_id: String,
+) -> AppResult<CaptureBatchDetail> {
+    let mut connection = match state.connection.lock() {
+        Ok(connection) => connection,
+        Err(_) => return capture_error("library_lock_poisoned", None),
+    };
+    let result = result_or_error(delete_capture_draft(
+        &mut connection,
+        state.account_id(),
+        state.profile_id(),
+        &batch_id,
+        &draft_id,
+        expected_revision,
+        current_utc_millis(),
     ));
     emit_batch_changed(&app, &batch_id);
     result

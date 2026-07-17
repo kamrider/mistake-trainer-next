@@ -33,17 +33,23 @@ on an untrusted shared network.
    and confirm it merges using the loose image's persisted role.
 5. Drag an image from a card back to **素材牌库** and confirm it becomes unassigned rather
    than deleted. Restart the app and confirm its role color, grouping, and order persist.
-6. Open a card containing two question images and two answer images. Confirm the initial
+6. Create a card with two images initially marked **题面**. Confirm the card explicitly says
+   **缺答案**, use **转为答案** on one assigned image, and confirm the card becomes ready when
+   it has a subject. Repeat with a blank subject and confirm it explicitly says **缺科目**.
+7. Click **撤销这张卡**, approve the confirmation, and confirm every linked image returns
+   to **素材牌库** while no original or encrypted asset is deleted. Create a new card again
+   and confirm it inherits the currently selected card's subject.
+8. Open a card containing two question images and two answer images. Confirm the initial
    face is the question, clicking the card or the labelled flip action performs a 240 ms
    `rotateY(180deg)` flip, and the filmstrip can select every image.
-7. Click **大图** and confirm mathematical text is readable. A derived preview from a
+9. Click **大图** and confirm mathematical text is readable. A derived preview from a
    source over 960 px must have a 960 px longest edge; encrypted originals remain intact.
-8. Enable Windows **Reduce motion** and confirm flip/list motion is removed without hiding
+10. Enable Windows **Reduce motion** and confirm flip/list motion is removed without hiding
    content or controls.
-9. Confirm every grouping or metadata mutation shows **保存中** then **已自动保存**. Give
+11. Confirm every grouping or metadata mutation shows **保存中** then **已自动保存**. Give
    ready cards a subject and click **加入题库**. Incomplete cards remain in the inbox and an
    injected persistence failure creates zero formal problems.
-10. Scroll a reference batch containing 150 images. Lazy preview loading and the 40-item
+12. Scroll a reference batch containing 150 images. Lazy preview loading and the 40-item
    memory cache must prevent obvious stalls or unbounded memory growth.
 
 ## Phone session

@@ -36,6 +36,7 @@ export const commands = {
 	captureItemMove: (input: CaptureItemMoveInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_item_move", { input }),
 	captureItemStageRole: (input: CaptureItemStageRoleInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_item_stage_role", { input }),
 	captureCardMerge: (input: CaptureCardMergeInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_card_merge", { input }),
+	captureDraftDelete: (batchId: string, expectedRevision: number, draftId: string) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_draft_delete", { batchId, expectedRevision, draftId }),
 	captureDraftUpdate: (input: CaptureDraftUpdateInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_draft_update", { input }),
 	captureCommitReady: (batchId: string, expectedRevision: number) => __TAURI_INVOKE<AppResult<CaptureCommitReport>>("capture_commit_ready", { batchId, expectedRevision }),
 	captureLanAddresses: () => __TAURI_INVOKE<AppResult<CaptureLanAddress[]>>("capture_lan_addresses"),
@@ -101,6 +102,7 @@ export type CaptureCardMergeInput = {
 	expectedRevision: number,
 	targetDraftId: string | null,
 	itemIds: string[],
+	newDraftSubject: string | null,
 };
 
 export type CaptureCommitReport = {

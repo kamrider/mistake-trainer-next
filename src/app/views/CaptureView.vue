@@ -261,7 +261,7 @@ async function stageItemRole(itemId: string, stagedRole: 'question' | 'answer') 
   }
 }
 
-async function mergeCard(itemIds: string[], targetDraftId: string | null) {
+async function mergeCard(itemIds: string[], targetDraftId: string | null, newDraftSubject: string | null) {
   const current = detail.value
   if (!desktopAvailable || !current || busy.value || !itemIds.length) return
   busy.value = true
@@ -273,6 +273,7 @@ async function mergeCard(itemIds: string[], targetDraftId: string | null) {
       expectedRevision: current.batch.revision,
       targetDraftId,
       itemIds,
+      newDraftSubject,
     }))
     if (result.ok) {
       detail.value = result.data
@@ -287,6 +288,37 @@ async function mergeCard(itemIds: string[], targetDraftId: string | null) {
   catch {
     saveState.value = 'error'
     showError('题卡没有保存成功，图片仍保留在原位置。')
+  }
+  finally {
+    busy.value = false
+  }
+}
+
+async function deleteDraft(draftId: string) {
+  const current = detail.value
+  if (!desktopAvailable || !current || busy.value) return
+  busy.value = true
+  saveState.value = 'saving'
+  errorMessage.value = ''
+  try {
+    const result = normalizeAppResult(await commands.captureDraftDelete(
+      current.batch.id,
+      current.batch.revision,
+      draftId,
+    ))
+    if (result.ok) {
+      detail.value = result.data
+      saveState.value = 'saved'
+    }
+    else {
+      saveState.value = 'error'
+      showError(result.error.userMessage)
+      if (result.error.code === 'capture_revision_conflict') await loadDetail(current.batch.id)
+    }
+  }
+  catch {
+    saveState.value = 'error'
+    showError('题卡没有撤销成功，原有图片和分组仍会保留。')
   }
   finally {
     busy.value = false
@@ -581,6 +613,7 @@ onBeforeUnmount(() => {
     @move-item="moveItem"
     @stage-item-role="stageItemRole"
     @merge-card="mergeCard"
+    @delete-draft="deleteDraft"
     @update-draft="updateDraft"
     @remove-item="removeItem"
     @commit-ready="commitReady"

@@ -16,6 +16,8 @@ describe('generated Tauri bindings', () => {
     expect(bindings).toContain('CaptureLanPreflight')
     expect(bindings).toContain('captureItemStageRole')
     expect(bindings).toContain('captureCardMerge')
+    expect(bindings).toContain('captureDraftDelete')
+    expect(bindings).toContain('newDraftSubject')
     expect(bindings).toContain('stagedRole')
     expect(bindings).not.toContain('captureDraftCreate')
     expect(bindings).toContain('AppResult')

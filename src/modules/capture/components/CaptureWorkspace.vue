@@ -46,7 +46,8 @@ const emit = defineEmits<{
   applyLayout: [mode: CaptureLayoutMode, questions: number, answers: number, splitIndex: number | null]
   moveItem: [target: MoveTarget]
   stageItemRole: [itemId: string, stagedRole: 'question' | 'answer']
-  mergeCard: [itemIds: string[], targetDraftId: string | null]
+  mergeCard: [itemIds: string[], targetDraftId: string | null, newDraftSubject: string | null]
+  deleteDraft: [draftId: string]
   updateDraft: [draft: CaptureDraftSummary, subject: string, tags: string[], note: string]
   removeItem: [itemId: string]
   commitReady: []
@@ -213,7 +214,14 @@ function handlePointerDrop(drop: CapturePointerDrop) {
     if (item.draftId) emit('moveItem', { itemId: item.id, targetDraftId: null, targetRole: null, targetPosition: 0 })
     return
   }
-  emit('mergeCard', [item.id], drop.kind === 'card' ? drop.draftId : null)
+  const targetDraftId = drop.kind === 'card' ? drop.draftId : null
+  const newDraftSubject = drop.kind === 'new-card'
+    ? selectedDraft.value?.subject.trim()
+      || props.detail?.drafts.find(draft => draft.subject.trim())?.subject.trim()
+      || props.detail?.batch.subject.trim()
+      || null
+    : null
+  emit('mergeCard', [item.id], targetDraftId, newDraftSubject)
 }
 
 const pointerDrag = useCapturePointerDrag(handlePointerDrop)
@@ -233,6 +241,12 @@ function saveSelectedDraft() {
     draftTags.value.split(/[，,]/).map(tag => tag.trim()).filter(Boolean),
     draftNote.value.trim(),
   )
+}
+
+function requestDeleteDraft(draftId: string) {
+  if (props.busy) return
+  if (!window.confirm('撤销这张题卡？卡内所有图片都会回到左侧素材牌库，不会删除原图。')) return
+  emit('deleteDraft', draftId)
 }
 
 function statusLabel(batch: CaptureBatchSummary) {
@@ -762,6 +776,8 @@ function statusLabel(batch: CaptureBatchSummary) {
                 @preview="emit('preview', $event)"
                 @pointer-start="pointerDrag.start"
                 @return-item="itemId => emit('moveItem', { itemId, targetDraftId: null, targetRole: null, targetPosition: 0 })"
+                @change-item-role="(itemId, targetRole, targetPosition) => emit('moveItem', { itemId, targetDraftId: draft.id, targetRole, targetPosition })"
+                @delete-draft="requestDeleteDraft"
               />
             </TransitionGroup>
             <div

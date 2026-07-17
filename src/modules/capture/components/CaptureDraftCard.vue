@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Check, Image as ImageIcon, Maximize2, RotateCw, Undo2, X } from '@lucide/vue'
+import { ArrowRightLeft, Check, Image as ImageIcon, Maximize2, RotateCw, Trash2, Undo2, X } from '@lucide/vue'
 import { computed, reactive, ref, watch } from 'vue'
 import type { CaptureDraftSummary, CaptureItemSummary } from '../../../shared/api/bindings'
 import CaptureThumbnail from './CaptureThumbnail.vue'
@@ -20,6 +20,8 @@ const emit = defineEmits<{
   preview: [itemId: string]
   pointerStart: [itemId: string, event: PointerEvent]
   returnItem: [itemId: string]
+  changeItemRole: [itemId: string, targetRole: CardRole, targetPosition: number]
+  deleteDraft: [draftId: string]
 }>()
 
 const flipped = ref(false)
@@ -28,6 +30,14 @@ const expanded = ref<{ item: CaptureItemSummary, role: CardRole }>()
 const itemById = computed(() => new Map(props.items.map(item => [item.id, item])))
 const questionItems = computed(() => mapItems(props.draft.questionItemIds))
 const answerItems = computed(() => mapItems(props.draft.answerItemIds))
+const incompleteReason = computed(() => {
+  if (props.draft.ready) return '就绪'
+  const missing: string[] = []
+  if (!questionItems.value.length) missing.push('缺题面')
+  if (!answerItems.value.length) missing.push('缺答案')
+  if (!props.draft.subject.trim()) missing.push('缺科目')
+  return missing.join(' · ') || '未完成'
+})
 
 watch([questionItems, answerItems], ([questions, answers]) => {
   indexes.question = Math.min(indexes.question, Math.max(0, questions.length - 1))
@@ -81,10 +91,21 @@ function openImage(role: CardRole) {
         <span class="draft-number">{{ String(draftIndex + 1).padStart(2, '0') }}</span>
         <span><strong>{{ draft.subject || '未填写科目' }}</strong><small>{{ selected ? '正在编辑这张卡' : '点击选择' }}</small></span>
       </button>
-      <span class="ready-mark"><Check
-        v-if="draft.ready"
-        :size="13"
-      />{{ draft.ready ? '就绪' : '未完成' }}</span>
+      <div class="draft-actions">
+        <span class="ready-mark"><Check
+          v-if="draft.ready"
+          :size="13"
+        />{{ incompleteReason }}</span>
+        <button
+          type="button"
+          class="delete-draft"
+          :disabled="busy"
+          aria-label="撤销这张卡"
+          @click.stop="emit('deleteDraft', draft.id)"
+        >
+          <Trash2 :size="14" />撤销
+        </button>
+      </div>
     </header>
 
     <div class="card-perspective">
@@ -165,6 +186,20 @@ function openImage(role: CardRole) {
             />
             <button
               type="button"
+              class="change-role"
+              :disabled="busy"
+              :aria-label="`把当前${role === 'question' ? '题图转为答案' : '答案图转为题面'}`"
+              @click.stop="activeItem(role) && emit(
+                'changeItemRole',
+                activeItem(role)!.id,
+                role === 'question' ? 'answer' : 'question',
+                role === 'question' ? answerItems.length : questionItems.length,
+              )"
+            >
+              <ArrowRightLeft :size="14" /> 转为{{ role === 'question' ? '答案' : '题面' }}
+            </button>
+            <button
+              type="button"
               class="return-image"
               :disabled="busy"
               :aria-label="`把当前${role === 'question' ? '题图' : '答案图'}移回待配对`"
@@ -220,9 +255,9 @@ function openImage(role: CardRole) {
 <style scoped>
 .draft-card{padding:18px;border:1px solid var(--line);border-radius:7px 22px 22px;background:rgba(255,253,247,.78);box-shadow:var(--shadow-soft);transition:transform var(--motion-standard) var(--ease-standard),border-color var(--motion-standard),box-shadow var(--motion-standard)}
 .draft-card.is-selected{border-color:rgba(185,88,63,.5);box-shadow:0 18px 45px rgba(34,48,43,.13),inset 4px 0 0 var(--cinnabar);transform:translateY(-2px)}
-.draft-header{display:flex;gap:14px;align-items:center;justify-content:space-between}.draft-target{display:flex;gap:10px;align-items:center;padding:0;color:var(--ink);border:0;background:transparent;text-align:left;cursor:pointer}.draft-target>span:last-child{display:grid}.draft-target strong{font-size:17px}.draft-target small{margin-top:2px;color:var(--ink-muted);font-size:10px}.draft-number{color:var(--cinnabar);font-family:serif;font-size:23px}.ready-mark{display:inline-flex;gap:5px;align-items:center;padding:6px 9px;color:var(--ink-muted);border-radius:999px;background:var(--green-soft);font-size:9px;font-weight:800}.is-ready .ready-mark{color:#416b5a}
+.draft-header{display:flex;gap:14px;align-items:center;justify-content:space-between}.draft-target{display:flex;gap:10px;align-items:center;padding:0;color:var(--ink);border:0;background:transparent;text-align:left;cursor:pointer}.draft-target>span:last-child{display:grid}.draft-target strong{font-size:17px}.draft-target small{margin-top:2px;color:var(--ink-muted);font-size:10px}.draft-number{color:var(--cinnabar);font-family:serif;font-size:23px}.draft-actions{display:flex;gap:7px;align-items:center}.ready-mark{display:inline-flex;gap:5px;align-items:center;padding:6px 9px;color:#914b39;border-radius:999px;background:rgba(185,88,63,.1);font-size:9px;font-weight:800}.is-ready .ready-mark{color:#416b5a;background:var(--green-soft)}.delete-draft{display:inline-flex;gap:4px;align-items:center;min-height:30px;padding:0 9px;color:var(--ink-muted);border:1px solid var(--line);border-radius:999px;background:transparent;font-size:9px;cursor:pointer}.delete-draft:hover{color:var(--cinnabar);border-color:rgba(185,88,63,.35);background:rgba(185,88,63,.07)}
 .card-perspective{position:relative;margin-top:14px;perspective:1400px}.card-inner{position:relative;min-height:480px;transform-style:preserve-3d;transition:transform var(--motion-page) var(--ease-standard)}.card-inner.is-flipped{transform:rotateY(180deg)}.card-face{position:absolute;inset:0;display:grid;grid-template-rows:auto minmax(0,1fr) auto;min-height:440px;padding:14px;overflow:hidden;border:1px solid rgba(33,51,45,.13);border-radius:18px;background:rgba(246,241,231,.72);backface-visibility:hidden}.card-face.is-answer{background:linear-gradient(145deg,rgba(185,88,63,.08),rgba(255,253,247,.9));transform:rotateY(180deg)}
-.face-label{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}.face-label span{color:var(--cinnabar);font-size:10px;font-weight:850;letter-spacing:.12em}.face-label strong{color:var(--ink-muted);font-size:10px}.main-image-wrap{position:relative;display:grid;min-height:340px;overflow:hidden;place-items:center;border-radius:13px;background:#fff;box-shadow:inset 0 0 0 1px rgba(33,51,45,.08)}.main-image-wrap>img{width:100%;height:100%;max-height:430px;object-fit:contain}.image-loading,.face-empty{display:grid;place-items:center;align-content:center;gap:8px;min-height:340px;color:var(--ink-muted);text-align:center}.face-empty span{font-size:11px}.expand-image{position:absolute;right:10px;bottom:10px;display:inline-flex;gap:5px;align-items:center;min-height:34px;padding:0 11px;color:var(--paper);border:0;border-radius:999px;background:rgba(33,51,45,.82);font-size:10px;cursor:pointer}.face-filmstrip{display:flex;gap:7px;align-items:center;min-width:0;margin-top:10px;padding:2px;overflow-x:auto}.return-image{display:inline-flex;flex:0 0 auto;gap:4px;align-items:center;min-height:32px;padding:0 9px;color:var(--ink-muted);border:1px solid var(--line);border-radius:9px;background:var(--paper);font-size:9px;cursor:pointer}.flip-button{position:absolute;z-index:3;right:18px;bottom:18px;display:flex;gap:7px;align-items:center;min-height:42px;padding:0 15px;color:var(--paper);border:0;border-radius:999px;background:var(--green-deep);font-weight:780;cursor:pointer;box-shadow:0 10px 24px rgba(33,51,45,.2)}
+.face-label{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}.face-label span{color:var(--cinnabar);font-size:10px;font-weight:850;letter-spacing:.12em}.face-label strong{color:var(--ink-muted);font-size:10px}.main-image-wrap{position:relative;display:grid;min-height:340px;overflow:hidden;place-items:center;border-radius:13px;background:#fff;box-shadow:inset 0 0 0 1px rgba(33,51,45,.08)}.main-image-wrap>img{width:100%;height:100%;max-height:430px;object-fit:contain}.image-loading,.face-empty{display:grid;place-items:center;align-content:center;gap:8px;min-height:340px;color:var(--ink-muted);text-align:center}.face-empty span{font-size:11px}.expand-image{position:absolute;right:10px;bottom:10px;display:inline-flex;gap:5px;align-items:center;min-height:34px;padding:0 11px;color:var(--paper);border:0;border-radius:999px;background:rgba(33,51,45,.82);font-size:10px;cursor:pointer}.face-filmstrip{display:flex;gap:7px;align-items:center;min-width:0;margin-top:10px;padding:2px;overflow-x:auto}.change-role,.return-image{display:inline-flex;flex:0 0 auto;gap:4px;align-items:center;min-height:32px;padding:0 9px;color:var(--ink-muted);border:1px solid var(--line);border-radius:9px;background:var(--paper);font-size:9px;cursor:pointer}.change-role{color:var(--green-deep);border-color:rgba(33,51,45,.22);background:var(--green-soft)}.flip-button{position:absolute;z-index:3;right:18px;bottom:18px;display:flex;gap:7px;align-items:center;min-height:42px;padding:0 15px;color:var(--paper);border:0;border-radius:999px;background:var(--green-deep);font-weight:780;cursor:pointer;box-shadow:0 10px 24px rgba(33,51,45,.2)}
 .image-overlay{position:fixed;z-index:120;inset:0;display:grid;padding:32px;place-items:center;background:rgba(20,28,25,.82);backdrop-filter:blur(14px)}.image-overlay section{position:relative;display:grid;width:min(1400px,100%);height:min(900px,calc(100vh - 64px));padding:16px;grid-template-rows:minmax(0,1fr) auto;border-radius:18px;background:var(--paper)}.image-overlay img{width:100%;height:100%;object-fit:contain}.image-overlay p{min-width:0;margin:10px 42px 0 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.image-overlay button{position:absolute;z-index:1;top:14px;right:14px;display:grid;width:40px;height:40px;place-items:center;color:var(--paper);border:0;border-radius:50%;background:var(--green-deep);cursor:pointer}button:disabled{cursor:not-allowed;opacity:.42}
 @media(max-width:760px){.draft-card{padding:14px}.card-inner{min-height:420px}.card-face{min-height:390px}.main-image-wrap,.image-loading,.face-empty{min-height:290px}.image-overlay{padding:12px}.image-overlay section{height:calc(100vh - 24px)}}
 @media(prefers-reduced-motion:reduce){.draft-card,.card-inner{transition:none}.draft-card.is-selected{transform:none}}
