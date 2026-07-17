@@ -37,6 +37,19 @@ pub struct ReportSummary {
 
 #[derive(Clone, Debug, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
+pub struct DashboardOverview {
+    pub profile_name: String,
+    pub active_problem_count: i32,
+    pub due_problem_count: i32,
+    pub reviewed_today_count: i32,
+    pub remembered_rate_30_days: Option<f64>,
+    pub current_streak_days: i32,
+    pub pending_capture_batch_count: i32,
+    pub pending_capture_item_count: i32,
+}
+
+#[derive(Clone, Debug, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
 pub struct SettingsOverview {
     pub active_problem_count: i32,
     pub archived_problem_count: i32,
@@ -50,8 +63,115 @@ pub struct SettingsOverview {
 
 #[derive(Debug, Error)]
 pub enum InsightsError {
+    #[error("timezone offset is outside the supported range")]
+    InvalidTimezoneOffset,
     #[error("report query failed")]
     Database(#[from] rusqlite::Error),
+}
+
+pub fn dashboard_overview(
+    connection: &Connection,
+    account_id: &str,
+    profile_id: &str,
+    now_utc_ms: i64,
+    utc_offset_minutes: i32,
+) -> Result<DashboardOverview, InsightsError> {
+    if !(-840..=840).contains(&utc_offset_minutes) {
+        return Err(InsightsError::InvalidTimezoneOffset);
+    }
+
+    let offset_ms = i64::from(utc_offset_minutes) * 60_000;
+    let today_bucket = (now_utc_ms + offset_ms).div_euclid(DAY_MS);
+    let today_start_utc_ms = today_bucket * DAY_MS - offset_ms;
+    let tomorrow_start_utc_ms = today_start_utc_ms + DAY_MS;
+    let thirty_day_start_utc_ms = today_start_utc_ms - 29 * DAY_MS;
+
+    let profile_name = connection.query_row(
+        "SELECT name FROM learner_profiles WHERE account_id = ?1 AND id = ?2",
+        params![account_id, profile_id],
+        |row| row.get(0),
+    )?;
+    let active_problem_count = scalar(
+        connection,
+        "SELECT COUNT(*) FROM problems WHERE account_id = ?1 AND profile_id = ?2 AND status = 'active'",
+        account_id,
+        profile_id,
+    )?;
+    let due_problem_count = connection.query_row(
+        "SELECT COUNT(*) FROM problems p
+         LEFT JOIN schedule_states s ON s.problem_id = p.id
+         WHERE p.account_id = ?1 AND p.profile_id = ?2 AND p.status = 'active'
+           AND (s.due_at_utc_ms IS NULL OR s.due_at_utc_ms <= ?3)",
+        params![account_id, profile_id, now_utc_ms],
+        |row| row.get::<_, i64>(0),
+    )?;
+    let reviewed_today_count = connection.query_row(
+        "SELECT COUNT(*) FROM review_events
+         WHERE account_id = ?1 AND profile_id = ?2
+           AND occurred_at_utc_ms >= ?3 AND occurred_at_utc_ms < ?4",
+        params![
+            account_id,
+            profile_id,
+            today_start_utc_ms,
+            tomorrow_start_utc_ms
+        ],
+        |row| row.get::<_, i64>(0),
+    )?;
+    let (recent_review_count, recent_remembered_count): (i64, i64) = connection.query_row(
+        "SELECT COUNT(*), COALESCE(SUM(CASE WHEN rating != 'again' THEN 1 ELSE 0 END), 0)
+         FROM review_events
+         WHERE account_id = ?1 AND profile_id = ?2
+           AND occurred_at_utc_ms >= ?3 AND occurred_at_utc_ms < ?4",
+        params![
+            account_id,
+            profile_id,
+            thirty_day_start_utc_ms,
+            tomorrow_start_utc_ms
+        ],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let remembered_rate_30_days = (recent_review_count > 0)
+        .then(|| recent_remembered_count as f64 / recent_review_count as f64);
+
+    let review_day_buckets = {
+        let mut statement = connection.prepare(
+            "SELECT DISTINCT (occurred_at_utc_ms + ?3) / ?4 AS day_bucket
+             FROM review_events
+             WHERE account_id = ?1 AND profile_id = ?2
+             ORDER BY day_bucket DESC",
+        )?;
+        statement
+            .query_map(params![account_id, profile_id, offset_ms, DAY_MS], |row| {
+                row.get::<_, i64>(0)
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    let current_streak_days = current_streak_from_buckets(&review_day_buckets, today_bucket);
+
+    let pending_capture_batch_count = connection.query_row(
+        "SELECT COUNT(*) FROM capture_batches
+         WHERE account_id = ?1 AND profile_id = ?2 AND state != 'completed'",
+        params![account_id, profile_id],
+        |row| row.get::<_, i64>(0),
+    )?;
+    let pending_capture_item_count = connection.query_row(
+        "SELECT COUNT(*) FROM capture_items i
+         INNER JOIN capture_batches b ON b.id = i.batch_id
+         WHERE b.account_id = ?1 AND b.profile_id = ?2 AND b.state != 'completed'",
+        params![account_id, profile_id],
+        |row| row.get::<_, i64>(0),
+    )?;
+
+    Ok(DashboardOverview {
+        profile_name,
+        active_problem_count: bounded_i32(active_problem_count),
+        due_problem_count: bounded_i32(due_problem_count),
+        reviewed_today_count: bounded_i32(reviewed_today_count),
+        remembered_rate_30_days,
+        current_streak_days,
+        pending_capture_batch_count: bounded_i32(pending_capture_batch_count),
+        pending_capture_item_count: bounded_i32(pending_capture_item_count),
+    })
 }
 
 pub fn report_summary(
@@ -219,6 +339,31 @@ fn current_streak(days: &[DailyActivity]) -> i32 {
             break;
         }
         streak += 1;
+    }
+    streak
+}
+
+fn current_streak_from_buckets(day_buckets: &[i64], today_bucket: i64) -> i32 {
+    let Some(latest_bucket) = day_buckets.first().copied() else {
+        return 0;
+    };
+    let mut expected_bucket = if latest_bucket == today_bucket {
+        today_bucket
+    } else if latest_bucket == today_bucket - 1 {
+        today_bucket - 1
+    } else {
+        return 0;
+    };
+    let mut streak = 0;
+    for bucket in day_buckets {
+        if *bucket > expected_bucket {
+            continue;
+        }
+        if *bucket != expected_bucket {
+            break;
+        }
+        streak += 1;
+        expected_bucket -= 1;
     }
     streak
 }

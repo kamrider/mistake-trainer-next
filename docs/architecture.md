@@ -60,13 +60,27 @@ conflict. Deletes create tombstones retained for 30 days.
 - The phone collector is an explicitly started, single-session HTTP server bound to a
   selected RFC1918 address. Its 256-bit bearer token stays in the QR URL fragment and
   memory; it is removed from browser history and is never logged or persisted.
-- LAN capture is for a trusted home Wi-Fi or personal hotspot only. The app does not
-  modify Windows Firewall and does not present ordinary HTTP as protection on public
-  networks. Sessions expire after 30 minutes idle or two hours absolute time.
+- LAN capture is for a trusted home Wi-Fi or personal hotspot only. After explicit
+  elevation, the app installs one persistent firewall rule scoped to its own executable
+  and all Windows network profiles; a successful rule is reused, while a failed or
+  missing rule is requested again on the next start. The app does not present ordinary
+  HTTP as protection on public networks. Sessions expire after 30 minutes idle or two
+  hours absolute time.
 - HEIC/HEIF conversion is a separate same-origin decoder loaded only after such a file
   is selected. The mobile page has no CDN or third-party requests. The decoder is a
   codec exception to the Vue feature-chunk budget and does not enter the desktop's
   initial JavaScript bundle.
+
+## Dashboard read boundary
+
+- The training dashboard is a local, profile-scoped read model derived from the encrypted
+  library. It remains useful offline and does not depend on Supabase availability.
+- Due counts, current streak, today's reviews, 30-day remembered rate, and unfinished
+  capture work are queried from persisted records. A read failure is shown explicitly;
+  the UI never substitutes demo statistics or retains stale values as if they were live.
+- Calendar-day metrics use the Windows browser's current UTC offset. The offset is
+  range-checked in Rust, and a streak may begin today or yesterday so a user does not
+  lose it before completing the current day's review.
 
 ## Backup boundary
 

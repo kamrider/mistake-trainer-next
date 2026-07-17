@@ -15,6 +15,7 @@ export const commands = {
 	legacyScan: () => __TAURI_INVOKE<AppResult<LegacyScanReport | null>>("legacy_scan"),
 	reviewQueue: (problemId: string | null) => __TAURI_INVOKE<AppResult<ReviewQueueItem[]>>("review_queue", { problemId }),
 	reviewSubmit: (input: ReviewSubmitInput) => __TAURI_INVOKE<AppResult<ReviewSubmission>>("review_submit", { input }),
+	dashboardOverview: (utcOffsetMinutes: number) => __TAURI_INVOKE<AppResult<DashboardOverview>>("dashboard_overview", { utcOffsetMinutes }),
 	reportSummary: () => __TAURI_INVOKE<AppResult<ReportSummary>>("report_summary"),
 	settingsOverview: () => __TAURI_INVOKE<AppResult<SettingsOverview>>("settings_overview"),
 	subjectPreferencesGet: () => __TAURI_INVOKE<AppResult<SubjectPreferences>>("subject_preferences_get"),
@@ -237,6 +238,17 @@ export type DailyActivity = {
 	dayStartUtcMs: number | null,
 	reviewCount: number,
 	durationMs: number | null,
+};
+
+export type DashboardOverview = {
+	profileName: string,
+	activeProblemCount: number,
+	dueProblemCount: number,
+	reviewedTodayCount: number,
+	rememberedRate30Days: number | null,
+	currentStreakDays: number,
+	pendingCaptureBatchCount: number,
+	pendingCaptureItemCount: number,
 };
 
 export type DeletedExportSnapshotSummary = {

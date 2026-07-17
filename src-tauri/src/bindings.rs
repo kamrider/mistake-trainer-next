@@ -18,6 +18,7 @@ pub fn builder() -> Builder<tauri::Wry> {
         commands::legacy::legacy_scan,
         commands::review::review_queue,
         commands::review::review_submit,
+        commands::insights::dashboard_overview,
         commands::insights::report_summary,
         commands::insights::settings_overview,
         commands::preferences::subject_preferences_get,

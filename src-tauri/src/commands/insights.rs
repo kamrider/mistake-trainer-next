@@ -5,10 +5,39 @@ use crate::{
     application::result::AppResult,
     infrastructure::runtime::LibraryRuntime,
     modules::insights::{
-        ReportSummary, SettingsOverview, report_summary as load_report_summary,
+        DashboardOverview, InsightsError, ReportSummary, SettingsOverview,
+        dashboard_overview as load_dashboard_overview, report_summary as load_report_summary,
         settings_overview as load_settings_overview,
     },
 };
+
+#[tauri::command]
+#[specta::specta]
+pub fn dashboard_overview(
+    state: State<'_, LibraryRuntime>,
+    utc_offset_minutes: i32,
+) -> AppResult<DashboardOverview> {
+    let connection = match state.connection.lock() {
+        Ok(connection) => connection,
+        Err(_) => return insights_error("library_lock_poisoned"),
+    };
+    match load_dashboard_overview(
+        &connection,
+        state.account_id(),
+        state.profile_id(),
+        current_utc_millis(),
+        utc_offset_minutes,
+    ) {
+        Ok(overview) => AppResult::success(overview),
+        Err(InsightsError::InvalidTimezoneOffset) => AppResult::failure(
+            "dashboard_timezone_invalid",
+            "系统时区设置异常，请检查 Windows 日期和时间设置。",
+            false,
+            Uuid::now_v7().to_string(),
+        ),
+        Err(InsightsError::Database(_)) => insights_error("dashboard_overview_failed"),
+    }
+}
 
 #[tauri::command]
 #[specta::specta]
