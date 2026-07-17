@@ -281,6 +281,9 @@ fn validation_requires_review_sessions_exactly_when_the_schema_requires_it() {
 
     {
         let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        database
+            .execute("DROP TABLE profile_preferences", [])
+            .unwrap();
         for table in [
             "capture_draft_items",
             "capture_items",

@@ -26,6 +26,7 @@ fn initial_migration_creates_the_offline_first_core_schema() {
         "capture_drafts",
         "capture_items",
         "capture_draft_items",
+        "profile_preferences",
     ];
     for table in expected {
         let found: i64 = connection
@@ -41,7 +42,7 @@ fn initial_migration_creates_the_offline_first_core_schema() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        4
+        5
     );
 }
 
@@ -82,7 +83,7 @@ fn version_two_library_upgrades_without_changing_existing_problem_data() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        4
+        5
     );
 
     let staged_role: String = connection

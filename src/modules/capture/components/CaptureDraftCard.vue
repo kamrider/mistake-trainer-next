@@ -13,6 +13,9 @@ const props = defineProps<{
   previews: Record<string, string>
   selected: boolean
   busy: boolean
+  subjectOptions: string[]
+  dropRole?: CardRole | null
+  settled?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -22,6 +25,7 @@ const emit = defineEmits<{
   returnItem: [itemId: string]
   changeItemRole: [itemId: string, targetRole: CardRole, targetPosition: number]
   deleteDraft: [draftId: string]
+  changeSubject: [subject: string]
 }>()
 
 const flipped = ref(false)
@@ -71,12 +75,23 @@ function openImage(role: CardRole) {
   const item = activeItem(role)
   if (item && props.previews[item.id]) expanded.value = { item, role }
 }
+
+function changeSubject(event: Event) {
+  const select = event.target as HTMLSelectElement
+  if (select.value && select.value !== props.draft.subject) emit('changeSubject', select.value)
+}
 </script>
 
 <template>
   <article
     class="draft-card"
-    :class="{ 'is-ready': draft.ready, 'is-selected': selected }"
+    :class="{
+      'is-ready': draft.ready,
+      'is-selected': selected,
+      'is-drop-question': dropRole === 'question',
+      'is-drop-answer': dropRole === 'answer',
+      'is-settled': settled,
+    }"
     :aria-label="`第 ${draftIndex + 1} 道错题卡`"
     data-capture-drop="card"
     :data-draft-id="draft.id"
@@ -91,6 +106,28 @@ function openImage(role: CardRole) {
         <span class="draft-number">{{ String(draftIndex + 1).padStart(2, '0') }}</span>
         <span><strong>{{ draft.subject || '未填写科目' }}</strong><small>{{ selected ? '正在编辑这张卡' : '点击选择' }}</small></span>
       </button>
+      <select
+        class="card-subject"
+        :value="draft.subject"
+        :disabled="busy"
+        :aria-label="`第 ${draftIndex + 1} 道题科目`"
+        @click.stop
+        @change="changeSubject"
+      >
+        <option
+          v-if="!subjectOptions.includes(draft.subject)"
+          :value="draft.subject"
+        >
+          {{ draft.subject || '选择科目' }}
+        </option>
+        <option
+          v-for="subject in subjectOptions"
+          :key="subject"
+          :value="subject"
+        >
+          {{ subject }}
+        </option>
+      </select>
       <div class="draft-actions">
         <span class="ready-mark"><Check
           v-if="draft.ready"
@@ -255,10 +292,12 @@ function openImage(role: CardRole) {
 <style scoped>
 .draft-card{padding:18px;border:1px solid var(--line);border-radius:7px 22px 22px;background:rgba(255,253,247,.78);box-shadow:var(--shadow-soft);transition:transform var(--motion-standard) var(--ease-standard),border-color var(--motion-standard),box-shadow var(--motion-standard)}
 .draft-card.is-selected{border-color:rgba(185,88,63,.5);box-shadow:0 18px 45px rgba(34,48,43,.13),inset 4px 0 0 var(--cinnabar);transform:translateY(-2px)}
-.draft-header{display:flex;gap:14px;align-items:center;justify-content:space-between}.draft-target{display:flex;gap:10px;align-items:center;padding:0;color:var(--ink);border:0;background:transparent;text-align:left;cursor:pointer}.draft-target>span:last-child{display:grid}.draft-target strong{font-size:17px}.draft-target small{margin-top:2px;color:var(--ink-muted);font-size:10px}.draft-number{color:var(--cinnabar);font-family:serif;font-size:23px}.draft-actions{display:flex;gap:7px;align-items:center}.ready-mark{display:inline-flex;gap:5px;align-items:center;padding:6px 9px;color:#914b39;border-radius:999px;background:rgba(185,88,63,.1);font-size:9px;font-weight:800}.is-ready .ready-mark{color:#416b5a;background:var(--green-soft)}.delete-draft{display:inline-flex;gap:4px;align-items:center;min-height:30px;padding:0 9px;color:var(--ink-muted);border:1px solid var(--line);border-radius:999px;background:transparent;font-size:9px;cursor:pointer}.delete-draft:hover{color:var(--cinnabar);border-color:rgba(185,88,63,.35);background:rgba(185,88,63,.07)}
+.draft-card.is-drop-question{border-color:rgba(33,51,45,.72);background:rgba(225,235,229,.9);transform:translateY(-3px) scale(1.012);box-shadow:0 22px 48px rgba(33,51,45,.18)}.draft-card.is-drop-answer{border-color:rgba(185,88,63,.72);background:rgba(247,225,216,.88);transform:translateY(-3px) scale(1.012);box-shadow:0 22px 48px rgba(185,88,63,.16)}.draft-card.is-settled{animation:card-settle 240ms var(--ease-standard)}
+.draft-header{display:flex;gap:14px;align-items:center;justify-content:space-between}.draft-target{display:flex;flex:1;gap:10px;align-items:center;padding:0;color:var(--ink);border:0;background:transparent;text-align:left;cursor:pointer}.draft-target>span:last-child{display:grid}.draft-target strong{font-size:17px}.draft-target small{margin-top:2px;color:var(--ink-muted);font-size:10px}.draft-number{color:var(--cinnabar);font-family:serif;font-size:23px}.card-subject{min-height:34px;padding:0 28px 0 10px;color:var(--green-deep);border:1px solid rgba(33,51,45,.2);border-radius:999px;background:var(--green-soft);font-size:10px;font-weight:760;cursor:pointer}.draft-actions{display:flex;gap:7px;align-items:center}.ready-mark{display:inline-flex;gap:5px;align-items:center;padding:6px 9px;color:#914b39;border-radius:999px;background:rgba(185,88,63,.1);font-size:9px;font-weight:800}.is-ready .ready-mark{color:#416b5a;background:var(--green-soft)}.delete-draft{display:inline-flex;gap:4px;align-items:center;min-height:30px;padding:0 9px;color:var(--ink-muted);border:1px solid var(--line);border-radius:999px;background:transparent;font-size:9px;cursor:pointer}.delete-draft:hover{color:var(--cinnabar);border-color:rgba(185,88,63,.35);background:rgba(185,88,63,.07)}
 .card-perspective{position:relative;margin-top:14px;perspective:1400px}.card-inner{position:relative;min-height:480px;transform-style:preserve-3d;transition:transform var(--motion-page) var(--ease-standard)}.card-inner.is-flipped{transform:rotateY(180deg)}.card-face{position:absolute;inset:0;display:grid;grid-template-rows:auto minmax(0,1fr) auto;min-height:440px;padding:14px;overflow:hidden;border:1px solid rgba(33,51,45,.13);border-radius:18px;background:rgba(246,241,231,.72);backface-visibility:hidden}.card-face.is-answer{background:linear-gradient(145deg,rgba(185,88,63,.08),rgba(255,253,247,.9));transform:rotateY(180deg)}
 .face-label{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}.face-label span{color:var(--cinnabar);font-size:10px;font-weight:850;letter-spacing:.12em}.face-label strong{color:var(--ink-muted);font-size:10px}.main-image-wrap{position:relative;display:grid;min-height:340px;overflow:hidden;place-items:center;border-radius:13px;background:#fff;box-shadow:inset 0 0 0 1px rgba(33,51,45,.08)}.main-image-wrap>img{width:100%;height:100%;max-height:430px;object-fit:contain}.image-loading,.face-empty{display:grid;place-items:center;align-content:center;gap:8px;min-height:340px;color:var(--ink-muted);text-align:center}.face-empty span{font-size:11px}.expand-image{position:absolute;right:10px;bottom:10px;display:inline-flex;gap:5px;align-items:center;min-height:34px;padding:0 11px;color:var(--paper);border:0;border-radius:999px;background:rgba(33,51,45,.82);font-size:10px;cursor:pointer}.face-filmstrip{display:flex;gap:7px;align-items:center;min-width:0;margin-top:10px;padding:2px;overflow-x:auto}.change-role,.return-image{display:inline-flex;flex:0 0 auto;gap:4px;align-items:center;min-height:32px;padding:0 9px;color:var(--ink-muted);border:1px solid var(--line);border-radius:9px;background:var(--paper);font-size:9px;cursor:pointer}.change-role{color:var(--green-deep);border-color:rgba(33,51,45,.22);background:var(--green-soft)}.flip-button{position:absolute;z-index:3;right:18px;bottom:18px;display:flex;gap:7px;align-items:center;min-height:42px;padding:0 15px;color:var(--paper);border:0;border-radius:999px;background:var(--green-deep);font-weight:780;cursor:pointer;box-shadow:0 10px 24px rgba(33,51,45,.2)}
 .image-overlay{position:fixed;z-index:120;inset:0;display:grid;padding:32px;place-items:center;background:rgba(20,28,25,.82);backdrop-filter:blur(14px)}.image-overlay section{position:relative;display:grid;width:min(1400px,100%);height:min(900px,calc(100vh - 64px));padding:16px;grid-template-rows:minmax(0,1fr) auto;border-radius:18px;background:var(--paper)}.image-overlay img{width:100%;height:100%;object-fit:contain}.image-overlay p{min-width:0;margin:10px 42px 0 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.image-overlay button{position:absolute;z-index:1;top:14px;right:14px;display:grid;width:40px;height:40px;place-items:center;color:var(--paper);border:0;border-radius:50%;background:var(--green-deep);cursor:pointer}button:disabled{cursor:not-allowed;opacity:.42}
-@media(max-width:760px){.draft-card{padding:14px}.card-inner{min-height:420px}.card-face{min-height:390px}.main-image-wrap,.image-loading,.face-empty{min-height:290px}.image-overlay{padding:12px}.image-overlay section{height:calc(100vh - 24px)}}
-@media(prefers-reduced-motion:reduce){.draft-card,.card-inner{transition:none}.draft-card.is-selected{transform:none}}
+@keyframes card-settle{0%{transform:scale(.97);opacity:.78}55%{transform:scale(1.018)}100%{transform:scale(1);opacity:1}}
+@media(max-width:760px){.draft-card{padding:14px}.draft-header{align-items:flex-start;flex-wrap:wrap}.card-subject{order:3}.card-inner{min-height:420px}.card-face{min-height:390px}.main-image-wrap,.image-loading,.face-empty{min-height:290px}.image-overlay{padding:12px}.image-overlay section{height:calc(100vh - 24px)}}
+@media(prefers-reduced-motion:reduce){.draft-card,.card-inner{transition:none}.draft-card.is-selected,.draft-card.is-drop-question,.draft-card.is-drop-answer{transform:none}.draft-card.is-settled{animation:none}}
 </style>

@@ -13,11 +13,11 @@ use crate::{
             CaptureCommitReport, CaptureInboxError, CaptureItemPreview, CaptureItemSummary,
             CaptureLayoutMode, CreateCaptureBatch, IngestCaptureItem, MergeCaptureCard,
             MoveCaptureItem, StageCaptureItemRole, UpdateCaptureDraft, apply_capture_layout,
-            commit_ready_capture_drafts, create_capture_batch, delete_capture_draft,
-            discard_capture_batch, get_capture_batch_detail, get_capture_item_preview,
-            ingest_capture_item, list_capture_batches, merge_capture_card, move_capture_item,
-            remove_capture_item, stage_capture_item_role, update_capture_batch,
-            update_capture_draft,
+            assign_capture_batch_subject, commit_ready_capture_drafts, create_capture_batch,
+            delete_capture_draft, discard_capture_batch, get_capture_batch_detail,
+            get_capture_item_preview, ingest_capture_item, list_capture_batches,
+            merge_capture_card, move_capture_item, remove_capture_item, stage_capture_item_role,
+            update_capture_batch, update_capture_draft,
         },
     },
 };
@@ -35,6 +35,14 @@ pub struct CaptureBatchUpdateInput {
     pub expected_revision: u32,
     pub subject: String,
     pub finish_collecting: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureBatchSubjectInput {
+    pub batch_id: String,
+    pub expected_revision: u32,
+    pub subject: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Type)]
@@ -299,6 +307,31 @@ pub fn capture_batch_update(
 ) -> AppResult<CaptureBatchSummary> {
     let result = capture_batch_update_for(&state, input, current_utc_millis());
     emit_batch_from_summary(&app, &result);
+    result
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn capture_batch_assign_subject(
+    app: AppHandle,
+    state: State<'_, LibraryRuntime>,
+    input: CaptureBatchSubjectInput,
+) -> AppResult<CaptureBatchDetail> {
+    let batch_id = input.batch_id.clone();
+    let mut connection = match state.connection.lock() {
+        Ok(connection) => connection,
+        Err(_) => return capture_error("library_lock_poisoned", None),
+    };
+    let result = result_or_error(assign_capture_batch_subject(
+        &mut connection,
+        state.account_id(),
+        state.profile_id(),
+        &input.batch_id,
+        input.expected_revision,
+        &input.subject,
+        current_utc_millis(),
+    ));
+    emit_batch_changed(&app, &batch_id);
     result
 }
 

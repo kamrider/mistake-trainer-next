@@ -12,6 +12,7 @@ import {
   type CaptureLanPreflight,
   type CaptureLanSession,
   type CaptureLayoutMode,
+  type SubjectPreferences,
 } from '../../shared/api/bindings'
 import { normalizeAppResult } from '../../shared/api/normalize-result'
 
@@ -26,6 +27,11 @@ const lanAddresses = ref<CaptureLanAddress[]>([])
 const lanPreflight = ref<CaptureLanPreflight>()
 const lanPreflightBusy = ref(false)
 const lanSession = ref<CaptureLanSession>()
+const subjectPreferences = ref<SubjectPreferences>({
+  enabledSubjects: ['语文', '数学', '英语', '政治', '历史', '地理', '物理', '化学', '生物'],
+  customSubjects: [],
+  captureSoundEnabled: true,
+})
 const previewOrder: string[] = []
 const desktopAvailable = isTauri()
 let unlisten: UnlistenFn | undefined
@@ -48,6 +54,18 @@ async function loadBatches() {
   }
   catch {
     showError('采集箱连接中断，请重新打开应用后重试。')
+  }
+}
+
+async function loadSubjectPreferences() {
+  if (!desktopAvailable) return
+  try {
+    const result = normalizeAppResult(await commands.subjectPreferencesGet())
+    if (result.ok) subjectPreferences.value = result.data
+    else showError(result.error.userMessage)
+  }
+  catch {
+    showError('科目配置暂时无法读取，当前仍可使用内置九科。')
   }
 }
 
@@ -193,6 +211,37 @@ async function applyLayout(mode: CaptureLayoutMode, questions: number, answers: 
   }
   catch {
     showError('整理模板没有应用，原有分组仍会保留。')
+  }
+  finally {
+    busy.value = false
+  }
+}
+
+async function assignBatchSubject(subject: string) {
+  const current = detail.value
+  if (!desktopAvailable || !current || busy.value || !subject.trim()) return
+  busy.value = true
+  saveState.value = 'saving'
+  errorMessage.value = ''
+  try {
+    const result = normalizeAppResult(await commands.captureBatchAssignSubject({
+      batchId: current.batch.id,
+      expectedRevision: current.batch.revision,
+      subject,
+    }))
+    if (result.ok) {
+      detail.value = result.data
+      saveState.value = 'saved'
+    }
+    else {
+      saveState.value = 'error'
+      showError(result.error.userMessage)
+      if (result.error.code === 'capture_revision_conflict') await loadDetail(current.batch.id)
+    }
+  }
+  catch {
+    saveState.value = 'error'
+    showError('整批科目没有保存成功，原有题卡保持不变。')
   }
   finally {
     busy.value = false
@@ -573,7 +622,7 @@ onMounted(async () => {
     showError('浏览器预览只展示界面；请在 Windows 桌面应用中使用加密采集箱。')
     return
   }
-  await loadBatches()
+  await Promise.all([loadBatches(), loadSubjectPreferences()])
   await Promise.all([loadLanAddresses(), loadLanPreflight(), loadLanStatus()])
   lanPollTimer = setInterval(() => void loadLanStatus(), 5_000)
   unlisten = await listen<{ batchId: string }>('capture_batch_changed', event => scheduleRefresh(event.payload.batchId))
@@ -602,6 +651,8 @@ onBeforeUnmount(() => {
     :lan-preflight="lanPreflight"
     :lan-preflight-busy="lanPreflightBusy"
     :lan-session="lanSession"
+    :subject-options="subjectPreferences.enabledSubjects"
+    :capture-sound-enabled="subjectPreferences.captureSoundEnabled"
     @create-batch="createBatch"
     @open-batch="loadDetail"
     @back="detail = undefined; loadBatches()"
@@ -610,6 +661,7 @@ onBeforeUnmount(() => {
     @import-files="importFiles"
     @finish-collecting="finishCollecting"
     @apply-layout="applyLayout"
+    @assign-batch-subject="assignBatchSubject"
     @move-item="moveItem"
     @stage-item-role="stageItemRole"
     @merge-card="mergeCard"

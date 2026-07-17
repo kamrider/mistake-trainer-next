@@ -26,6 +26,8 @@ function renderWorkspace(detail?: CaptureBatchDetail, preflight: CaptureLanPrefl
       lanAddresses: [{ label: 'Wi-Fi', address: '192.168.1.2' }],
       lanPreflight: preflight, lanPreflightBusy: preflightBusy, lanSession: undefined,
       saveState: 'saved', commitMessage: '',
+      subjectOptions: ['语文', '数学', '英语', '物理', '化学'],
+      captureSoundEnabled: true,
     },
   })
 }
@@ -65,7 +67,7 @@ describe('CaptureWorkspace Next', () => {
   it('creates and reopens persistent batches', async () => {
     const user = userEvent.setup()
     const view = renderWorkspace()
-    await user.type(screen.getByPlaceholderText('科目，例如：数学（可选）'), '物理')
+    await user.selectOptions(screen.getByRole('combobox'), '物理')
     await user.click(screen.getByRole('button', { name: '新建批次' }))
     await user.click(screen.getAllByRole('button', { name: /数学/ })[0]!)
     expect(view.emitted('createBatch')).toEqual([['物理']])
@@ -124,6 +126,16 @@ describe('CaptureWorkspace Next', () => {
     expect(screen.queryByText(/双击/)).not.toBeInTheDocument()
   })
 
+  it('applies a configured subject to the whole organizing batch from the top', async () => {
+    const user = userEvent.setup()
+    const view = renderWorkspace(organizingDetail())
+
+    const subjectBar = screen.getByLabelText('整批科目')
+    await user.click(within(subjectBar).getByRole('button', { name: '化学' }))
+
+    expect(view.emitted('assignBatchSubject')).toEqual([['化学']])
+  })
+
   it('corrects an assigned image role and reverses a whole card', async () => {
     const user = userEvent.setup()
     vi.spyOn(window, 'confirm').mockReturnValue(true)
@@ -163,6 +175,25 @@ describe('CaptureWorkspace Next', () => {
     await fireEvent.pointerUp(window, { pointerId: 17, clientX: 20, clientY: 10 })
 
     expect(view.emitted('mergeCard')).toEqual([[['loose'], null, '数学']])
+  })
+
+  it('previews question drops with ink-green card feedback', async () => {
+    renderWorkspace(organizingDetail())
+    const loose = screen.getByLabelText('待配对图片：待配对超长文件名图片.png')
+    const source = within(loose).getByLabelText('待配对超长文件名图片.png')
+    const target = screen.getByLabelText('第 2 道错题卡')
+    Object.defineProperty(document, 'elementFromPoint', {
+      configurable: true,
+      value: vi.fn(() => target),
+    })
+
+    await fireEvent.pointerDown(source, { pointerId: 29, button: 0, clientX: 10, clientY: 10 })
+    await fireEvent.pointerMove(window, { pointerId: 29, clientX: 22, clientY: 10 })
+
+    expect(document.querySelector('.capture-drag-ghost')).toHaveClass('is-question')
+    expect(target).toHaveClass('is-drop-question')
+    await fireEvent.pointerCancel(window, { pointerId: 29 })
+    expect(document.querySelector('.capture-drag-ghost')).not.toBeInTheDocument()
   })
 
   it('enables atomic commit only for ready cards', async () => {

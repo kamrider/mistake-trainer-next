@@ -60,7 +60,10 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             transaction.execute_batch(include_str!(
                 "../../migrations/0004_capture_staged_roles.sql"
             ))?;
-            transaction.pragma_update(None, "user_version", 4)?;
+            transaction.execute_batch(include_str!(
+                "../../migrations/0005_profile_preferences.sql"
+            ))?;
+            transaction.pragma_update(None, "user_version", 5)?;
             transaction.commit()?;
             Ok(())
         }
@@ -71,7 +74,10 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             transaction.execute_batch(include_str!(
                 "../../migrations/0004_capture_staged_roles.sql"
             ))?;
-            transaction.pragma_update(None, "user_version", 4)?;
+            transaction.execute_batch(include_str!(
+                "../../migrations/0005_profile_preferences.sql"
+            ))?;
+            transaction.pragma_update(None, "user_version", 5)?;
             transaction.commit()?;
             Ok(())
         }
@@ -81,7 +87,10 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             transaction.execute_batch(include_str!(
                 "../../migrations/0004_capture_staged_roles.sql"
             ))?;
-            transaction.pragma_update(None, "user_version", 4)?;
+            transaction.execute_batch(include_str!(
+                "../../migrations/0005_profile_preferences.sql"
+            ))?;
+            transaction.pragma_update(None, "user_version", 5)?;
             transaction.commit()?;
             Ok(())
         }
@@ -90,11 +99,23 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             transaction.execute_batch(include_str!(
                 "../../migrations/0004_capture_staged_roles.sql"
             ))?;
-            transaction.pragma_update(None, "user_version", 4)?;
+            transaction.execute_batch(include_str!(
+                "../../migrations/0005_profile_preferences.sql"
+            ))?;
+            transaction.pragma_update(None, "user_version", 5)?;
             transaction.commit()?;
             Ok(())
         }
-        4 => Ok(()),
+        4 => {
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(include_str!(
+                "../../migrations/0005_profile_preferences.sql"
+            ))?;
+            transaction.pragma_update(None, "user_version", 5)?;
+            transaction.commit()?;
+            Ok(())
+        }
+        5 => Ok(()),
         newer => Err(DatabaseError::UnsupportedSchema(newer)),
     }
 }

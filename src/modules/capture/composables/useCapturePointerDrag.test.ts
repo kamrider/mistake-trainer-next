@@ -12,6 +12,7 @@ function renderDrag() {
     template: `
       <button data-testid="source" @pointerdown="pointerDrag.start('item-1', $event)">source</button>
       <div data-testid="target" data-capture-drop="new-card">target</div>
+      <span data-testid="hover">{{ pointerDrag.drag.hoveredTarget?.kind ?? 'none' }}</span>
     `,
   })
   render(Host)
@@ -34,8 +35,10 @@ describe('useCapturePointerDrag', () => {
 
     await fireEvent.pointerDown(source, { pointerId: 8, button: 0, clientX: 10, clientY: 10 })
     await fireEvent.pointerMove(window, { pointerId: 8, clientX: 20, clientY: 10 })
+    expect(screen.getByTestId('hover')).toHaveTextContent('new-card')
     await fireEvent.pointerUp(window, { pointerId: 8, clientX: 20, clientY: 10 })
     expect(onDrop).toHaveBeenCalledWith({ itemId: 'item-1', kind: 'new-card', draftId: null })
+    expect(screen.getByTestId('hover')).toHaveTextContent('none')
   })
 
   it('cancels the active drag with Escape', async () => {
@@ -43,6 +46,7 @@ describe('useCapturePointerDrag', () => {
     await fireEvent.pointerDown(screen.getByTestId('source'), { pointerId: 9, button: 0, clientX: 0, clientY: 0 })
     await fireEvent.pointerMove(window, { pointerId: 9, clientX: 12, clientY: 0 })
     await fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.getByTestId('hover')).toHaveTextContent('none')
     await fireEvent.pointerUp(window, { pointerId: 9, clientX: 12, clientY: 0 })
     expect(onDrop).not.toHaveBeenCalled()
   })

@@ -631,6 +631,36 @@ pub fn update_capture_batch(
     query_batch(connection, account_id, profile_id, batch_id)
 }
 
+pub fn assign_capture_batch_subject(
+    connection: &mut Connection,
+    account_id: &str,
+    profile_id: &str,
+    batch_id: &str,
+    expected_revision: u32,
+    subject: &str,
+    now_utc_ms: i64,
+) -> Result<CaptureBatchDetail, CaptureInboxError> {
+    let subject = normalize_subject(subject)?;
+    if subject.is_empty() {
+        return Err(CaptureInboxError::InvalidInput);
+    }
+    let batch = query_batch(connection, account_id, profile_id, batch_id)?;
+    ensure_organizing_revision(&batch, expected_revision)?;
+    let transaction = connection.transaction()?;
+    transaction.execute(
+        "UPDATE capture_batches SET subject = ?2, updated_at_utc_ms = ?3, revision = revision + 1
+         WHERE id = ?1 AND account_id = ?4 AND profile_id = ?5",
+        params![batch_id, subject, now_utc_ms, account_id, profile_id],
+    )?;
+    transaction.execute(
+        "UPDATE capture_drafts SET subject_override = NULL, updated_at_utc_ms = ?2
+         WHERE batch_id = ?1",
+        params![batch_id, now_utc_ms],
+    )?;
+    transaction.commit()?;
+    get_capture_batch_detail(connection, account_id, profile_id, batch_id)
+}
+
 pub fn apply_capture_layout(
     connection: &mut Connection,
     input: ApplyCaptureLayout,

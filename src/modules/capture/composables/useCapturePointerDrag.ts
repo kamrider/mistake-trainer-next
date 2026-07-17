@@ -10,7 +10,16 @@ export type CapturePointerDrop = CaptureDropTarget & {
 }
 
 export function useCapturePointerDrag(onDrop: (drop: CapturePointerDrop) => void) {
-  const drag = reactive({
+  const drag = reactive<{
+    itemId: string
+    pointerId: number
+    startX: number
+    startY: number
+    x: number
+    y: number
+    active: boolean
+    hoveredTarget: CaptureDropTarget | null
+  }>({
     itemId: '',
     pointerId: -1,
     startX: 0,
@@ -18,11 +27,15 @@ export function useCapturePointerDrag(onDrop: (drop: CapturePointerDrop) => void
     x: 0,
     y: 0,
     active: false,
+    hoveredTarget: null,
   })
   let source: HTMLElement | undefined
   let suppressClick = false
 
-  const style = computed(() => ({ transform: `translate3d(${drag.x + 14}px, ${drag.y + 14}px, 0)` }))
+  const style = computed(() => ({
+    opacity: drag.hoveredTarget ? 0.82 : 0.92,
+    transform: `translate3d(${drag.x + 14}px, ${drag.y + 14}px, 0) scale(${drag.hoveredTarget ? 1.04 : 0.94})`,
+  }))
 
   function cleanup() {
     window.removeEventListener('pointermove', move)
@@ -36,6 +49,7 @@ export function useCapturePointerDrag(onDrop: (drop: CapturePointerDrop) => void
     drag.itemId = ''
     drag.pointerId = -1
     drag.active = false
+    drag.hoveredTarget = null
   }
 
   function move(event: PointerEvent) {
@@ -47,6 +61,7 @@ export function useCapturePointerDrag(onDrop: (drop: CapturePointerDrop) => void
       suppressClick = true
       document.documentElement.classList.add('capture-pointer-dragging')
     }
+    drag.hoveredTarget = drag.active ? targetAt(drag.x, drag.y) ?? null : null
     if (drag.active) event.preventDefault()
   }
 
@@ -61,7 +76,7 @@ export function useCapturePointerDrag(onDrop: (drop: CapturePointerDrop) => void
   function finish(event: PointerEvent) {
     if (event.pointerId !== drag.pointerId) return
     const itemId = drag.itemId
-    const target = drag.active ? targetAt(event.clientX, event.clientY) : undefined
+    const target = drag.active ? drag.hoveredTarget ?? targetAt(event.clientX, event.clientY) : undefined
     document.documentElement.classList.remove('capture-pointer-dragging')
     cleanup()
     if (itemId && target) onDrop({ itemId, ...target })

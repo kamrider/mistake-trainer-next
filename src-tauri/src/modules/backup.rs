@@ -20,7 +20,7 @@ use crate::infrastructure::{
 };
 
 const FORMAT_VERSION: i32 = 1;
-const CURRENT_SCHEMA_VERSION: i64 = 4;
+const CURRENT_SCHEMA_VERSION: i64 = 5;
 const DATABASE_FILE: &str = "library.db";
 const MANIFEST_FILE: &str = "manifest.json";
 const ASSETS_DIRECTORY: &str = "assets";
@@ -536,6 +536,24 @@ fn ensure_single_account(
             |row| row.get(0),
         )?;
         if has_foreign_capture_batch != 0 {
+            return Err(BackupError::ForeignAccountData);
+        }
+    }
+    let has_profile_preferences = table_exists(connection, "profile_preferences")?;
+    if (schema_version < 5 && has_profile_preferences)
+        || (schema_version >= 5 && !has_profile_preferences)
+    {
+        return Err(BackupError::Integrity);
+    }
+    if has_profile_preferences {
+        let has_foreign_preferences: i64 = connection.query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM profile_preferences WHERE account_id <> ?1 LIMIT 1
+             )",
+            [account_id],
+            |row| row.get(0),
+        )?;
+        if has_foreign_preferences != 0 {
             return Err(BackupError::ForeignAccountData);
         }
     }

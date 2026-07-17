@@ -8,12 +8,49 @@ const api = vi.hoisted(() => ({
   legacyScan: vi.fn(),
   backupCreate: vi.fn(),
   backupValidate: vi.fn(),
+  subjectPreferencesGet: vi.fn(),
+  subjectPreferencesSave: vi.fn(),
 }))
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => true }))
 vi.mock('../../shared/api/bindings', () => ({ commands: api }))
 
 describe('SettingsView', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    api.subjectPreferencesGet.mockResolvedValue({ ok: true, data: {
+      enabledSubjects: ['语文', '数学', '英语'],
+      customSubjects: [],
+      captureSoundEnabled: true,
+    } })
+  })
+
+  it('configures builtin and custom subjects plus capture sound', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    api.subjectPreferencesSave.mockResolvedValue({ ok: true, data: {
+      enabledSubjects: ['语文', '数学', '编程'],
+      customSubjects: ['编程'],
+      captureSoundEnabled: false,
+    } })
+    render(SettingsView)
+
+    expect(await screen.findByRole('heading', { name: '常用科目' })).toBeVisible()
+    await userEvent.click(screen.getByRole('checkbox', { name: '英语' }))
+    await userEvent.type(screen.getByPlaceholderText('例如：编程、竞赛数学'), '编程')
+    await userEvent.click(screen.getByRole('button', { name: '添加自定义科目' }))
+    await userEvent.click(screen.getByRole('checkbox', { name: /拖放成功音效/ }))
+    await userEvent.click(screen.getByRole('button', { name: '保存科目配置' }))
+
+    expect(api.subjectPreferencesSave).toHaveBeenCalledWith({
+      enabledSubjects: ['语文', '数学', '编程'],
+      customSubjects: ['编程'],
+      captureSoundEnabled: false,
+    })
+    expect(await screen.findByText('科目配置已保存')).toBeVisible()
+  })
 
   it('shows encrypted local state and honest cloud readiness', async () => {
     api.settingsOverview.mockResolvedValue({ ok: true, data: {

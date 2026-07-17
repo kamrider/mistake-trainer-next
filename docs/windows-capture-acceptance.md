@@ -21,35 +21,47 @@ on an untrusted shared network.
 
 ## Desktop batch and study-card organizer
 
-1. Create a batch and import images from phone, file picker, clipboard, and Explorer drag.
+1. Open **设置 → 常用科目**. Confirm the nine built-ins are `语文、数学、英语、政治、历史、
+   地理、物理、化学、生物`; disable several, add a custom subject, disable drop sound, save,
+   restart, and confirm the same profile restores the selection. Switch profile and confirm it
+   receives its own default configuration.
+2. Create a batch and import images from phone, file picker, clipboard, and Explorer drag.
    Restart the app and confirm the encrypted batch returns unchanged.
-2. Apply alternating, split, and questions-only templates. Unequal remainder images must
+3. Apply alternating, split, and questions-only templates. Unequal remainder images must
    stay in **待配对图片** and reapplying a template must require confirmation.
-3. Confirm unassigned images use a large, contained gallery preview. One click toggles an
+4. In the organizer's top **整批科目** row, choose one configured subject. Confirm every card
+   immediately uses it, previous per-card overrides are cleared, and the batch revision advances
+   once. Change one card from its header subject selector and confirm only that card is overridden.
+5. Confirm unassigned images use a large, contained gallery preview. One click toggles an
    image between ink-green **题面** and cinnabar **答案**. There must be no double-click
    shortcut or double-click-only action.
-4. Drag a loose image to the empty fusion lane. Confirm one new card is created and the
+6. Drag a loose **题面** image: the lifted card must shrink slightly, use ink-green, and make
+   the hovered card/fusion lane scale gently with the same color. Repeat with **答案** and confirm
+   cinnabar feedback. Release and confirm a single 240 ms settle motion happens only after the
+   saved revision arrives. With sound enabled, confirm one short local tone; disable sound and
+   confirm silence without changing drag behavior.
+7. Drag a loose image to the empty fusion lane. Confirm one new card is created and the
    image is attached in one saved transaction. Drag another image onto that existing card
    and confirm it merges using the loose image's persisted role.
-5. Drag an image from a card back to **素材牌库** and confirm it becomes unassigned rather
+8. Drag an image from a card back to **素材牌库** and confirm it becomes unassigned rather
    than deleted. Restart the app and confirm its role color, grouping, and order persist.
-6. Create a card with two images initially marked **题面**. Confirm the card explicitly says
+9. Create a card with two images initially marked **题面**. Confirm the card explicitly says
    **缺答案**, use **转为答案** on one assigned image, and confirm the card becomes ready when
    it has a subject. Repeat with a blank subject and confirm it explicitly says **缺科目**.
-7. Click **撤销这张卡**, approve the confirmation, and confirm every linked image returns
+10. Click **撤销这张卡**, approve the confirmation, and confirm every linked image returns
    to **素材牌库** while no original or encrypted asset is deleted. Create a new card again
    and confirm it inherits the currently selected card's subject.
-8. Open a card containing two question images and two answer images. Confirm the initial
+11. Open a card containing two question images and two answer images. Confirm the initial
    face is the question, clicking the card or the labelled flip action performs a 240 ms
    `rotateY(180deg)` flip, and the filmstrip can select every image.
-9. Click **大图** and confirm mathematical text is readable. A derived preview from a
+12. Click **大图** and confirm mathematical text is readable. A derived preview from a
    source over 960 px must have a 960 px longest edge; encrypted originals remain intact.
-10. Enable Windows **Reduce motion** and confirm flip/list motion is removed without hiding
-   content or controls.
-11. Confirm every grouping or metadata mutation shows **保存中** then **已自动保存**. Give
+13. Enable Windows **Reduce motion** and confirm flip/list/lift/settle motion and drop sound are
+   removed without hiding content, colors, or controls.
+14. Confirm every grouping or metadata mutation shows **保存中** then **已自动保存**. Give
    ready cards a subject and click **加入题库**. Incomplete cards remain in the inbox and an
-   injected persistence failure creates zero formal problems.
-12. Scroll a reference batch containing 150 images. Lazy preview loading and the 40-item
+   injected persistence failure creates zero formal problems and produces no settle sound.
+15. Scroll a reference batch containing 150 images. Lazy preview loading and the 40-item
    memory cache must prevent obvious stalls or unbounded memory growth.
 
 ## Phone session

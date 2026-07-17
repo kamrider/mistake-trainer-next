@@ -6,6 +6,7 @@ pub mod capture_lan;
 pub mod exports;
 pub mod insights;
 pub mod legacy;
+pub mod preferences;
 pub mod problems;
 pub mod profiles;
 pub mod review;

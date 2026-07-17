@@ -13,6 +13,8 @@ const api = vi.hoisted(() => ({
   captureCardMerge: vi.fn(),
   captureDraftDelete: vi.fn(),
   captureItemMove: vi.fn(),
+  captureBatchAssignSubject: vi.fn(),
+  subjectPreferencesGet: vi.fn(),
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => true }))
@@ -20,8 +22,8 @@ vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn().mockResolvedValue(vi.f
 vi.mock('../../shared/api/bindings', () => ({ commands: api }))
 vi.mock('../../modules/capture/components/CaptureWorkspace.vue', () => ({
   default: {
-    props: ['batches', 'detail', 'busy', 'errorMessage', 'lanSession'],
-    emits: ['openBatch', 'mobileCapture', 'mergeCard', 'deleteDraft', 'moveItem'],
+    props: ['batches', 'detail', 'busy', 'errorMessage', 'lanSession', 'subjectOptions'],
+    emits: ['openBatch', 'mobileCapture', 'mergeCard', 'deleteDraft', 'moveItem', 'assignBatchSubject'],
     template: `
       <div>
         <button @click="$emit('openBatch', 'batch-1')">open batch</button>
@@ -29,6 +31,8 @@ vi.mock('../../modules/capture/components/CaptureWorkspace.vue', () => ({
         <button :disabled="busy" @click="$emit('mergeCard', ['item-1'], null, '数学')">merge card</button>
         <button :disabled="busy" @click="$emit('deleteDraft', 'draft-1')">delete card</button>
         <button :disabled="busy" @click="$emit('moveItem', { itemId: 'item-1', targetDraftId: 'draft-1', targetRole: 'answer', targetPosition: 0 })">change role</button>
+        <button :disabled="busy" @click="$emit('assignBatchSubject', '化学')">assign subject</button>
+        <span data-testid="subjects">{{ subjectOptions?.join('、') }}</span>
         <span data-testid="error">{{ errorMessage }}</span>
         <span data-testid="session">{{ lanSession?.sessionId ?? 'none' }}</span>
       </div>
@@ -88,6 +92,10 @@ beforeEach(() => {
   api.captureCardMerge.mockResolvedValue(success(detail))
   api.captureDraftDelete.mockResolvedValue(success(detail))
   api.captureItemMove.mockResolvedValue(success(detail))
+  api.captureBatchAssignSubject.mockResolvedValue(success({ ...detail, batch: { ...batch, subject: '化学', revision: 2 } }))
+  api.subjectPreferencesGet.mockResolvedValue(success({
+    enabledSubjects: ['数学', '化学'], customSubjects: [], captureSoundEnabled: true,
+  }))
 })
 
 describe('CaptureView one-time Windows LAN permission', () => {
@@ -120,6 +128,18 @@ describe('CaptureView one-time Windows LAN permission', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'delete card' })).toBeEnabled())
     await fireEvent.click(screen.getByRole('button', { name: 'delete card' }))
     await waitFor(() => expect(api.captureDraftDelete).toHaveBeenCalledWith('batch-1', 1, 'draft-1'))
+  })
+
+  it('loads configured subjects and persists whole-batch assignment', async () => {
+    api.captureLanPreflight.mockResolvedValue(success(readyRule))
+    render(CaptureView)
+    await waitFor(() => expect(screen.getByTestId('subjects')).toHaveTextContent('数学、化学'))
+    await fireEvent.click(screen.getByRole('button', { name: 'open batch' }))
+    await waitFor(() => expect(api.captureBatchDetail).toHaveBeenCalledWith('batch-1'))
+    await fireEvent.click(screen.getByRole('button', { name: 'assign subject' }))
+    await waitFor(() => expect(api.captureBatchAssignSubject).toHaveBeenCalledWith({
+      batchId: 'batch-1', expectedRevision: 1, subject: '化学',
+    }))
   })
 
   it('repairs once on the first scan and immediately starts the QR session', async () => {

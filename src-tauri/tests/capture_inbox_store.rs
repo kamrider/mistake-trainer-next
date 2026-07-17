@@ -8,10 +8,11 @@ use mistake_trainer_next_lib::{
         capture_inbox::{
             ApplyCaptureLayout, CaptureBatchState, CaptureInboxError, CaptureLayoutMode,
             CreateCaptureBatch, IngestCaptureItem, MergeCaptureCard, MoveCaptureItem,
-            StageCaptureItemRole, apply_capture_layout, commit_ready_capture_drafts,
-            create_capture_batch, delete_capture_draft, discard_capture_batch,
-            get_capture_batch_detail, get_capture_item_preview, ingest_capture_item,
-            merge_capture_card, move_capture_item, stage_capture_item_role, update_capture_batch,
+            StageCaptureItemRole, UpdateCaptureDraft, apply_capture_layout,
+            assign_capture_batch_subject, commit_ready_capture_drafts, create_capture_batch,
+            delete_capture_draft, discard_capture_batch, get_capture_batch_detail,
+            get_capture_item_preview, ingest_capture_item, merge_capture_card, move_capture_item,
+            stage_capture_item_role, update_capture_batch, update_capture_draft,
         },
         profiles::{CreateProfile, create_profile},
     },
@@ -361,6 +362,85 @@ fn new_card_inherits_subject_and_deleting_it_returns_images_without_deleting_ass
         )
         .expect("count retained data");
     assert_eq!(counts, (2, 0, 2));
+}
+
+#[test]
+fn assigning_a_batch_subject_clears_card_overrides_and_updates_readiness_once() {
+    let library = TestLibrary::new();
+    let mut connection = library.open();
+    let batch = create_batch(&library, &mut connection, "", CaptureBatchState::Collecting);
+    ingest(
+        &library,
+        &mut connection,
+        &batch.id,
+        "bulk-subject-question",
+        41,
+        20,
+    );
+    ingest(
+        &library,
+        &mut connection,
+        &batch.id,
+        "bulk-subject-answer",
+        42,
+        21,
+    );
+    let revision = organize(&library, &mut connection, &batch.id, batch.revision + 2);
+    let laid_out = apply_capture_layout(
+        &mut connection,
+        ApplyCaptureLayout {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch.id.clone(),
+            expected_revision: revision,
+            mode: CaptureLayoutMode::Alternating,
+            question_images_per_draft: 1,
+            answer_images_per_draft: 1,
+            split_index: None,
+            now_utc_ms: 60,
+        },
+    )
+    .expect("lay out one card");
+    let draft_id = laid_out.drafts[0].id.clone();
+    let overridden = update_capture_draft(
+        &mut connection,
+        UpdateCaptureDraft {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch.id.clone(),
+            expected_revision: laid_out.batch.revision,
+            draft_id: draft_id.clone(),
+            subject: "物理".to_owned(),
+            tags: vec![],
+            note: String::new(),
+            now_utc_ms: 61,
+        },
+    )
+    .expect("override subject");
+
+    let assigned = assign_capture_batch_subject(
+        &mut connection,
+        ACCOUNT,
+        &library.profile_id,
+        &batch.id,
+        overridden.batch.revision,
+        "化学",
+        62,
+    )
+    .expect("assign batch subject");
+
+    assert_eq!(assigned.batch.subject, "化学");
+    assert_eq!(assigned.batch.revision, overridden.batch.revision + 1);
+    assert_eq!(assigned.drafts[0].subject, "化学");
+    assert!(assigned.drafts[0].ready);
+    let override_is_null: i64 = connection
+        .query_row(
+            "SELECT subject_override IS NULL FROM capture_drafts WHERE id = ?1",
+            [draft_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(override_is_null, 1);
 }
 
 #[test]

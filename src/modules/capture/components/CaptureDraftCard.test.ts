@@ -38,6 +38,7 @@ function renderCard(card = draft, cardItems = items) {
       },
       selected: true,
       busy: false,
+      subjectOptions: ['语文', '数学', '英语', '物理', '化学'],
     },
   })
 }

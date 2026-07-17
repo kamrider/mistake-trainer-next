@@ -17,6 +17,8 @@ export const commands = {
 	reviewSubmit: (input: ReviewSubmitInput) => __TAURI_INVOKE<AppResult<ReviewSubmission>>("review_submit", { input }),
 	reportSummary: () => __TAURI_INVOKE<AppResult<ReportSummary>>("report_summary"),
 	settingsOverview: () => __TAURI_INVOKE<AppResult<SettingsOverview>>("settings_overview"),
+	subjectPreferencesGet: () => __TAURI_INVOKE<AppResult<SubjectPreferences>>("subject_preferences_get"),
+	subjectPreferencesSave: (input: SubjectPreferencesInput) => __TAURI_INVOKE<AppResult<SubjectPreferences>>("subject_preferences_save", { input }),
 	exportList: () => __TAURI_INVOKE<AppResult<ExportSnapshotSummary[]>>("export_list"),
 	exportTrashList: () => __TAURI_INVOKE<AppResult<DeletedExportSnapshotSummary[]>>("export_trash_list"),
 	exportCreate: (input: ExportCreateInput) => __TAURI_INVOKE<AppResult<ExportSnapshotSummary>>("export_create", { input }),
@@ -27,6 +29,7 @@ export const commands = {
 	captureBatchList: () => __TAURI_INVOKE<AppResult<CaptureBatchSummary[]>>("capture_batch_list"),
 	captureBatchDetail: (batchId: string) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_batch_detail", { batchId }),
 	captureBatchUpdate: (input: CaptureBatchUpdateInput) => __TAURI_INVOKE<AppResult<CaptureBatchSummary>>("capture_batch_update", { input }),
+	captureBatchAssignSubject: (input: CaptureBatchSubjectInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_batch_assign_subject", { input }),
 	captureBatchDiscard: (batchId: string) => __TAURI_INVOKE<AppResult<boolean>>("capture_batch_discard", { batchId }),
 	captureImportSelect: (batchId: string) => __TAURI_INVOKE<AppResult<CaptureImportReport>>("capture_import_select", { batchId }),
 	captureImportBytes: (input: CaptureImportBytesInput) => __TAURI_INVOKE<AppResult<CaptureItemSummary>>("capture_import_bytes", { input }),
@@ -78,6 +81,12 @@ export type CaptureBatchDetail = {
 };
 
 export type CaptureBatchState = "collecting" | "organizing" | "completed";
+
+export type CaptureBatchSubjectInput = {
+	batchId: string,
+	expectedRevision: number,
+	subject: string,
+};
 
 export type CaptureBatchSummary = {
 	id: string,
@@ -374,6 +383,18 @@ export type SubjectActivity = {
 	subject: string,
 	problemCount: number,
 	reviewCount: number,
+};
+
+export type SubjectPreferences = {
+	enabledSubjects: string[],
+	customSubjects: string[],
+	captureSoundEnabled: boolean,
+};
+
+export type SubjectPreferencesInput = {
+	enabledSubjects: string[],
+	customSubjects: string[],
+	captureSoundEnabled: boolean,
 };
 
 export type SystemStatus = {

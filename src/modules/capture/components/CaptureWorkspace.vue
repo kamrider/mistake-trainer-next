@@ -4,7 +4,7 @@ import {
   Images, LayoutGrid, ListPlus, LockKeyhole, Plus, QrCode, Save, Smartphone,
   Sparkles, Trash2, UploadCloud, X,
 } from '@lucide/vue'
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type {
   CaptureBatchDetail, CaptureBatchSummary, CaptureDraftSummary, CaptureItemSummary,
   CaptureLanAddress, CaptureLanPreflight, CaptureLanSession, CaptureLayoutMode,
@@ -12,6 +12,7 @@ import type {
 import CaptureThumbnail from './CaptureThumbnail.vue'
 import CaptureDraftCard from './CaptureDraftCard.vue'
 import { useCapturePointerDrag, type CapturePointerDrop } from '../composables/useCapturePointerDrag'
+import { useCaptureFeedback, type CaptureFeedbackRole } from '../composables/useCaptureFeedback'
 
 type MoveTarget = {
   itemId: string
@@ -33,6 +34,8 @@ const props = defineProps<{
   lanSession: CaptureLanSession | undefined
   saveState: 'idle' | 'saving' | 'saved' | 'error'
   commitMessage: string
+  subjectOptions: string[]
+  captureSoundEnabled: boolean
 }>()
 
 const emit = defineEmits<{
@@ -43,6 +46,7 @@ const emit = defineEmits<{
   importSelect: []
   importFiles: [files: File[]]
   finishCollecting: [subject: string]
+  assignBatchSubject: [subject: string]
   applyLayout: [mode: CaptureLayoutMode, questions: number, answers: number, splitIndex: number | null]
   moveItem: [target: MoveTarget]
   stageItemRole: [itemId: string, stagedRole: 'question' | 'answer']
@@ -75,6 +79,9 @@ const selectedDraftId = ref('')
 const draftSubject = ref('')
 const draftTags = ref('')
 const draftNote = ref('')
+const settledDraftId = ref('')
+let settleTimer: ReturnType<typeof setTimeout> | undefined
+let pendingCardDrop: { itemId: string, role: CaptureFeedbackRole, targetDraftId: string | null } | undefined
 
 const itemById = computed(() => new Map(props.detail?.items.map(item => [item.id, item]) ?? []))
 const activeBatches = computed(() => props.batches.filter(batch => batch.state !== 'completed'))
@@ -90,6 +97,7 @@ const lanMinutesRemaining = computed(() => props.lanSession
   : 0)
 const lanNeedsRepair = computed(() => props.lanPreflight?.needsFirewallRepair === true)
 const lanReady = computed(() => props.lanPreflight?.canStart === true)
+const draggedRole = computed<CaptureFeedbackRole>(() => itemById.value.get(pointerDrag.drag.itemId)?.stagedRole === 'answer' ? 'answer' : 'question')
 
 watch(() => props.detail, (detail) => {
   if (!detail) return
@@ -97,6 +105,12 @@ watch(() => props.detail, (detail) => {
   splitIndex.value = Math.ceil(detail.items.length / 2)
   if (!detail.drafts.some(draft => draft.id === selectedDraftId.value)) {
     selectedDraftId.value = detail.drafts[0]?.id ?? ''
+  }
+}, { immediate: true })
+
+watch(() => props.subjectOptions, (subjects) => {
+  if (!newSubject.value || !subjects.includes(newSubject.value)) {
+    newSubject.value = subjects[0] ?? ''
   }
 }, { immediate: true })
 
@@ -221,10 +235,37 @@ function handlePointerDrop(drop: CapturePointerDrop) {
       || props.detail?.batch.subject.trim()
       || null
     : null
+  pendingCardDrop = { itemId: item.id, role: item.stagedRole === 'answer' ? 'answer' : 'question', targetDraftId }
   emit('mergeCard', [item.id], targetDraftId, newDraftSubject)
 }
 
 const pointerDrag = useCapturePointerDrag(handlePointerDrop)
+const feedback = useCaptureFeedback(() => props.captureSoundEnabled)
+
+watch(() => props.saveState, (state) => {
+  if (state === 'error') {
+    pendingCardDrop = undefined
+    return
+  }
+  if (state !== 'saved' || !pendingCardDrop) return
+  const pending = pendingCardDrop
+  pendingCardDrop = undefined
+  const targetDraftId = pending.targetDraftId
+    ?? props.detail?.items.find(item => item.id === pending.itemId)?.draftId
+    ?? ''
+  if (targetDraftId) {
+    settledDraftId.value = targetDraftId
+    if (settleTimer) clearTimeout(settleTimer)
+    settleTimer = setTimeout(() => {
+      if (settledDraftId.value === targetDraftId) settledDraftId.value = ''
+    }, 260)
+  }
+  feedback.playDrop(pending.role)
+})
+
+onBeforeUnmount(() => {
+  if (settleTimer) clearTimeout(settleTimer)
+})
 
 function toggleItemRole(item: CaptureItemSummary) {
   if (pointerDrag.consumeSuppressedClick() || props.busy) return
@@ -297,11 +338,20 @@ function statusLabel(batch: CaptureBatchSummary) {
           <div><h2>开始一批新采集</h2><p>科目可以先留空，手机或整理时再补。</p></div>
         </div>
         <form @submit.prevent="createBatch">
-          <input
+          <select
             v-model="newSubject"
-            maxlength="40"
-            placeholder="科目，例如：数学（可选）"
           >
+            <option value="">
+              暂不设置科目
+            </option>
+            <option
+              v-for="subject in subjectOptions"
+              :key="subject"
+              :value="subject"
+            >
+              {{ subject }}
+            </option>
+          </select>
           <button
             type="submit"
             :disabled="busy"
@@ -638,11 +688,20 @@ function statusLabel(batch: CaptureBatchSummary) {
         <div class="collecting-copy">
           <Smartphone :size="25" /><div><h2>采集阶段</h2><p>手机和电脑新图片会继续进入末尾；结束采集后才开放自动分组和拖拽。</p></div>
         </div>
-        <label>批次科目<input
+        <label>批次科目<select
           v-model="batchSubject"
-          maxlength="40"
-          placeholder="例如：数学"
-        ></label>
+        >
+          <option value="">
+            暂不设置科目
+          </option>
+          <option
+            v-for="subject in subjectOptions"
+            :key="subject"
+            :value="subject"
+          >
+            {{ subject }}
+          </option>
+        </select></label>
         <button
           type="button"
           :disabled="busy || !detail.items.length"
@@ -659,6 +718,25 @@ function statusLabel(batch: CaptureBatchSummary) {
       </section>
 
       <template v-else-if="detail.batch.state === 'organizing'">
+        <section
+          class="batch-subject-bar"
+          aria-label="整批科目"
+        >
+          <div><p>整批科目</p><strong>{{ detail.batch.subject || '尚未设置' }}</strong><span>选择一次，当前批次所有题卡立即统一；单卡仍可覆盖。</span></div>
+          <div class="batch-subject-options">
+            <button
+              v-for="subject in subjectOptions"
+              :key="subject"
+              type="button"
+              :class="{ selected: detail.batch.subject === subject }"
+              :disabled="busy"
+              @click="emit('assignBatchSubject', subject)"
+            >
+              {{ subject }}
+            </button>
+          </div>
+        </section>
+
         <section class="layout-bar">
           <div class="layout-heading">
             <Sparkles :size="19" /><div><h2>顺序模板</h2><p>模板只按图片顺序分组，可撤销重做，不识别图片内容。</p></div>
@@ -772,16 +850,24 @@ function statusLabel(batch: CaptureBatchSummary) {
                 :previews="previews"
                 :selected="draft.id === selectedDraftId"
                 :busy="busy"
+                :subject-options="subjectOptions"
+                :drop-role="pointerDrag.drag.hoveredTarget?.kind === 'card' && pointerDrag.drag.hoveredTarget.draftId === draft.id ? draggedRole : null"
+                :settled="settledDraftId === draft.id"
                 @select="selectedDraftId = $event"
                 @preview="emit('preview', $event)"
                 @pointer-start="pointerDrag.start"
                 @return-item="itemId => emit('moveItem', { itemId, targetDraftId: null, targetRole: null, targetPosition: 0 })"
                 @change-item-role="(itemId, targetRole, targetPosition) => emit('moveItem', { itemId, targetDraftId: draft.id, targetRole, targetPosition })"
                 @delete-draft="requestDeleteDraft"
+                @change-subject="subject => emit('updateDraft', draft, subject, draft.tags, draft.note)"
               />
             </TransitionGroup>
             <div
               class="new-card-drop"
+              :class="{
+                'is-drop-question': pointerDrag.drag.hoveredTarget?.kind === 'new-card' && draggedRole === 'question',
+                'is-drop-answer': pointerDrag.drag.hoveredTarget?.kind === 'new-card' && draggedRole === 'answer',
+              }"
               data-capture-drop="new-card"
             >
               <Plus :size="22" />
@@ -794,14 +880,8 @@ function statusLabel(batch: CaptureBatchSummary) {
               class="card-inspector"
               aria-label="当前题卡信息"
             >
-              <header><div><p>当前题卡</p><h3>补充科目、标签与笔记</h3></div><span>修改后自动保存</span></header>
+              <header><div><p>当前题卡</p><h3>补充标签与笔记</h3></div><span>科目已移到卡片顶部 · 修改后自动保存</span></header>
               <div class="inspector-fields">
-                <label><span>科目</span><input
-                  v-model="draftSubject"
-                  maxlength="40"
-                  placeholder="必填，例如：数学"
-                  @change="saveSelectedDraft"
-                ></label>
                 <label><span>标签</span><input
                   v-model="draftTags"
                   maxlength="200"
@@ -824,6 +904,7 @@ function statusLabel(batch: CaptureBatchSummary) {
           <div
             v-if="pointerDrag.drag.active"
             class="capture-drag-ghost"
+            :class="`is-${draggedRole}`"
             :style="pointerDrag.style.value"
             aria-hidden="true"
           >
@@ -877,7 +958,7 @@ h1 { margin: 0; font-size: clamp(42px,5vw,64px); letter-spacing: -.055em; line-h
 .capacity-note { display: inline-flex; gap: 8px; align-items: center; padding: 10px 14px; color: #50665d; border: 1px solid rgba(33,51,45,.13); border-radius: 999px; background: rgba(255,253,247,.62); font-size: 12px; }
 .new-batch-card { display: flex; justify-content: space-between; gap: 28px; align-items: center; margin-top: 38px; padding: 24px 25px; border: 1px solid var(--line); border-radius: 5px 20px 20px; background: rgba(255,253,247,.72); box-shadow: var(--shadow-soft); }
 .new-batch-copy { display: flex; gap: 13px; align-items: center; }.round-icon { display: grid; width: 42px; height: 42px; place-items: center; color: var(--paper); border-radius: 50%; background: var(--green-deep); }.new-batch-card h2, .new-batch-card p { margin: 0; }.new-batch-card h2 { font-size: 19px; }.new-batch-card p { margin-top: 4px; color: var(--ink-muted); font-size: 12px; }
-.new-batch-card form { display: flex; gap: 9px; }.new-batch-card input { width: 240px; }.new-batch-card button, .capture-toolbar button, .collecting-panel>button, .layout-bar>button, .commit-dock button { display: inline-flex; gap: 8px; align-items: center; justify-content: center; min-height: 43px; padding: 0 17px; color: var(--paper); border: 0; border-radius: 999px; background: var(--green-deep); font-weight: 740; cursor: pointer; }
+.new-batch-card form { display: flex; gap: 9px; }.new-batch-card select { width: 240px; }.new-batch-card button, .capture-toolbar button, .collecting-panel>button, .layout-bar>button, .commit-dock button { display: inline-flex; gap: 8px; align-items: center; justify-content: center; min-height: 43px; padding: 0 17px; color: var(--paper); border: 0; border-radius: 999px; background: var(--green-deep); font-weight: 740; cursor: pointer; }
 input, textarea, select { box-sizing: border-box; padding: 10px 12px; color: var(--ink); border: 1px solid var(--line); border-radius: 10px; outline: none; background: rgba(246,241,231,.66); font: inherit; }.new-batch-card button:disabled, button:disabled { cursor: not-allowed; opacity: .4; }
 .batch-section { margin-top: 42px; }.section-heading { display: flex; justify-content: space-between; align-items: flex-end; }.section-heading p, .section-heading h2 { margin: 0; }.section-heading p { color: var(--cinnabar); font-size: 11px; font-weight: 760; letter-spacing: .12em; }.section-heading h2 { margin-top: 3px; font-size: 24px; }.section-heading>span { color: var(--ink-muted); font-size: 12px; }
 .batch-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 15px; margin-top: 17px; }.batch-card { position: relative; min-width: 0; border: 1px solid var(--line); border-radius: 4px 18px 18px; background: rgba(255,253,247,.7); box-shadow: var(--shadow-soft); transition: transform var(--motion-standard) var(--ease-standard), box-shadow var(--motion-standard); }.batch-card:hover { transform: translateY(-3px); box-shadow: 0 18px 36px rgba(34,48,43,.11); }.batch-open { width: 100%; padding: 24px; text-align: left; border: 0; background: transparent; cursor: pointer; }.batch-state { color: var(--cinnabar); font-size: 10px; font-weight: 800; letter-spacing: .1em; }.batch-card h3 { margin: 11px 0 6px; font-size: 22px; }.batch-card p { margin: 0; color: var(--ink-muted); font-size: 12px; }.batch-card strong { display: flex; gap: 4px; align-items: center; margin-top: 26px; color: var(--green-deep); font-size: 12px; }.batch-delete { position: absolute; top: 15px; right: 15px; display: grid; width: 32px; height: 32px; place-items: center; color: var(--ink-muted); border: 0; border-radius: 50%; background: transparent; cursor: pointer; }.batch-delete:hover { color: var(--cinnabar); background: rgba(185,88,63,.1); }
@@ -891,18 +972,21 @@ input, textarea, select { box-sizing: border-box; padding: 10px 12px; color: var
 .lan-permission-summary { display: flex; gap: 10px; align-items: center; margin: 0 0 14px; padding: 12px 13px; color: var(--green-deep); border: 1px solid rgba(33,51,45,.12); border-radius: 12px; background: var(--green-soft); }.lan-permission-summary p { display: grid; gap: 2px; margin: 0; }.lan-permission-summary strong { font-size: 11px; }.lan-permission-summary span { color: var(--ink-muted); font-size: 10px; line-height: 1.5; }.lan-troubleshooting { margin-top: 13px; color: var(--ink-muted); border: 1px solid rgba(33,51,45,.12); border-radius: 11px; background: rgba(232,221,199,.18); }.lan-troubleshooting summary { padding: 11px 13px; color: var(--green-deep); font-size: 11px; font-weight: 760; cursor: pointer; }.lan-troubleshooting ul { display: grid; gap: 7px; margin: 0; padding: 0 18px 14px 31px; font-size: 10px; line-height: 1.55; }.lan-primary:focus-visible,.lan-secondary:focus-visible,.lan-troubleshooting summary:focus-visible { outline: 3px solid rgba(185,88,63,.28); outline-offset: 2px; }
 @keyframes lan-pulse { to { transform: scale(1.35); opacity: .45; } }
 .layout-bar { display: flex; gap: 11px; align-items: end; margin-top: 25px; padding: 17px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,253,247,.66); }.layout-heading { display: flex; flex: 1; gap: 10px; align-items: flex-start; }.layout-heading h2,.layout-heading p { margin: 0; }.layout-heading h2 { font-size: 16px; }.layout-heading p { margin-top: 3px; color: var(--ink-muted); font-size: 10px; }.layout-bar select { min-width: 210px; }.layout-bar input { width: 78px; }
+.batch-subject-bar { display: grid; grid-template-columns: minmax(220px,.7fr) minmax(0,1.3fr); gap: 18px; align-items: center; margin-top: 24px; padding: 17px 19px; border: 1px solid rgba(33,51,45,.16); border-radius: 5px 17px 17px; background: linear-gradient(120deg,rgba(225,235,229,.7),rgba(255,253,247,.74)); box-shadow: var(--shadow-soft); }.batch-subject-bar p,.batch-subject-bar strong,.batch-subject-bar span { display: block; margin: 0; }.batch-subject-bar p { color: var(--cinnabar); font-size: 10px; font-weight: 840; letter-spacing: .12em; }.batch-subject-bar strong { margin-top: 3px; font-family: var(--font-serif); font-size: 21px; }.batch-subject-bar span { margin-top: 3px; color: var(--ink-muted); font-size: 10px; }.batch-subject-options { display: flex; gap: 7px; flex-wrap: wrap; justify-content: flex-end; }.batch-subject-options button { min-width: 52px; min-height: 34px; padding: 0 12px; color: var(--ink-muted); border: 1px solid var(--line); border-radius: 999px; background: var(--paper); cursor: pointer; transition: transform var(--motion-feedback),color var(--motion-feedback),background var(--motion-feedback); }.batch-subject-options button:hover { transform: translateY(-1px); }.batch-subject-options button.selected { color: var(--paper); border-color: var(--green-deep); background: var(--green-deep); }
 .organizer-grid { display:grid; grid-template-columns:minmax(290px,340px) minmax(0,1fr); gap:20px; align-items:start; margin-top:18px; }
 .unassigned-strip { position:sticky; top:18px; max-height:calc(100vh - 120px); padding:17px; overflow:auto; border:1px dashed rgba(33,51,45,.22); border-radius:16px; background:rgba(232,221,199,.24); box-shadow:0 12px 32px rgba(34,48,43,.06); }
 .strip-heading { display:flex; justify-content:space-between; align-items:center; }.strip-heading div { display:grid; gap:2px; }.strip-heading p { margin:0; font-weight:780; }.strip-heading span { color:var(--ink-muted); font-size:10px; }.strip-heading strong { color:var(--cinnabar); font-family:serif; font-size:20px; }
 .unassigned-gallery { display:grid; gap:12px; margin-top:13px; }.unassigned-item { min-width:0; padding:8px; border:2px solid rgba(33,51,45,.22); border-radius:14px; background:rgba(255,253,247,.72); transition:transform var(--motion-feedback) var(--ease-standard),border-color var(--motion-feedback),background var(--motion-feedback); }.unassigned-item:hover { transform:translateY(-2px); }.unassigned-item.is-question { border-color:rgba(33,51,45,.52); background:rgba(225,235,229,.7); }.unassigned-item.is-answer { border-color:rgba(185,88,63,.58); background:rgba(247,225,216,.68); }.role-chip { display:flex; justify-content:space-between; gap:8px; align-items:center; margin-top:7px; }.role-chip span { padding:5px 8px; color:var(--paper); border-radius:999px; background:var(--green-deep); font-size:9px; font-weight:850; }.is-answer .role-chip span { background:var(--cinnabar); }.role-chip small { color:var(--ink-muted); font-size:9px; }.strip-empty { display:flex; gap:7px; align-items:center; margin:15px 0 2px; color:#537064; font-size:11px; }
 .draft-stack { min-width:0; }.card-stack-heading { display:flex; justify-content:space-between; gap:18px; align-items:end; margin:0 2px 12px; }.card-stack-heading p,.card-stack-heading h2 { margin:0; }.card-stack-heading p { color:var(--cinnabar); font-size:10px; font-weight:800; letter-spacing:.12em; }.card-stack-heading h2 { margin-top:3px; font-size:20px; }.card-stack-heading>span { max-width:240px; color:var(--ink-muted); font-size:10px; text-align:right; }.draft-cards { display:grid; gap:18px; }
-.new-card-drop { display:grid; min-height:110px; margin-top:14px; padding:18px; place-content:center; justify-items:center; gap:5px; color:var(--green-deep); border:2px dashed rgba(33,51,45,.3); border-radius:16px; background:rgba(232,221,199,.17); text-align:center; transition:transform var(--motion-feedback),border-color var(--motion-feedback),background var(--motion-feedback); }.new-card-drop strong { font-size:13px; }.new-card-drop span { color:var(--ink-muted); font-size:10px; }.capture-pointer-dragging .new-card-drop { border-color:var(--cinnabar); background:rgba(185,88,63,.08); transform:scale(1.01); }.card-inspector { margin-top:16px; padding:17px; border:1px solid var(--line); border-radius:16px; background:rgba(255,253,247,.72); }.card-inspector header { display:flex; justify-content:space-between; gap:18px; align-items:end; }.card-inspector header p,.card-inspector header h3 { margin:0; }.card-inspector header p { color:var(--cinnabar); font-size:9px; font-weight:850; letter-spacing:.12em; }.card-inspector header h3 { margin-top:3px; font-size:16px; }.card-inspector header>span { color:var(--ink-muted); font-size:9px; }.inspector-fields { display:grid; grid-template-columns:.6fr .8fr 1.6fr; gap:9px; margin-top:12px; }.inspector-fields label { display:grid; gap:5px; color:var(--ink-muted); font-size:9px; font-weight:760; }.inspector-fields input,.inspector-fields textarea { width:100%; }.inspector-fields textarea { resize:vertical; }.capture-drag-ghost { position:fixed; z-index:200; top:0; left:0; display:grid; width:112px; height:88px; overflow:hidden; pointer-events:none; place-items:center; border:2px solid var(--cinnabar); border-radius:13px; color:var(--paper); background:var(--green-deep); box-shadow:0 18px 45px rgba(20,28,25,.3); will-change:transform; }.capture-drag-ghost img { width:100%; height:100%; object-fit:cover; opacity:.86; }.capture-drag-ghost span { position:absolute; right:6px; bottom:6px; padding:4px 7px; border-radius:999px; background:rgba(33,51,45,.86); font-size:9px; font-weight:800; }
+.new-card-drop { display:grid; min-height:110px; margin-top:14px; padding:18px; place-content:center; justify-items:center; gap:5px; color:var(--green-deep); border:2px dashed rgba(33,51,45,.3); border-radius:16px; background:rgba(232,221,199,.17); text-align:center; transition:transform var(--motion-feedback),border-color var(--motion-feedback),background var(--motion-feedback); }.new-card-drop strong { font-size:13px; }.new-card-drop span { color:var(--ink-muted); font-size:10px; }.capture-pointer-dragging .new-card-drop { border-color:var(--cinnabar); background:rgba(185,88,63,.08); transform:scale(1.01); }.card-inspector { margin-top:16px; padding:17px; border:1px solid var(--line); border-radius:16px; background:rgba(255,253,247,.72); }.card-inspector header { display:flex; justify-content:space-between; gap:18px; align-items:end; }.card-inspector header p,.card-inspector header h3 { margin:0; }.card-inspector header p { color:var(--cinnabar); font-size:9px; font-weight:850; letter-spacing:.12em; }.card-inspector header h3 { margin-top:3px; font-size:16px; }.card-inspector header>span { color:var(--ink-muted); font-size:9px; }.inspector-fields { display:grid; grid-template-columns:.8fr 1.6fr; gap:9px; margin-top:12px; }.inspector-fields label { display:grid; gap:5px; color:var(--ink-muted); font-size:9px; font-weight:760; }.inspector-fields input,.inspector-fields textarea { width:100%; }.inspector-fields textarea { resize:vertical; }.capture-drag-ghost { position:fixed; z-index:200; top:0; left:0; display:grid; width:112px; height:88px; overflow:hidden; pointer-events:none; place-items:center; border:2px solid var(--cinnabar); border-radius:13px; color:var(--paper); background:var(--green-deep); box-shadow:0 18px 45px rgba(20,28,25,.3); will-change:transform; }.capture-drag-ghost img { width:100%; height:100%; object-fit:cover; opacity:.86; }.capture-drag-ghost span { position:absolute; right:6px; bottom:6px; padding:4px 7px; border-radius:999px; background:rgba(33,51,45,.86); font-size:9px; font-weight:800; }
+.capture-pointer-dragging .new-card-drop:not(.is-drop-question):not(.is-drop-answer){border-color:rgba(33,51,45,.36);background:rgba(232,221,199,.22);transform:none}.new-card-drop.is-drop-question{color:var(--green-deep);border-color:rgba(33,51,45,.72);background:rgba(225,235,229,.82);transform:scale(1.012)}.new-card-drop.is-drop-answer{color:var(--cinnabar);border-color:rgba(185,88,63,.72);background:rgba(247,225,216,.82);transform:scale(1.012)}.capture-drag-ghost{transition:opacity var(--motion-feedback) var(--ease-standard);animation:capture-card-lift var(--motion-feedback) var(--ease-standard)}.capture-drag-ghost.is-question{border-color:rgba(33,51,45,.78);background:var(--green-deep)}.capture-drag-ghost.is-answer{border-color:rgba(185,88,63,.9);background:var(--cinnabar)}.capture-drag-ghost.is-answer span{background:rgba(125,55,39,.9)}
+@keyframes capture-card-lift{from{opacity:0}}
 .organizer-move-move,.organizer-move-enter-active,.organizer-move-leave-active { transition:transform var(--motion-page) var(--ease-standard),opacity var(--motion-standard) var(--ease-standard); }.organizer-move-enter-from,.organizer-move-leave-to { opacity:0; transform:translateY(10px) scale(.985); }.organizer-move-leave-active { position:absolute; }
 .commit-dock { position: sticky; z-index: 12; bottom: 14px; display: flex; justify-content: space-between; gap: 20px; align-items: center; margin-top: 22px; padding: 15px 17px; border: 1px solid rgba(33,51,45,.15); border-radius: 15px; background: rgba(246,241,231,.94); box-shadow: 0 16px 45px rgba(34,48,43,.18); backdrop-filter: blur(16px); }.commit-dock div { display: grid; grid-template-columns: auto auto; gap: 2px 9px; }.commit-dock p,.commit-dock strong,.commit-dock span { margin: 0; }.commit-dock p { color: var(--cinnabar); font-size: 9px; font-weight: 800; letter-spacing: .1em; }.commit-dock strong { font-size: 16px; }.commit-dock span { grid-column: 1/-1; color: var(--ink-muted); font-size: 10px; }
 .completed-panel { display: grid; min-height: 420px; place-content: center; justify-items: center; text-align: center; }.completed-panel h2 { margin: 14px 0 5px; }.completed-panel p { margin: 0; color: var(--ink-muted); }.completed-panel button { margin-top: 18px; padding: 10px 16px; color: var(--paper); border: 0; border-radius: 999px; background: var(--green-deep); }
-@media (max-width: 980px) { .batch-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }.collecting-panel { grid-template-columns: 1fr; }.layout-bar { align-items: stretch; flex-wrap: wrap; }.lan-session-grid { grid-template-columns: 1fr; }.qr-paper { width: min(320px,100%); margin: auto; } }
+@media (max-width: 980px) { .batch-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }.collecting-panel { grid-template-columns: 1fr; }.layout-bar { align-items: stretch; flex-wrap: wrap; }.lan-session-grid { grid-template-columns: 1fr; }.qr-paper { width: min(320px,100%); margin: auto; }.batch-subject-bar { grid-template-columns: 1fr; }.batch-subject-options { justify-content: flex-start; } }
 @media (max-width: 900px) { .organizer-grid { grid-template-columns:1fr; }.unassigned-strip { position:static; max-height:none; }.unassigned-gallery { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-@media (max-width: 720px) { .capture-next { padding: 30px 20px 110px; }.inbox-hero,.workbench-header,.new-batch-card { align-items: stretch; flex-direction: column; }.new-batch-card form,.capture-toolbar { grid-template-columns: 1fr; flex-direction: column; }.new-batch-card input { width: 100%; }.batch-grid { grid-template-columns: 1fr; }.capture-toolbar { display: grid; }.workbench-stats { align-self: stretch; }.workbench-stats span { flex: 1; }.layout-bar select { min-width: 100%; }.commit-dock { align-items: stretch; flex-direction: column; }.commit-dock button { width: 100%; }.lan-dialog { padding: 28px 20px; }.lan-dialog h2 { font-size: 28px; }.lan-actions>* { width: 100%; } }
+@media (max-width: 720px) { .capture-next { padding: 30px 20px 110px; }.inbox-hero,.workbench-header,.new-batch-card { align-items: stretch; flex-direction: column; }.new-batch-card form,.capture-toolbar { grid-template-columns: 1fr; flex-direction: column; }.new-batch-card select { width: 100%; }.batch-grid { grid-template-columns: 1fr; }.capture-toolbar { display: grid; }.workbench-stats { align-self: stretch; }.workbench-stats span { flex: 1; }.layout-bar select { min-width: 100%; }.commit-dock { align-items: stretch; flex-direction: column; }.commit-dock button { width: 100%; }.lan-dialog { padding: 28px 20px; }.lan-dialog h2 { font-size: 28px; }.lan-actions>* { width: 100%; } }
 @media (max-width: 560px) { .unassigned-gallery { grid-template-columns:1fr; }.card-stack-heading { align-items:start; flex-direction:column; }.card-stack-heading>span { text-align:left; } }
-@media (prefers-reduced-motion: reduce) { .batch-card,.external-drop,.organizer-move-move,.organizer-move-enter-active,.organizer-move-leave-active { transition: none; }.lan-progress span { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .batch-card,.external-drop,.batch-subject-options button,.capture-drag-ghost,.new-card-drop,.organizer-move-move,.organizer-move-enter-active,.organizer-move-leave-active { transition: none; animation:none; }.lan-progress span { animation: none; } }
 </style>
