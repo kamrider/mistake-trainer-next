@@ -7,6 +7,10 @@ export const commands = {
 	backupCreate: () => typedError<AppResult<BackupSummary | null>, null>(__TAURI_INVOKE("backup_create")),
 	backupValidate: () => typedError<AppResult<BackupSummary | null>, null>(__TAURI_INVOKE("backup_validate")),
 	systemStatus: () => __TAURI_INVOKE<AppResult<SystemStatus>>("system_status"),
+	profileList: () => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_list"),
+	profileCreate: (input: ProfileNameInput) => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_create", { input }),
+	profileRename: (input: ProfileRenameInput) => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_rename", { input }),
+	profileSelect: (profileId: string) => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_select", { profileId }),
 	libraryContext: () => __TAURI_INVOKE<AppResult<LibraryContext>>("library_context"),
 	problemDetail: (problemId: string) => __TAURI_INVOKE<AppResult<ProblemDetail>>("problem_detail", { problemId }),
 	problemChangeStatus: (input: ProblemStatusInput) => __TAURI_INVOKE<AppResult<number>>("problem_change_status", { input }),
@@ -344,6 +348,28 @@ export type ProblemUpdateInput = {
 	problemId: string,
 	subject: string,
 	note: string,
+};
+
+export type ProfileNameInput = {
+	name: string,
+};
+
+export type ProfileOverview = {
+	activeProfileId: string,
+	profiles: ProfileSummary[],
+};
+
+export type ProfileRenameInput = {
+	profileId: string,
+	name: string,
+};
+
+export type ProfileSummary = {
+	id: string,
+	name: string,
+	createdAtUtcMs: number | null,
+	updatedAtUtcMs: number | null,
+	revision: number,
 };
 
 export type ReportSummary = {

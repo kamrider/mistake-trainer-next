@@ -282,6 +282,9 @@ fn validation_requires_review_sessions_exactly_when_the_schema_requires_it() {
     {
         let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
         database
+            .execute("DROP TABLE account_preferences", [])
+            .unwrap();
+        database
             .execute("DROP TABLE profile_preferences", [])
             .unwrap();
         for table in [
@@ -324,6 +327,54 @@ fn validation_requires_all_capture_tables_for_schema_v3() {
     assert!(matches!(
         validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID),
         Err(BackupError::Integrity)
+    ));
+}
+
+#[test]
+fn validation_requires_account_preferences_for_schema_v6_and_rejects_foreign_rows() {
+    let missing_table_fixture = fixture();
+    let (_, package) = created_package(&missing_table_fixture);
+    {
+        let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        database
+            .execute("DROP TABLE account_preferences", [])
+            .unwrap();
+        database
+            .pragma_update(None, "journal_mode", "DELETE")
+            .unwrap();
+    }
+    refresh_database_manifest(&package, 6);
+    assert!(matches!(
+        validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID),
+        Err(BackupError::Integrity)
+    ));
+
+    let fixture = fixture();
+    {
+        let connection = fixture.connection.lock().unwrap();
+        connection.execute(
+            "INSERT INTO learner_profiles(id, account_id, name, created_at_utc_ms, updated_at_utc_ms)
+             VALUES('foreign-profile', 'foreign-account', 'foreign', 1, 1)",
+            [],
+        ).unwrap();
+        connection
+            .execute(
+                "INSERT INTO account_preferences(account_id, active_profile_id, updated_at_utc_ms)
+             VALUES('foreign-account', 'foreign-profile', 1)",
+                [],
+            )
+            .unwrap();
+    }
+    assert!(matches!(
+        create_backup(
+            &fixture.connection,
+            &fixture.blob_root,
+            DATABASE_KEY,
+            ACCOUNT_ID,
+            fixture.destination.path(),
+            1_725_000_000_000,
+        ),
+        Err(BackupError::ForeignAccountData)
     ));
 }
 

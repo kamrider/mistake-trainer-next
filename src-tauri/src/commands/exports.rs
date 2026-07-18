@@ -27,11 +27,12 @@ pub struct ExportCreateInput {
 pub fn export_trash_list(
     state: State<'_, LibraryRuntime>,
 ) -> AppResult<Vec<DeletedExportSnapshotSummary>> {
+    let profile = state.active_profile();
     let connection = match state.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return export_error("library_lock_poisoned"),
     };
-    match list_deleted_export_snapshots(&connection, state.account_id(), state.profile_id()) {
+    match list_deleted_export_snapshots(&connection, state.account_id(), &profile.id) {
         Ok(snapshots) => AppResult::success(snapshots),
         Err(_) => export_error("export_trash_list_failed"),
     }
@@ -40,11 +41,12 @@ pub fn export_trash_list(
 #[tauri::command]
 #[specta::specta]
 pub fn export_list(state: State<'_, LibraryRuntime>) -> AppResult<Vec<ExportSnapshotSummary>> {
+    let profile = state.active_profile();
     let connection = match state.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return export_error("library_lock_poisoned"),
     };
-    match list_export_snapshots(&connection, state.account_id(), state.profile_id()) {
+    match list_export_snapshots(&connection, state.account_id(), &profile.id) {
         Ok(snapshots) => AppResult::success(snapshots),
         Err(_) => export_error("export_list_failed"),
     }
@@ -56,6 +58,7 @@ pub fn export_create(
     state: State<'_, LibraryRuntime>,
     input: ExportCreateInput,
 ) -> AppResult<ExportSnapshotSummary> {
+    let profile = state.active_profile();
     let mut connection = match state.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return export_error("library_lock_poisoned"),
@@ -64,7 +67,7 @@ pub fn export_create(
         &mut connection,
         CreateExportSnapshot {
             account_id: state.account_id().to_owned(),
-            profile_id: state.profile_id().to_owned(),
+            profile_id: profile.id,
             title: input.title,
             problem_ids: input.problem_ids,
             layout: input.layout,
@@ -82,6 +85,7 @@ pub fn export_generate(
     state: State<'_, LibraryRuntime>,
     snapshot_id: String,
 ) -> AppResult<Option<GeneratedExportSummary>> {
+    let profile = state.active_profile();
     let Some(destination) = rfd::FileDialog::new()
         .set_title("选择导出文件夹")
         .pick_folder()
@@ -98,7 +102,7 @@ pub fn export_generate(
             &state.blob_root,
             &state.asset_key,
             state.account_id(),
-            state.profile_id(),
+            &profile.id,
             &snapshot_id,
         ) {
             Ok(prepared) => prepared,
@@ -114,6 +118,7 @@ pub fn export_generate(
 #[tauri::command]
 #[specta::specta]
 pub fn export_delete(state: State<'_, LibraryRuntime>, snapshot_id: String) -> AppResult<bool> {
+    let profile = state.active_profile();
     let mut connection = match state.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return export_error("library_lock_poisoned"),
@@ -121,7 +126,7 @@ pub fn export_delete(state: State<'_, LibraryRuntime>, snapshot_id: String) -> A
     match delete_export_snapshot(
         &mut connection,
         state.account_id(),
-        state.profile_id(),
+        &profile.id,
         &snapshot_id,
         current_utc_millis(),
     ) {
@@ -133,6 +138,7 @@ pub fn export_delete(state: State<'_, LibraryRuntime>, snapshot_id: String) -> A
 #[tauri::command]
 #[specta::specta]
 pub fn export_restore(state: State<'_, LibraryRuntime>, snapshot_id: String) -> AppResult<bool> {
+    let profile = state.active_profile();
     let mut connection = match state.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return export_error("library_lock_poisoned"),
@@ -140,7 +146,7 @@ pub fn export_restore(state: State<'_, LibraryRuntime>, snapshot_id: String) -> 
     match restore_export_snapshot(
         &mut connection,
         state.account_id(),
-        state.profile_id(),
+        &profile.id,
         &snapshot_id,
         current_utc_millis(),
     ) {
@@ -164,10 +170,5 @@ fn export_error<T>(code: &str) -> AppResult<T> {
         "export_list_failed" | "export_trash_list_failed" => "导出快照没有读取成功，请稍后重试。",
         _ => "导出快照没有保存，请检查选题后重试。",
     };
-    AppResult::failure(
-        code,
-        user_message,
-        true,
-        Uuid::now_v7().to_string(),
-    )
+    AppResult::failure(code, user_message, true, Uuid::now_v7().to_string())
 }

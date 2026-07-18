@@ -37,9 +37,10 @@ pub struct ProblemStatusInput {
 }
 
 pub fn library_context_for(runtime: &LibraryRuntime) -> AppResult<LibraryContext> {
+    let profile = runtime.active_profile();
     AppResult::success(LibraryContext {
-        profile_id: runtime.profile_id().to_owned(),
-        profile_name: runtime.profile_name().to_owned(),
+        profile_id: profile.id,
+        profile_name: profile.name,
         storage: "ready",
     })
 }
@@ -49,6 +50,7 @@ pub fn problem_list_for(
     status: ProblemStatusFilter,
     search: Option<String>,
 ) -> AppResult<Vec<ProblemSummary>> {
+    let profile = runtime.active_profile();
     let connection = match runtime.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return internal_library_error("library_lock_poisoned"),
@@ -57,7 +59,7 @@ pub fn problem_list_for(
         &connection,
         ProblemListQuery {
             account_id: runtime.account_id().to_owned(),
-            profile_id: runtime.profile_id().to_owned(),
+            profile_id: profile.id,
             status,
             search,
         },
@@ -67,7 +69,11 @@ pub fn problem_list_for(
     }
 }
 
-pub fn problem_detail_for(runtime: &LibraryRuntime, problem_id: String) -> AppResult<ProblemDetail> {
+pub fn problem_detail_for(
+    runtime: &LibraryRuntime,
+    problem_id: String,
+) -> AppResult<ProblemDetail> {
+    let profile = runtime.active_profile();
     let connection = match runtime.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return internal_library_error("library_lock_poisoned"),
@@ -78,7 +84,7 @@ pub fn problem_detail_for(runtime: &LibraryRuntime, problem_id: String) -> AppRe
         &runtime.asset_key,
         ProblemDetailQuery {
             account_id: runtime.account_id().to_owned(),
-            profile_id: runtime.profile_id().to_owned(),
+            profile_id: profile.id,
             problem_id,
         },
     ) {
@@ -92,6 +98,7 @@ pub fn problem_update_for(
     input: ProblemUpdateInput,
     now_utc_ms: i64,
 ) -> AppResult<bool> {
+    let profile = runtime.active_profile();
     let mut connection = match runtime.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return internal_library_error("library_lock_poisoned"),
@@ -100,7 +107,7 @@ pub fn problem_update_for(
         &mut connection,
         UpdateProblem {
             account_id: runtime.account_id().to_owned(),
-            profile_id: runtime.profile_id().to_owned(),
+            profile_id: profile.id,
             problem_id: input.problem_id,
             subject: input.subject,
             note: input.note,
@@ -117,6 +124,7 @@ pub fn problem_change_status_for(
     input: ProblemStatusInput,
     now_utc_ms: i64,
 ) -> AppResult<i32> {
+    let profile = runtime.active_profile();
     let mut connection = match runtime.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return internal_library_error("library_lock_poisoned"),
@@ -125,7 +133,7 @@ pub fn problem_change_status_for(
         &mut connection,
         ChangeProblemStatus {
             account_id: runtime.account_id().to_owned(),
-            profile_id: runtime.profile_id().to_owned(),
+            profile_id: profile.id,
             problem_ids: input.problem_ids,
             target_status: input.target_status,
             now_utc_ms,

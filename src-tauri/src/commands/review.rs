@@ -33,6 +33,7 @@ pub fn review_queue_for(
     problem_id: Option<String>,
     now_utc_ms: i64,
 ) -> AppResult<Vec<ReviewQueueItem>> {
+    let profile = runtime.active_profile();
     let mut connection = match runtime.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return internal_review_error("library_lock_poisoned"),
@@ -41,7 +42,7 @@ pub fn review_queue_for(
         &mut connection,
         ReviewQueueQuery {
             account_id: runtime.account_id().to_owned(),
-            profile_id: runtime.profile_id().to_owned(),
+            profile_id: profile.id,
             problem_id,
             now_utc_ms,
         },
@@ -65,6 +66,7 @@ pub fn review_submit_for(
     input: ReviewSubmitInput,
     now_utc_ms: i64,
 ) -> AppResult<ReviewSubmission> {
+    let profile = runtime.active_profile();
     let mut connection = match runtime.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return internal_review_error("library_lock_poisoned"),
@@ -73,7 +75,7 @@ pub fn review_submit_for(
         &mut connection,
         SubmitReview {
             account_id: runtime.account_id().to_owned(),
-            profile_id: runtime.profile_id().to_owned(),
+            profile_id: profile.id,
             problem_id: input.problem_id,
             device_id: runtime.device_id().to_owned(),
             rating: input.rating,

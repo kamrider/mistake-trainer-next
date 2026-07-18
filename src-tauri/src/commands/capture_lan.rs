@@ -57,6 +57,8 @@ pub fn capture_lan_start(
     manager: State<'_, CaptureLanManager>,
     input: CaptureLanStartInput,
 ) -> AppResult<CaptureLanSession> {
+    let _transition = runtime.lock_profile_transition();
+    let profile = runtime.active_profile();
     let preflight = match inspect_capture_lan_preflight() {
         Ok(value) => value,
         Err(error) => return firewall_error(&error),
@@ -84,7 +86,7 @@ pub fn capture_lan_start(
             blob_root: runtime.blob_root.clone(),
             asset_key: runtime.asset_key,
             account_id: runtime.account_id().to_owned(),
-            profile_id: runtime.profile_id().to_owned(),
+            profile_id: profile.id,
             batch_id: input.batch_id,
             notifier,
         },

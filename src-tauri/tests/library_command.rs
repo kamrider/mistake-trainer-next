@@ -37,7 +37,7 @@ fn commands_use_runtime_identity_instead_of_accepting_account_or_profile_ids() {
         &runtime.asset_key,
         CreateProblem {
             account_id: runtime.account_id().to_owned(),
-            profile_id: runtime.profile_id().to_owned(),
+            profile_id: runtime.active_profile().id,
             subject: "数学".to_owned(),
             note: "奇函数".to_owned(),
             assets: vec![CaptureAsset {

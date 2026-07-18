@@ -63,7 +63,10 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             transaction.execute_batch(include_str!(
                 "../../migrations/0005_profile_preferences.sql"
             ))?;
-            transaction.pragma_update(None, "user_version", 5)?;
+            transaction.execute_batch(include_str!(
+                "../../migrations/0006_account_preferences.sql"
+            ))?;
+            transaction.pragma_update(None, "user_version", 6)?;
             transaction.commit()?;
             Ok(())
         }
@@ -77,7 +80,10 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             transaction.execute_batch(include_str!(
                 "../../migrations/0005_profile_preferences.sql"
             ))?;
-            transaction.pragma_update(None, "user_version", 5)?;
+            transaction.execute_batch(include_str!(
+                "../../migrations/0006_account_preferences.sql"
+            ))?;
+            transaction.pragma_update(None, "user_version", 6)?;
             transaction.commit()?;
             Ok(())
         }
@@ -90,7 +96,10 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             transaction.execute_batch(include_str!(
                 "../../migrations/0005_profile_preferences.sql"
             ))?;
-            transaction.pragma_update(None, "user_version", 5)?;
+            transaction.execute_batch(include_str!(
+                "../../migrations/0006_account_preferences.sql"
+            ))?;
+            transaction.pragma_update(None, "user_version", 6)?;
             transaction.commit()?;
             Ok(())
         }
@@ -102,7 +111,10 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             transaction.execute_batch(include_str!(
                 "../../migrations/0005_profile_preferences.sql"
             ))?;
-            transaction.pragma_update(None, "user_version", 5)?;
+            transaction.execute_batch(include_str!(
+                "../../migrations/0006_account_preferences.sql"
+            ))?;
+            transaction.pragma_update(None, "user_version", 6)?;
             transaction.commit()?;
             Ok(())
         }
@@ -111,11 +123,23 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             transaction.execute_batch(include_str!(
                 "../../migrations/0005_profile_preferences.sql"
             ))?;
-            transaction.pragma_update(None, "user_version", 5)?;
+            transaction.execute_batch(include_str!(
+                "../../migrations/0006_account_preferences.sql"
+            ))?;
+            transaction.pragma_update(None, "user_version", 6)?;
             transaction.commit()?;
             Ok(())
         }
-        5 => Ok(()),
+        5 => {
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(include_str!(
+                "../../migrations/0006_account_preferences.sql"
+            ))?;
+            transaction.pragma_update(None, "user_version", 6)?;
+            transaction.commit()?;
+            Ok(())
+        }
+        6 => Ok(()),
         newer => Err(DatabaseError::UnsupportedSchema(newer)),
     }
 }

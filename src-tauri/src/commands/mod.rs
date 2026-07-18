@@ -6,5 +6,6 @@ pub mod insights;
 pub mod legacy;
 pub mod library;
 pub mod preferences;
+pub mod profiles;
 pub mod review;
 pub mod system;

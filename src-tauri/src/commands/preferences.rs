@@ -23,11 +23,12 @@ pub struct SubjectPreferencesInput {
 #[tauri::command]
 #[specta::specta]
 pub fn subject_preferences_get(state: State<'_, LibraryRuntime>) -> AppResult<SubjectPreferences> {
+    let profile = state.active_profile();
     let connection = match state.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return preferences_error("library_lock_poisoned", None),
     };
-    match load_subject_preferences(&connection, state.account_id(), state.profile_id()) {
+    match load_subject_preferences(&connection, state.account_id(), &profile.id) {
         Ok(preferences) => AppResult::success(preferences),
         Err(error) => preferences_error(preferences_error_code(&error), Some(&error)),
     }
@@ -39,6 +40,7 @@ pub fn subject_preferences_save(
     state: State<'_, LibraryRuntime>,
     input: SubjectPreferencesInput,
 ) -> AppResult<SubjectPreferences> {
+    let profile = state.active_profile();
     let connection = match state.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return preferences_error("library_lock_poisoned", None),
@@ -51,7 +53,7 @@ pub fn subject_preferences_save(
     match save_subject_preferences(
         &connection,
         state.account_id(),
-        state.profile_id(),
+        &profile.id,
         save,
         current_utc_millis(),
     ) {

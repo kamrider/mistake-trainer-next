@@ -17,6 +17,7 @@ pub fn dashboard_overview(
     state: State<'_, LibraryRuntime>,
     utc_offset_minutes: i32,
 ) -> AppResult<DashboardOverview> {
+    let profile = state.active_profile();
     let connection = match state.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return insights_error("library_lock_poisoned"),
@@ -24,7 +25,7 @@ pub fn dashboard_overview(
     match load_dashboard_overview(
         &connection,
         state.account_id(),
-        state.profile_id(),
+        &profile.id,
         current_utc_millis(),
         utc_offset_minutes,
     ) {
@@ -42,6 +43,7 @@ pub fn dashboard_overview(
 #[tauri::command]
 #[specta::specta]
 pub fn report_summary(state: State<'_, LibraryRuntime>) -> AppResult<ReportSummary> {
+    let profile = state.active_profile();
     let connection = match state.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return insights_error("library_lock_poisoned"),
@@ -49,7 +51,7 @@ pub fn report_summary(state: State<'_, LibraryRuntime>) -> AppResult<ReportSumma
     match load_report_summary(
         &connection,
         state.account_id(),
-        state.profile_id(),
+        &profile.id,
         current_utc_millis(),
     ) {
         Ok(summary) => AppResult::success(summary),
@@ -60,11 +62,12 @@ pub fn report_summary(state: State<'_, LibraryRuntime>) -> AppResult<ReportSumma
 #[tauri::command]
 #[specta::specta]
 pub fn settings_overview(state: State<'_, LibraryRuntime>) -> AppResult<SettingsOverview> {
+    let profile = state.active_profile();
     let connection = match state.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return insights_error("library_lock_poisoned"),
     };
-    match load_settings_overview(&connection, state.account_id(), state.profile_id()) {
+    match load_settings_overview(&connection, state.account_id(), &profile.id) {
         Ok(overview) => AppResult::success(overview),
         Err(_) => insights_error("settings_overview_failed"),
     }

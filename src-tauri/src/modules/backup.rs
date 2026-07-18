@@ -20,7 +20,7 @@ use crate::infrastructure::{
 };
 
 const FORMAT_VERSION: i32 = 1;
-const CURRENT_SCHEMA_VERSION: i64 = 5;
+const CURRENT_SCHEMA_VERSION: i64 = 6;
 const DATABASE_FILE: &str = "library.db";
 const MANIFEST_FILE: &str = "manifest.json";
 const ASSETS_DIRECTORY: &str = "assets";
@@ -554,6 +554,30 @@ fn ensure_single_account(
             |row| row.get(0),
         )?;
         if has_foreign_preferences != 0 {
+            return Err(BackupError::ForeignAccountData);
+        }
+    }
+    let has_account_preferences = table_exists(connection, "account_preferences")?;
+    if (schema_version < 6 && has_account_preferences)
+        || (schema_version >= 6 && !has_account_preferences)
+    {
+        return Err(BackupError::Integrity);
+    }
+    if has_account_preferences {
+        let invalid_account_preferences: i64 = connection.query_row(
+            "SELECT EXISTS(
+               SELECT 1
+               FROM account_preferences ap
+               LEFT JOIN learner_profiles p ON p.id = ap.active_profile_id
+               WHERE ap.account_id <> ?1
+                  OR p.id IS NULL
+                  OR p.account_id <> ap.account_id
+               LIMIT 1
+             )",
+            [account_id],
+            |row| row.get(0),
+        )?;
+        if invalid_account_preferences != 0 {
             return Err(BackupError::ForeignAccountData);
         }
     }

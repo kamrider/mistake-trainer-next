@@ -125,6 +125,7 @@ pub fn capture_batch_create_for(
     input: CaptureBatchCreateInput,
     now_utc_ms: i64,
 ) -> AppResult<CaptureBatchSummary> {
+    let profile = runtime.active_profile();
     let mut connection = match runtime.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return capture_error("library_lock_poisoned", None),
@@ -133,7 +134,7 @@ pub fn capture_batch_create_for(
         &mut connection,
         CreateCaptureBatch {
             account_id: runtime.account_id().to_owned(),
-            profile_id: runtime.profile_id().to_owned(),
+            profile_id: profile.id,
             subject: input.subject,
             state: CaptureBatchState::Collecting,
             now_utc_ms,
@@ -142,6 +143,7 @@ pub fn capture_batch_create_for(
 }
 
 pub fn capture_batch_list_for(runtime: &LibraryRuntime) -> AppResult<Vec<CaptureBatchSummary>> {
+    let profile = runtime.active_profile();
     let connection = match runtime.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return capture_error("library_lock_poisoned", None),
@@ -149,7 +151,7 @@ pub fn capture_batch_list_for(runtime: &LibraryRuntime) -> AppResult<Vec<Capture
     result_or_error(list_capture_batches(
         &connection,
         runtime.account_id(),
-        runtime.profile_id(),
+        &profile.id,
     ))
 }
 
@@ -157,6 +159,7 @@ pub fn capture_batch_detail_for(
     runtime: &LibraryRuntime,
     batch_id: &str,
 ) -> AppResult<CaptureBatchDetail> {
+    let profile = runtime.active_profile();
     let connection = match runtime.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return capture_error("library_lock_poisoned", None),
@@ -164,7 +167,7 @@ pub fn capture_batch_detail_for(
     result_or_error(get_capture_batch_detail(
         &connection,
         runtime.account_id(),
-        runtime.profile_id(),
+        &profile.id,
         batch_id,
     ))
 }
@@ -174,6 +177,7 @@ pub fn capture_batch_update_for(
     input: CaptureBatchUpdateInput,
     now_utc_ms: i64,
 ) -> AppResult<CaptureBatchSummary> {
+    let profile = runtime.active_profile();
     let mut connection = match runtime.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return capture_error("library_lock_poisoned", None),
@@ -181,7 +185,7 @@ pub fn capture_batch_update_for(
     result_or_error(update_capture_batch(
         &mut connection,
         runtime.account_id(),
-        runtime.profile_id(),
+        &profile.id,
         &input.batch_id,
         input.expected_revision,
         &input.subject,
@@ -195,6 +199,7 @@ pub fn capture_import_bytes_for(
     input: CaptureImportBytesInput,
     now_utc_ms: i64,
 ) -> AppResult<CaptureItemSummary> {
+    let profile = runtime.active_profile();
     let mut connection = match runtime.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return capture_error("library_lock_poisoned", None),
@@ -205,7 +210,7 @@ pub fn capture_import_bytes_for(
         &runtime.asset_key,
         IngestCaptureItem {
             account_id: runtime.account_id().to_owned(),
-            profile_id: runtime.profile_id().to_owned(),
+            profile_id: profile.id,
             batch_id: input.batch_id,
             client_upload_id: input.client_upload_id,
             source_name: input.source_name,
@@ -222,6 +227,7 @@ pub fn capture_import_paths_for(
     paths: Vec<std::path::PathBuf>,
     now_utc_ms: i64,
 ) -> AppResult<CaptureImportReport> {
+    let profile = runtime.active_profile();
     let mut prepared = Vec::with_capacity(paths.len());
     for (index, path) in paths.into_iter().enumerate() {
         let bytes = match read_capture_file(&path) {
@@ -252,7 +258,7 @@ pub fn capture_import_paths_for(
             &runtime.asset_key,
             IngestCaptureItem {
                 account_id: runtime.account_id().to_owned(),
-                profile_id: runtime.profile_id().to_owned(),
+                profile_id: profile.id.clone(),
                 batch_id: batch_id.to_owned(),
                 client_upload_id: Uuid::now_v7().to_string(),
                 source_name,
@@ -318,6 +324,7 @@ pub fn capture_batch_assign_subject(
     input: CaptureBatchSubjectInput,
 ) -> AppResult<CaptureBatchDetail> {
     let batch_id = input.batch_id.clone();
+    let profile = state.active_profile();
     let mut connection = match state.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return capture_error("library_lock_poisoned", None),
@@ -325,7 +332,7 @@ pub fn capture_batch_assign_subject(
     let result = result_or_error(assign_capture_batch_subject(
         &mut connection,
         state.account_id(),
-        state.profile_id(),
+        &profile.id,
         &input.batch_id,
         input.expected_revision,
         &input.subject,
@@ -342,6 +349,7 @@ pub fn capture_batch_discard(
     state: State<'_, LibraryRuntime>,
     batch_id: String,
 ) -> AppResult<bool> {
+    let profile = state.active_profile();
     let mut connection = match state.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return capture_error("library_lock_poisoned", None),
@@ -350,7 +358,7 @@ pub fn capture_batch_discard(
         &mut connection,
         &state.blob_root,
         state.account_id(),
-        state.profile_id(),
+        &profile.id,
         &batch_id,
     ) {
         Ok(()) => AppResult::success(true),
@@ -402,6 +410,7 @@ pub fn capture_item_preview(
     batch_id: String,
     item_id: String,
 ) -> AppResult<CaptureItemPreview> {
+    let profile = state.active_profile();
     let connection = match state.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return capture_error("library_lock_poisoned", None),
@@ -411,7 +420,7 @@ pub fn capture_item_preview(
         &state.blob_root,
         &state.asset_key,
         state.account_id(),
-        state.profile_id(),
+        &profile.id,
         &batch_id,
         &item_id,
     ))
@@ -426,6 +435,7 @@ pub fn capture_item_remove(
     expected_revision: u32,
     item_id: String,
 ) -> AppResult<CaptureBatchDetail> {
+    let profile = state.active_profile();
     let mut connection = match state.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return capture_error("library_lock_poisoned", None),
@@ -434,7 +444,7 @@ pub fn capture_item_remove(
         &mut connection,
         &state.blob_root,
         state.account_id(),
-        state.profile_id(),
+        &profile.id,
         &batch_id,
         expected_revision,
         &item_id,
@@ -452,6 +462,7 @@ pub fn capture_layout_apply(
     input: CaptureLayoutInput,
 ) -> AppResult<CaptureBatchDetail> {
     let batch_id = input.batch_id.clone();
+    let profile = state.active_profile();
     let mut connection = match state.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return capture_error("library_lock_poisoned", None),
@@ -460,7 +471,7 @@ pub fn capture_layout_apply(
         &mut connection,
         ApplyCaptureLayout {
             account_id: state.account_id().to_owned(),
-            profile_id: state.profile_id().to_owned(),
+            profile_id: profile.id,
             batch_id: input.batch_id,
             expected_revision: input.expected_revision,
             mode: input.mode,
@@ -482,6 +493,7 @@ pub fn capture_item_move(
     input: CaptureItemMoveInput,
 ) -> AppResult<CaptureBatchDetail> {
     let batch_id = input.batch_id.clone();
+    let profile = state.active_profile();
     let mut connection = match state.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return capture_error("library_lock_poisoned", None),
@@ -490,7 +502,7 @@ pub fn capture_item_move(
         &mut connection,
         MoveCaptureItem {
             account_id: state.account_id().to_owned(),
-            profile_id: state.profile_id().to_owned(),
+            profile_id: profile.id,
             batch_id: input.batch_id,
             expected_revision: input.expected_revision,
             item_id: input.item_id,
@@ -512,6 +524,7 @@ pub fn capture_item_stage_role(
     input: CaptureItemStageRoleInput,
 ) -> AppResult<CaptureBatchDetail> {
     let batch_id = input.batch_id.clone();
+    let profile = state.active_profile();
     let mut connection = match state.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return capture_error("library_lock_poisoned", None),
@@ -520,7 +533,7 @@ pub fn capture_item_stage_role(
         &mut connection,
         StageCaptureItemRole {
             account_id: state.account_id().to_owned(),
-            profile_id: state.profile_id().to_owned(),
+            profile_id: profile.id,
             batch_id: input.batch_id,
             expected_revision: input.expected_revision,
             item_id: input.item_id,
@@ -540,6 +553,7 @@ pub fn capture_card_merge(
     input: CaptureCardMergeInput,
 ) -> AppResult<CaptureBatchDetail> {
     let batch_id = input.batch_id.clone();
+    let profile = state.active_profile();
     let mut connection = match state.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return capture_error("library_lock_poisoned", None),
@@ -548,7 +562,7 @@ pub fn capture_card_merge(
         &mut connection,
         MergeCaptureCard {
             account_id: state.account_id().to_owned(),
-            profile_id: state.profile_id().to_owned(),
+            profile_id: profile.id,
             batch_id: input.batch_id,
             expected_revision: input.expected_revision,
             target_draft_id: input.target_draft_id,
@@ -570,6 +584,7 @@ pub fn capture_draft_delete(
     expected_revision: u32,
     draft_id: String,
 ) -> AppResult<CaptureBatchDetail> {
+    let profile = state.active_profile();
     let mut connection = match state.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return capture_error("library_lock_poisoned", None),
@@ -577,7 +592,7 @@ pub fn capture_draft_delete(
     let result = result_or_error(delete_capture_draft(
         &mut connection,
         state.account_id(),
-        state.profile_id(),
+        &profile.id,
         &batch_id,
         &draft_id,
         expected_revision,
@@ -595,6 +610,7 @@ pub fn capture_draft_update(
     input: CaptureDraftUpdateInput,
 ) -> AppResult<CaptureBatchDetail> {
     let batch_id = input.batch_id.clone();
+    let profile = state.active_profile();
     let mut connection = match state.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return capture_error("library_lock_poisoned", None),
@@ -603,7 +619,7 @@ pub fn capture_draft_update(
         &mut connection,
         UpdateCaptureDraft {
             account_id: state.account_id().to_owned(),
-            profile_id: state.profile_id().to_owned(),
+            profile_id: profile.id,
             batch_id: input.batch_id,
             expected_revision: input.expected_revision,
             draft_id: input.draft_id,
@@ -625,6 +641,7 @@ pub fn capture_commit_ready(
     batch_id: String,
     expected_revision: u32,
 ) -> AppResult<CaptureCommitReport> {
+    let profile = state.active_profile();
     let mut connection = match state.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return capture_error("library_lock_poisoned", None),
@@ -632,7 +649,7 @@ pub fn capture_commit_ready(
     let result = result_or_error(commit_ready_capture_drafts(
         &mut connection,
         state.account_id(),
-        state.profile_id(),
+        &profile.id,
         &batch_id,
         expected_revision,
         current_utc_millis(),

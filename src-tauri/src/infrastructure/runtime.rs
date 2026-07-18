@@ -1,7 +1,7 @@
 use std::{
     fmt::Write as _,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, MutexGuard, RwLock},
 };
 
 use rusqlite::{Connection, OptionalExtension};
@@ -10,7 +10,9 @@ use uuid::Uuid;
 
 use crate::{
     infrastructure::database::{DatabaseError, open_encrypted_database, run_migrations},
-    modules::profiles::{CreateProfile, ProfileUseCaseError, create_profile},
+    modules::profiles::{
+        CreateProfile, LearnerProfile, ProfileUseCaseError, create_profile, persist_active_profile,
+    },
 };
 
 const DATABASE_KEY: &str = "database-key";
@@ -60,8 +62,14 @@ pub struct LibraryRuntime {
     database_key: String,
     account_id: String,
     device_id: String,
-    profile_id: String,
-    profile_name: String,
+    active_profile: RwLock<ActiveProfile>,
+    profile_transition: Mutex<()>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActiveProfile {
+    pub id: String,
+    pub name: String,
 }
 
 impl std::fmt::Debug for LibraryRuntime {
@@ -74,8 +82,8 @@ impl std::fmt::Debug for LibraryRuntime {
             .field("database_key", &"<redacted>")
             .field("account_id", &"<redacted>")
             .field("device_id", &"<redacted>")
-            .field("profile_id", &"<redacted>")
-            .field("profile_name", &"<redacted>")
+            .field("active_profile", &"<redacted>")
+            .field("profile_transition", &"<coordination lock>")
             .finish()
     }
 }
@@ -85,20 +93,64 @@ impl LibraryRuntime {
         &self.account_id
     }
 
-    pub fn profile_id(&self) -> &str {
-        &self.profile_id
-    }
-
     pub fn device_id(&self) -> &str {
         &self.device_id
     }
 
-    pub fn profile_name(&self) -> &str {
-        &self.profile_name
+    pub fn active_profile(&self) -> ActiveProfile {
+        self.active_profile
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    pub fn lock_profile_transition(&self) -> MutexGuard<'_, ()> {
+        self.profile_transition
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    pub fn activate_profile(
+        &self,
+        profile_id: &str,
+        now_utc_ms: i64,
+    ) -> Result<ActiveProfile, ProfileUseCaseError> {
+        let selected = {
+            let mut connection = self
+                .connection
+                .lock()
+                .map_err(|_| rusqlite::Error::InvalidQuery)?;
+            persist_active_profile(&mut connection, &self.account_id, profile_id, now_utc_ms)?
+        };
+        let active = ActiveProfile::from(&selected);
+        *self
+            .active_profile
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = active.clone();
+        Ok(active)
+    }
+
+    pub fn refresh_active_profile(&self, profile: &LearnerProfile) {
+        let mut active = self
+            .active_profile
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if active.id == profile.id {
+            active.name.clone_from(&profile.name);
+        }
     }
 
     pub fn database_key(&self) -> &str {
         &self.database_key
+    }
+}
+
+impl From<&LearnerProfile> for ActiveProfile {
+    fn from(profile: &LearnerProfile) -> Self {
+        Self {
+            id: profile.id.clone(),
+            name: profile.name.clone(),
+        }
     }
 }
 
@@ -176,6 +228,16 @@ pub fn initialize_local_library(
     std::fs::create_dir_all(root)?;
     let mut connection = open_encrypted_database(&database_path, &database_key)?;
     run_migrations(&mut connection)?;
+    let preferred_profile = connection
+        .query_row(
+            "SELECT p.id, p.name
+             FROM account_preferences preference
+             INNER JOIN learner_profiles p ON p.id = preference.active_profile_id
+             WHERE preference.account_id = ?1 AND p.account_id = ?1",
+            [&account_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?;
     let existing_profile = connection
         .query_row(
             "SELECT id, name FROM learner_profiles WHERE account_id = ?1 ORDER BY created_at_utc_ms, id LIMIT 1",
@@ -183,20 +245,26 @@ pub fn initialize_local_library(
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         )
         .optional()?;
-    let (profile_id, profile_name) = match existing_profile {
-        Some(profile) => profile,
-        None => {
-            let profile = create_profile(
-                &mut connection,
-                CreateProfile {
-                    account_id: account_id.clone(),
-                    name: "本机学习档案".to_owned(),
-                    now_utc_ms,
-                },
-            )?;
-            (profile.id, profile.name)
-        }
+    let (profile_id, profile_name, needs_preference) = match preferred_profile {
+        Some(profile) => (profile.0, profile.1, false),
+        None => match existing_profile {
+            Some(profile) => (profile.0, profile.1, true),
+            None => {
+                let profile = create_profile(
+                    &mut connection,
+                    CreateProfile {
+                        account_id: account_id.clone(),
+                        name: "本机学习档案".to_owned(),
+                        now_utc_ms,
+                    },
+                )?;
+                (profile.id, profile.name, true)
+            }
+        },
     };
+    if needs_preference {
+        persist_active_profile(&mut connection, &account_id, &profile_id, now_utc_ms)?;
+    }
 
     Ok(LibraryRuntime {
         connection: Arc::new(Mutex::new(connection)),
@@ -205,8 +273,11 @@ pub fn initialize_local_library(
         database_key,
         account_id,
         device_id,
-        profile_id,
-        profile_name,
+        active_profile: RwLock::new(ActiveProfile {
+            id: profile_id,
+            name: profile_name,
+        }),
+        profile_transition: Mutex::new(()),
     })
 }
 
