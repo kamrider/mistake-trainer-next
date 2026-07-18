@@ -13,7 +13,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: []
   train: [problemId: string]
-  update: [input: { problemId: string; subject: string; note: string }]
+  update: [input: { problemId: string; subject: string; note: string; timeLimitSeconds: number | null }]
   status: [problemId: string, status: 'active' | 'archived' | 'trashed']
 }>()
 
@@ -22,14 +22,25 @@ const answerAssets = computed(() => props.detail?.assets.filter(asset => asset.r
 const editing = ref(false)
 const editSubject = ref('')
 const editNote = ref('')
+const editTimeLimit = ref('')
 const drawer = ref<HTMLElement>()
 let previouslyFocused: HTMLElement | null = null
 const dirty = computed(() => Boolean(props.detail && editing.value
-  && (editSubject.value !== props.detail.subject || editNote.value !== props.detail.note)))
+  && (editSubject.value !== props.detail.subject
+    || editNote.value !== props.detail.note
+    || editTimeLimit.value !== String(props.detail.timeLimitSeconds ?? ''))))
+const timeLimitError = computed(() => {
+  if (editTimeLimit.value === '') return ''
+  const value = Number(editTimeLimit.value)
+  return Number.isInteger(value) && value >= 1 && value <= 86_400
+    ? ''
+    : '请输入 1 到 86400 之间的整数，留空表示不限时。'
+})
 
 watch(() => props.detail, (detail) => {
   editSubject.value = detail?.subject ?? ''
   editNote.value = detail?.note ?? ''
+  editTimeLimit.value = String(detail?.timeLimitSeconds ?? '')
   editing.value = false
 }, { immediate: true })
 
@@ -43,6 +54,16 @@ function requestClose() {
 
 function requestStatus(status: 'active' | 'archived' | 'trashed') {
   if (props.detail && confirmDiscard()) emit('status', props.detail.id, status)
+}
+
+function saveChanges() {
+  if (!props.detail || timeLimitError.value) return
+  emit('update', {
+    problemId: props.detail.id,
+    subject: editSubject.value,
+    note: editNote.value,
+    timeLimitSeconds: editTimeLimit.value === '' ? null : Number(editTimeLimit.value),
+  })
 }
 
 function focusableElements() {
@@ -147,6 +168,23 @@ onBeforeUnmount(() => previouslyFocused?.focus())
             maxlength="2000"
             rows="5"
           /></label>
+          <label>答题时限（秒）<input
+            v-model="editTimeLimit"
+            type="number"
+            inputmode="numeric"
+            min="1"
+            max="86400"
+            step="1"
+            placeholder="留空表示不限时"
+            :aria-invalid="Boolean(timeLimitError)"
+            :aria-describedby="timeLimitError ? 'time-limit-error' : undefined"
+          ></label>
+          <small
+            v-if="timeLimitError"
+            id="time-limit-error"
+            class="field-error"
+            role="alert"
+          >{{ timeLimitError }}</small>
         </section>
         <section
           v-else
@@ -154,6 +192,9 @@ onBeforeUnmount(() => previouslyFocused?.focus())
         >
           <span>复盘笔记</span>
           <p>{{ detail.note || '这道题还没有补充笔记。' }}</p>
+          <small class="time-limit-copy">
+            {{ detail.timeLimitSeconds ? `建议 ${detail.timeLimitSeconds} 秒内完成` : '不限制答题时间' }}
+          </small>
           <button
             type="button"
             class="text-button"
@@ -238,8 +279,8 @@ onBeforeUnmount(() => previouslyFocused?.focus())
           v-if="editing"
           type="button"
           class="train-button"
-          :disabled="saving"
-          @click="$emit('update', { problemId: detail.id, subject: editSubject, note: editNote })"
+          :disabled="saving || Boolean(timeLimitError)"
+          @click="saveChanges"
         >
           <Save
             :size="17"
@@ -278,9 +319,11 @@ onBeforeUnmount(() => previouslyFocused?.focus())
 .note-paper { margin: 24px 0 30px; padding: 18px 20px; border-radius: 3px 14px 14px 14px; background: var(--green-soft); }
 .note-paper span { color: #567064; font-size: 11px; font-weight: 760; letter-spacing: .1em; }
 .note-paper p { margin: 8px 0 0; line-height: 1.65; }
+.time-limit-copy { display: inline-block; margin-top: 10px; color: var(--ink-muted); }
 .text-button { display: inline-flex; gap: 6px; align-items: center; margin-top: 14px; padding: 0; color: var(--green-deep); border: 0; background: transparent; cursor: pointer; font-weight: 700; }
 .edit-paper { display: grid; gap: 14px; margin: 24px 0 30px; padding: 18px 20px; border-radius: 3px 14px 14px 14px; background: var(--green-soft); }
 .edit-paper label { display: grid; gap: 7px; color: #567064; font-size: 11px; font-weight: 760; letter-spacing: .08em; }
+.field-error { color: #8d3f2f; font-size: 12px; letter-spacing: 0; }
 .edit-paper input, .edit-paper textarea { width: 100%; padding: 10px 12px; color: var(--ink); border: 1px solid rgba(33,51,45,.18); border-radius: 9px; outline: none; background: rgba(255,253,247,.8); font: inherit; font-size: 14px; font-weight: 500; letter-spacing: 0; resize: vertical; }
 .asset-section { margin-top: 28px; }
 .asset-section h3 { display: flex; gap: 8px; align-items: center; margin: 0 0 12px; font-size: 14px; letter-spacing: .05em; }

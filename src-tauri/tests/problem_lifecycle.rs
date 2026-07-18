@@ -3,7 +3,8 @@ use mistake_trainer_next_lib::{
     modules::{
         problems::{
             AssetRole, CaptureAsset, ChangeProblemStatus, CreateProblem, ProblemStatusFilter,
-            UpdateProblem, change_problem_status, create_problem, update_problem,
+            ProblemUseCaseError, UpdateProblem, change_problem_status, create_problem,
+            update_problem,
         },
         profiles::{CreateProfile, create_profile},
     },
@@ -57,19 +58,28 @@ fn edit_updates_revision_and_outbox_in_one_transaction() {
             problem_id: problem_id.clone(),
             subject: "高等数学".to_owned(),
             note: "先检查定义域".to_owned(),
+            time_limit_seconds: Some(180),
             now_utc_ms: 30,
         },
     )
     .expect("update");
 
-    let row: (String, String, i64) = connection
+    let row: (String, String, Option<i32>, i64) = connection
         .query_row(
-            "SELECT subject, note, revision FROM problems WHERE id = ?1",
+            "SELECT subject, note, time_limit_seconds, revision FROM problems WHERE id = ?1",
             [&problem_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .expect("updated row");
-    assert_eq!(row, ("高等数学".to_owned(), "先检查定义域".to_owned(), 2));
+    assert_eq!(
+        row,
+        (
+            "高等数学".to_owned(),
+            "先检查定义域".to_owned(),
+            Some(180),
+            2
+        )
+    );
     let outbox: i64 = connection
         .query_row(
             "SELECT count(*) FROM sync_operations WHERE entity_id = ?1 AND operation = 'upsert'",
@@ -89,6 +99,46 @@ fn edit_updates_revision_and_outbox_in_one_transaction() {
     assert_eq!(payload["baseRevision"], 1);
     assert_eq!(payload["revision"], 2);
     assert_eq!(payload["updatedAtUtcMs"], 30);
+    assert_eq!(payload["timeLimitSeconds"], 180);
+}
+
+#[test]
+fn invalid_time_limit_does_not_change_problem_or_outbox() {
+    let (_directory, mut connection, profile_id, problem_id) = fixture();
+    let error = update_problem(
+        &mut connection,
+        UpdateProblem {
+            account_id: "account-1".to_owned(),
+            profile_id,
+            problem_id: problem_id.clone(),
+            subject: "math".to_owned(),
+            note: "should not persist".to_owned(),
+            time_limit_seconds: Some(0),
+            now_utc_ms: 30,
+        },
+    )
+    .expect_err("zero-second limit must be rejected");
+
+    assert!(matches!(error, ProblemUseCaseError::InvalidTimeLimit));
+    let row: (String, String, Option<i32>, i64) = connection
+        .query_row(
+            "SELECT subject, note, time_limit_seconds, revision FROM problems WHERE id = ?1",
+            [&problem_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("unchanged problem");
+    assert_eq!(row.0, "数学");
+    assert_eq!(row.1, "旧笔记");
+    assert_eq!(row.2, None);
+    assert_eq!(row.3, 1);
+    let outbox_count: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM sync_operations WHERE entity_id = ?1",
+            [&problem_id],
+            |row| row.get(0),
+        )
+        .expect("outbox count");
+    assert_eq!(outbox_count, 1);
 }
 
 #[test]

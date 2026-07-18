@@ -82,6 +82,21 @@ conflict. Deletes create tombstones retained for 30 days.
   range-checked in Rust, and a streak may begin today or yesterday so a user does not
   lose it before completing the current day's review.
 
+## Review session boundary
+
+- Rust owns the active review session. A queue response includes its opaque session ID,
+  original total, persisted completed count, and whether the session was resumed; Vue
+  renders that state instead of reconstructing progress from the remaining cards.
+- A rating appends one `ReviewEvent`, updates the derived schedule, advances the active
+  session, and writes the sync operation in one transaction. Failed submissions keep the
+  current answer visible and retryable; the UI never advances optimistically.
+- A problem's optional answer time limit is persisted with the problem and range-checked
+  from 1 through 86,400 seconds. The training clock uses a monotonic source and freezes
+  when the answer is revealed. Expiration is feedback only and never fabricates a rating.
+- Review media is displayed in stored role and position order. The original encrypted
+  asset is decrypted by Rust for the current detail DTO; Vue can enlarge it in a focused,
+  keyboard-contained lightbox but receives no filesystem path or blob-store handle.
+
 ## Backup boundary
 
 - A backup is a new directory containing one consistent SQLCipher snapshot, immutable

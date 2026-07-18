@@ -29,6 +29,16 @@ pub struct ReviewQueueEntry {
 }
 
 #[derive(Clone, Debug)]
+pub struct ReviewQueueState {
+    pub session_id: Option<String>,
+    pub mode: String,
+    pub resumed: bool,
+    pub completed_count: i32,
+    pub total_count: i32,
+    pub items: Vec<ReviewQueueEntry>,
+}
+
+#[derive(Clone, Debug)]
 pub struct SubmitReview {
     pub account_id: String,
     pub profile_id: String,
@@ -69,9 +79,13 @@ pub enum ReviewUseCaseError {
 pub fn list_review_queue(
     connection: &mut Connection,
     query: ReviewQueueQuery,
-) -> Result<Vec<ReviewQueueEntry>, ReviewUseCaseError> {
+) -> Result<ReviewQueueState, ReviewUseCaseError> {
     let transaction = connection.transaction()?;
-    let mode = if query.problem_id.is_some() { "manual" } else { "due" };
+    let mode = if query.problem_id.is_some() {
+        "manual"
+    } else {
+        "due"
+    };
     let active_session = transaction
         .query_row(
             "SELECT id, mode, problem_ids_json, current_index
@@ -92,36 +106,49 @@ pub fn list_review_queue(
         let ids: Vec<String> = serde_json::from_str(&ids_json)?;
         let current_index = usize::try_from(stored_index).unwrap_or(ids.len());
         let requested_matches = match &query.problem_id {
-            Some(requested) => session_mode == "manual"
-                && ids.get(current_index).is_some_and(|id| id == requested),
+            Some(requested) => {
+                session_mode == "manual" && ids.get(current_index).is_some_and(|id| id == requested)
+            }
             None => session_mode == "due",
         };
         if requested_matches {
+            let safe_index = current_index.min(ids.len());
             let entries = queue_entries_for_ids(
                 &transaction,
                 &query.account_id,
                 &query.profile_id,
-                &ids[current_index.min(ids.len())..],
+                &ids[safe_index..],
             )?;
-            let remaining_ids = entries
-                .iter()
-                .map(|entry| entry.problem_id.as_str())
-                .collect::<Vec<_>>();
+            let mut cleaned_ids = ids[..safe_index].to_vec();
+            cleaned_ids.extend(entries.iter().map(|entry| entry.problem_id.clone()));
+            let completed_count = count_for_ui(safe_index);
+            let total_count = count_for_ui(cleaned_ids.len());
+            let has_remaining_items = !entries.is_empty();
+            let serialized_ids = serde_json::to_string(&cleaned_ids)?;
             transaction.execute(
                 "UPDATE review_sessions
                  SET problem_ids_json = ?1,
-                     current_index = 0,
-                     status = CASE WHEN json_array_length(?1) = 0 THEN 'completed' ELSE 'active' END,
-                     updated_at_utc_ms = ?2
-                 WHERE id = ?3",
+                     current_index = ?2,
+                     status = CASE WHEN ?3 = 0 THEN 'completed' ELSE 'active' END,
+                     updated_at_utc_ms = ?4
+                 WHERE id = ?5",
                 params![
-                    serde_json::to_string(&remaining_ids)?,
+                    serialized_ids,
+                    completed_count,
+                    i32::from(has_remaining_items),
                     query.now_utc_ms,
                     session_id
                 ],
             )?;
             transaction.commit()?;
-            return Ok(entries);
+            return Ok(ReviewQueueState {
+                session_id: Some(session_id),
+                mode: session_mode,
+                resumed: true,
+                completed_count,
+                total_count,
+                items: entries,
+            });
         }
         transaction.execute(
             "UPDATE review_sessions SET status = 'cancelled', updated_at_utc_ms = ?1 WHERE id = ?2",
@@ -130,7 +157,11 @@ pub fn list_review_queue(
     }
 
     let entries = query_new_review_entries(&transaction, &query)?;
-    if !entries.is_empty() {
+    let total_count = count_for_ui(entries.len());
+    let session_id = if entries.is_empty() {
+        None
+    } else {
+        let session_id = Uuid::now_v7().to_string();
         let problem_ids = entries
             .iter()
             .map(|entry| entry.problem_id.as_str())
@@ -139,7 +170,7 @@ pub fn list_review_queue(
             "INSERT INTO review_sessions(id, account_id, profile_id, mode, problem_ids_json, current_index, status, created_at_utc_ms, updated_at_utc_ms)
              VALUES(?1, ?2, ?3, ?4, ?5, 0, 'active', ?6, ?6)",
             params![
-                Uuid::now_v7().to_string(),
+                &session_id,
                 query.account_id,
                 query.profile_id,
                 mode,
@@ -147,9 +178,21 @@ pub fn list_review_queue(
                 query.now_utc_ms
             ],
         )?;
-    }
+        Some(session_id)
+    };
     transaction.commit()?;
-    Ok(entries)
+    Ok(ReviewQueueState {
+        session_id,
+        mode: mode.to_owned(),
+        resumed: false,
+        completed_count: 0,
+        total_count,
+        items: entries,
+    })
+}
+
+fn count_for_ui(value: usize) -> i32 {
+    i32::try_from(value).unwrap_or(i32::MAX)
 }
 
 fn query_new_review_entries(

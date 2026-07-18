@@ -27,6 +27,7 @@ pub struct ProblemUpdateInput {
     problem_id: String,
     subject: String,
     note: String,
+    time_limit_seconds: Option<i32>,
 }
 
 #[derive(Clone, Debug, Deserialize, Type)]
@@ -111,10 +112,17 @@ pub fn problem_update_for(
             problem_id: input.problem_id,
             subject: input.subject,
             note: input.note,
+            time_limit_seconds: input.time_limit_seconds,
             now_utc_ms,
         },
     ) {
         Ok(()) => AppResult::success(true),
+        Err(crate::modules::problems::ProblemUseCaseError::InvalidTimeLimit) => AppResult::failure(
+            "problem_time_limit_invalid",
+            "答题时限需要填写 1 到 86400 秒，留空表示不限时。",
+            false,
+            Uuid::now_v7().to_string(),
+        ),
         Err(_) => internal_library_error("problem_update_failed"),
     }
 }

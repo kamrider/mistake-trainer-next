@@ -20,6 +20,17 @@ pub struct ReviewQueueItem {
     pub review_count: i32,
 }
 
+#[derive(Clone, Debug, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewQueueOverview {
+    pub session_id: Option<String>,
+    pub mode: String,
+    pub resumed: bool,
+    pub completed_count: i32,
+    pub total_count: i32,
+    pub items: Vec<ReviewQueueItem>,
+}
+
 #[derive(Clone, Debug, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewSubmitInput {
@@ -32,13 +43,13 @@ pub fn review_queue_for(
     runtime: &LibraryRuntime,
     problem_id: Option<String>,
     now_utc_ms: i64,
-) -> AppResult<Vec<ReviewQueueItem>> {
+) -> AppResult<ReviewQueueOverview> {
     let profile = runtime.active_profile();
     let mut connection = match runtime.connection.lock() {
         Ok(connection) => connection,
         Err(_) => return internal_review_error("library_lock_poisoned"),
     };
-    let entries = match list_review_queue(
+    let overview = match list_review_queue(
         &mut connection,
         ReviewQueueQuery {
             account_id: runtime.account_id().to_owned(),
@@ -47,10 +58,11 @@ pub fn review_queue_for(
             now_utc_ms,
         },
     ) {
-        Ok(entries) => entries,
+        Ok(overview) => overview,
         Err(_) => return internal_review_error("review_queue_failed"),
     };
-    let items = entries
+    let items = overview
+        .items
         .into_iter()
         .map(|entry| ReviewQueueItem {
             problem_id: entry.problem_id,
@@ -58,7 +70,14 @@ pub fn review_queue_for(
             review_count: entry.review_count,
         })
         .collect();
-    AppResult::success(items)
+    AppResult::success(ReviewQueueOverview {
+        session_id: overview.session_id,
+        mode: overview.mode,
+        resumed: overview.resumed,
+        completed_count: overview.completed_count,
+        total_count: overview.total_count,
+        items,
+    })
 }
 
 pub fn review_submit_for(
@@ -93,7 +112,7 @@ pub fn review_submit_for(
 pub fn review_queue(
     state: State<'_, LibraryRuntime>,
     problem_id: Option<String>,
-) -> AppResult<Vec<ReviewQueueItem>> {
+) -> AppResult<ReviewQueueOverview> {
     review_queue_for(&state, problem_id, current_utc_millis())
 }
 

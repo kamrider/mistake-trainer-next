@@ -105,7 +105,7 @@ async function trainProblem(problemId: string) {
   }
 }
 
-async function updateProblem(input: { problemId: string; subject: string; note: string }) {
+async function updateProblem(input: { problemId: string; subject: string; note: string; timeLimitSeconds: number | null }) {
   detailSaving.value = true
   detailError.value = ''
   try {

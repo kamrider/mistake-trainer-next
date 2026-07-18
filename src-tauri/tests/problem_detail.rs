@@ -55,6 +55,12 @@ fn detail_returns_ordered_safe_image_previews_for_the_selected_profile() {
         },
     )
     .expect("problem");
+    connection
+        .execute(
+            "UPDATE problems SET time_limit_seconds = 90 WHERE id = ?1",
+            [&problem.id],
+        )
+        .expect("set time limit");
 
     let detail = get_problem_detail(
         &connection,
@@ -70,10 +76,15 @@ fn detail_returns_ordered_safe_image_previews_for_the_selected_profile() {
 
     assert_eq!(detail.id, problem.id);
     assert_eq!(detail.subject, "数学");
+    assert_eq!(detail.time_limit_seconds, Some(90));
     assert_eq!(detail.assets.len(), 2);
     assert_eq!(detail.assets[0].role, "question");
     assert_eq!(detail.assets[1].role, "answer");
-    assert!(detail.assets[0].data_url.starts_with("data:image/png;base64,"));
+    assert!(
+        detail.assets[0]
+            .data_url
+            .starts_with("data:image/png;base64,")
+    );
 
     let error = get_problem_detail(
         &connection,

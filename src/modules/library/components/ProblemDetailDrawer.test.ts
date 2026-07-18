@@ -14,6 +14,7 @@ describe('ProblemDetailDrawer', () => {
           subject: '数学',
           note: '先看定义域',
           status: 'active',
+          timeLimitSeconds: null,
           updatedAtUtcMs: 1_700_000_000_000,
           assets: [
             { id: 'q-1', role: 'question', position: 0, mediaType: 'image/png', dataUrl: 'data:image/png;base64,AA==' },
@@ -42,7 +43,7 @@ describe('ProblemDetailDrawer', () => {
       props: {
         loading: false,
         detail: {
-          id: 'problem-1', subject: '数学', note: '', status: 'active', updatedAtUtcMs: null, assets: [],
+          id: 'problem-1', subject: '数学', note: '', status: 'active', timeLimitSeconds: null, updatedAtUtcMs: null, assets: [],
         },
       },
     })
@@ -69,7 +70,7 @@ describe('ProblemDetailDrawer', () => {
       props: {
         loading: false,
         detail: {
-          id: 'problem-1', subject: '数学', note: '', status: 'active', updatedAtUtcMs: null, assets: [],
+          id: 'problem-1', subject: '数学', note: '', status: 'active', timeLimitSeconds: null, updatedAtUtcMs: null, assets: [],
         },
       },
     })
@@ -84,5 +85,48 @@ describe('ProblemDetailDrawer', () => {
     await user.click(screen.getByRole('button', { name: '关闭题目详情' }))
     expect(view.emitted('close')).toHaveLength(1)
     confirm.mockRestore()
+  })
+
+  it('edits and emits a persistent answer time limit', async () => {
+    const user = userEvent.setup()
+    const view = render(ProblemDetailDrawer, {
+      props: {
+        loading: false,
+        detail: {
+          id: 'problem-1', subject: '物理', note: '', status: 'active', timeLimitSeconds: 60, updatedAtUtcMs: null, assets: [],
+        },
+      },
+    })
+
+    await user.click(screen.getByRole('button', { name: '编辑题目' }))
+    const input = screen.getByRole('spinbutton', { name: '答题时限（秒）' })
+    await user.clear(input)
+    await user.type(input, '180')
+    await user.click(screen.getByRole('button', { name: '保存修改' }))
+
+    expect(view.emitted('update')).toEqual([[
+      { problemId: 'problem-1', subject: '物理', note: '', timeLimitSeconds: 180 },
+    ]])
+  })
+
+  it('rejects an out-of-range answer time limit before saving', async () => {
+    const user = userEvent.setup()
+    const view = render(ProblemDetailDrawer, {
+      props: {
+        loading: false,
+        detail: {
+          id: 'problem-1', subject: '物理', note: '', status: 'active', timeLimitSeconds: null, updatedAtUtcMs: null, assets: [],
+        },
+      },
+    })
+
+    await user.click(screen.getByRole('button', { name: '编辑题目' }))
+    const input = screen.getByRole('spinbutton', { name: '答题时限（秒）' })
+    await user.type(input, '0')
+
+    expect(input).toHaveAttribute('aria-invalid', 'true')
+    expect(screen.getByRole('alert')).toBeVisible()
+    expect(screen.getByRole('button', { name: '保存修改' })).toBeDisabled()
+    expect(view.emitted('update')).toBeUndefined()
   })
 })

@@ -64,9 +64,13 @@ fn review_queue_includes_new_and_due_problems_and_supports_manual_selection() {
         },
     )
     .expect("initial queue");
-    assert_eq!(initial.len(), 1);
-    assert_eq!(initial[0].problem_id, problem_id);
-    assert_eq!(initial[0].review_count, 0);
+    assert!(!initial.resumed);
+    assert_eq!(initial.mode, "due");
+    assert_eq!(initial.completed_count, 0);
+    assert_eq!(initial.total_count, 1);
+    assert_eq!(initial.items.len(), 1);
+    assert_eq!(initial.items[0].problem_id, problem_id);
+    assert_eq!(initial.items[0].review_count, 0);
 
     submit_review(
         &mut connection,
@@ -100,7 +104,8 @@ fn review_queue_includes_new_and_due_problems_and_supports_manual_selection() {
         },
     )
     .expect("due queue");
-    assert!(due.is_empty());
+    assert!(due.items.is_empty());
+    assert_eq!(due.total_count, 0);
 
     let manual = list_review_queue(
         &mut connection,
@@ -112,9 +117,77 @@ fn review_queue_includes_new_and_due_problems_and_supports_manual_selection() {
         },
     )
     .expect("manual queue");
-    assert_eq!(manual.len(), 1);
-    assert_eq!(manual[0].problem_id, problem_id);
-    assert_eq!(manual[0].review_count, 1);
+    assert_eq!(manual.mode, "manual");
+    assert_eq!(manual.items.len(), 1);
+    assert_eq!(manual.items[0].problem_id, problem_id);
+    assert_eq!(manual.items[0].review_count, 1);
+}
+
+#[test]
+fn resumed_session_reports_persisted_progress_and_original_total() {
+    let (directory, mut connection, profile_id, first_problem_id) = create_fixture();
+    let second = create_problem(
+        &mut connection,
+        &directory.path().join("assets"),
+        &[47_u8; 32],
+        CreateProblem {
+            account_id: "account-1".to_owned(),
+            profile_id: profile_id.clone(),
+            subject: "物理".to_owned(),
+            note: String::new(),
+            assets: vec![CaptureAsset {
+                role: AssetRole::Question,
+                media_type: "image/png".to_owned(),
+                bytes: b"second-question".to_vec(),
+            }],
+            now_utc_ms: 201,
+        },
+    )
+    .unwrap();
+    let now = 1_700_000_000_000_i64;
+
+    let initial = list_review_queue(
+        &mut connection,
+        ReviewQueueQuery {
+            account_id: "account-1".to_owned(),
+            profile_id: profile_id.clone(),
+            problem_id: None,
+            now_utc_ms: now,
+        },
+    )
+    .expect("start session");
+    assert_eq!(initial.total_count, 2);
+
+    submit_review(
+        &mut connection,
+        SubmitReview {
+            account_id: "account-1".to_owned(),
+            profile_id: profile_id.clone(),
+            problem_id: first_problem_id,
+            device_id: "device-1".to_owned(),
+            rating: SimpleRating::Remembered.into_fsrs(),
+            duration_ms: 1_200,
+            occurred_at_utc_ms: now + 1,
+        },
+    )
+    .expect("submit first item");
+
+    let resumed = list_review_queue(
+        &mut connection,
+        ReviewQueueQuery {
+            account_id: "account-1".to_owned(),
+            profile_id,
+            problem_id: None,
+            now_utc_ms: now + 2,
+        },
+    )
+    .expect("resume session");
+
+    assert!(resumed.resumed);
+    assert_eq!(resumed.completed_count, 1);
+    assert_eq!(resumed.total_count, 2);
+    assert_eq!(resumed.items.len(), 1);
+    assert_eq!(resumed.items[0].problem_id, second.id);
 }
 
 #[test]
@@ -254,8 +327,8 @@ fn resumed_session_removes_archived_items_before_advancing() {
         },
     )
     .expect("start two-item session");
-    assert_eq!(initial.len(), 2);
-    assert_eq!(initial[0].problem_id, first_problem_id);
+    assert_eq!(initial.items.len(), 2);
+    assert_eq!(initial.items[0].problem_id, first_problem_id);
 
     change_problem_status(
         &mut connection,
@@ -279,8 +352,11 @@ fn resumed_session_removes_archived_items_before_advancing() {
         },
     )
     .expect("resume without archived item");
-    assert_eq!(resumed.len(), 1);
-    assert_eq!(resumed[0].problem_id, second.id);
+    assert!(resumed.resumed);
+    assert_eq!(resumed.completed_count, 0);
+    assert_eq!(resumed.total_count, 1);
+    assert_eq!(resumed.items.len(), 1);
+    assert_eq!(resumed.items[0].problem_id, second.id);
 
     submit_review(
         &mut connection,
@@ -303,7 +379,14 @@ fn resumed_session_removes_archived_items_before_advancing() {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .unwrap();
-    assert_eq!(session, (serde_json::json!([second.id]).to_string(), 1, "completed".to_owned()));
+    assert_eq!(
+        session,
+        (
+            serde_json::json!([second.id]).to_string(),
+            1,
+            "completed".to_owned()
+        )
+    );
 }
 
 #[test]

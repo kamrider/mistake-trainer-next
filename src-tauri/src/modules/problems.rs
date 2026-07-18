@@ -131,6 +131,7 @@ pub struct ProblemDetail {
     pub subject: String,
     pub note: String,
     pub status: String,
+    pub time_limit_seconds: Option<i32>,
     pub updated_at_utc_ms: f64,
     pub assets: Vec<ProblemAssetPreview>,
 }
@@ -142,6 +143,7 @@ pub struct UpdateProblem {
     pub problem_id: String,
     pub subject: String,
     pub note: String,
+    pub time_limit_seconds: Option<i32>,
     pub now_utc_ms: i64,
 }
 
@@ -172,6 +174,8 @@ pub enum ProblemUseCaseError {
     InvalidAssetImage,
     #[error("problem text is too long")]
     InvalidText,
+    #[error("problem time limit must be between 1 and 86400 seconds")]
+    InvalidTimeLimit,
     #[error("at least one problem must be selected")]
     EmptySelection,
     #[error("asset encryption failed")]
@@ -210,7 +214,12 @@ pub fn list_problem_summaries(
          ORDER BY p.updated_at_utc_ms DESC, p.id DESC",
     )?;
     let rows = statement.query_map(
-        params![query.account_id, query.profile_id, query.status.as_str(), search],
+        params![
+            query.account_id,
+            query.profile_id,
+            query.status.as_str(),
+            search
+        ],
         |row| {
             Ok(ProblemSummary {
                 id: row.get(0)?,
@@ -236,7 +245,7 @@ pub fn get_problem_detail(
 ) -> Result<ProblemDetail, ProblemUseCaseError> {
     let mut detail = connection
         .query_row(
-            "SELECT id, subject, note, status, updated_at_utc_ms
+            "SELECT id, subject, note, status, time_limit_seconds, updated_at_utc_ms
              FROM problems
              WHERE id = ?1 AND account_id = ?2 AND profile_id = ?3",
             params![query.problem_id, query.account_id, query.profile_id],
@@ -246,7 +255,8 @@ pub fn get_problem_detail(
                     subject: row.get(1)?,
                     note: row.get(2)?,
                     status: row.get(3)?,
-                    updated_at_utc_ms: row.get(4)?,
+                    time_limit_seconds: row.get(4)?,
+                    updated_at_utc_ms: row.get(5)?,
                     assets: Vec::new(),
                 })
             },
@@ -368,6 +378,12 @@ pub fn update_problem(
     if subject.chars().count() > 40 || note.chars().count() > 2_000 {
         return Err(ProblemUseCaseError::InvalidText);
     }
+    if input
+        .time_limit_seconds
+        .is_some_and(|seconds| !(1..=86_400).contains(&seconds))
+    {
+        return Err(ProblemUseCaseError::InvalidTimeLimit);
+    }
     let transaction = connection.transaction()?;
     let base_revision = transaction
         .query_row(
@@ -380,11 +396,12 @@ pub fn update_problem(
     let new_revision = base_revision + 1;
     let changed = transaction.execute(
         "UPDATE problems
-         SET subject = ?1, note = ?2, updated_at_utc_ms = ?3, revision = ?4
-         WHERE id = ?5 AND account_id = ?6 AND profile_id = ?7 AND revision = ?8",
+         SET subject = ?1, note = ?2, time_limit_seconds = ?3, updated_at_utc_ms = ?4, revision = ?5
+         WHERE id = ?6 AND account_id = ?7 AND profile_id = ?8 AND revision = ?9",
         params![
             subject,
             note,
+            input.time_limit_seconds,
             input.now_utc_ms,
             new_revision,
             input.problem_id,
@@ -400,6 +417,7 @@ pub fn update_problem(
         "id": input.problem_id,
         "subject": subject,
         "note": note,
+        "timeLimitSeconds": input.time_limit_seconds,
         "baseRevision": base_revision,
         "revision": new_revision,
         "updatedAtUtcMs": input.now_utc_ms,
@@ -462,7 +480,11 @@ pub fn change_problem_status(
                 "DELETE FROM tombstones WHERE entity_type = 'problem' AND entity_id = ?1",
                 [problem_id],
             )?;
-            if current.0 == "trashed" { "restore" } else { "upsert" }
+            if current.0 == "trashed" {
+                "restore"
+            } else {
+                "upsert"
+            }
         };
         let payload = if target == "trashed" {
             serde_json::json!({

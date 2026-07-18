@@ -17,7 +17,7 @@ export const commands = {
 	problemList: (status: ProblemStatusFilter, search: string | null) => __TAURI_INVOKE<AppResult<ProblemSummary[]>>("problem_list", { status, search }),
 	problemUpdate: (input: ProblemUpdateInput) => __TAURI_INVOKE<AppResult<boolean>>("problem_update", { input }),
 	legacyScan: () => __TAURI_INVOKE<AppResult<LegacyScanReport | null>>("legacy_scan"),
-	reviewQueue: (problemId: string | null) => __TAURI_INVOKE<AppResult<ReviewQueueItem[]>>("review_queue", { problemId }),
+	reviewQueue: (problemId: string | null) => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_queue", { problemId }),
 	reviewSubmit: (input: ReviewSubmitInput) => __TAURI_INVOKE<AppResult<ReviewSubmission>>("review_submit", { input }),
 	dashboardOverview: (utcOffsetMinutes: number) => __TAURI_INVOKE<AppResult<DashboardOverview>>("dashboard_overview", { utcOffsetMinutes }),
 	reportSummary: () => __TAURI_INVOKE<AppResult<ReportSummary>>("report_summary"),
@@ -323,6 +323,7 @@ export type ProblemDetail = {
 	subject: string,
 	note: string,
 	status: string,
+	timeLimitSeconds: number | null,
 	updatedAtUtcMs: number | null,
 	assets: ProblemAssetPreview[],
 };
@@ -348,6 +349,7 @@ export type ProblemUpdateInput = {
 	problemId: string,
 	subject: string,
 	note: string,
+	timeLimitSeconds: number | null,
 };
 
 export type ProfileNameInput = {
@@ -387,6 +389,15 @@ export type ReviewQueueItem = {
 	problemId: string,
 	dueAtUtcMs: number | null,
 	reviewCount: number,
+};
+
+export type ReviewQueueOverview = {
+	sessionId: string | null,
+	mode: string,
+	resumed: boolean,
+	completedCount: number,
+	totalCount: number,
+	items: ReviewQueueItem[],
 };
 
 export type ReviewSubmission = {
