@@ -70,4 +70,34 @@ describe('LibraryWorkspace', () => {
     await user.type(input, '物理')
     expect(view.emitted('searchChange')?.at(-1)).toEqual(['物理'])
   })
+
+  it('turns an ordered selection into a visible training dock', async () => {
+    const user = userEvent.setup()
+    const problems = [
+      {
+        id: 'problem-1', subject: '数学', note: '', status: 'active' as const,
+        questionAssetCount: 1, answerAssetCount: 1, updatedAtUtcMs: 1,
+      },
+      {
+        id: 'problem-2', subject: '物理', note: '', status: 'active' as const,
+        questionAssetCount: 1, answerAssetCount: 1, updatedAtUtcMs: 2,
+      },
+    ]
+    const view = render(LibraryWorkspace, {
+      props: {
+        profileName: '本机学习档案', status: 'active', search: '', loading: false,
+        problems, selectedProblemIds: ['problem-2', 'problem-1'],
+      },
+    })
+
+    expect(screen.getByRole('button', { name: '开始训练 2 道题' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '开始训练 2 道题' }))
+    expect(view.emitted('trainSelection')).toHaveLength(1)
+
+    await user.click(screen.getByRole('button', { name: '清空选择' }))
+    expect(view.emitted('clearSelection')).toHaveLength(1)
+
+    await view.rerender({ startingReview: true })
+    expect(screen.getByRole('button', { name: '正在整理训练卡组…' })).toBeDisabled()
+  })
 })

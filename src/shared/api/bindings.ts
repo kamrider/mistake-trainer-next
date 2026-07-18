@@ -17,7 +17,8 @@ export const commands = {
 	problemList: (status: ProblemStatusFilter, search: string | null) => __TAURI_INVOKE<AppResult<ProblemSummary[]>>("problem_list", { status, search }),
 	problemUpdate: (input: ProblemUpdateInput) => __TAURI_INVOKE<AppResult<boolean>>("problem_update", { input }),
 	legacyScan: () => __TAURI_INVOKE<AppResult<LegacyScanReport | null>>("legacy_scan"),
-	reviewQueue: (problemId: string | null) => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_queue", { problemId }),
+	reviewQueue: () => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_queue"),
+	reviewManualStart: (input: ReviewManualStartInput) => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_manual_start", { input }),
 	reviewSubmit: (input: ReviewSubmitInput) => __TAURI_INVOKE<AppResult<ReviewSubmission>>("review_submit", { input }),
 	dashboardOverview: (utcOffsetMinutes: number) => __TAURI_INVOKE<AppResult<DashboardOverview>>("dashboard_overview", { utcOffsetMinutes }),
 	reportSummary: () => __TAURI_INVOKE<AppResult<ReportSummary>>("report_summary"),
@@ -396,6 +397,10 @@ export type ReportSummary = {
 	currentStreakDays: number,
 	dailyActivity: DailyActivity[],
 	subjectActivity: SubjectActivity[],
+};
+
+export type ReviewManualStartInput = {
+	problemIds: string[],
 };
 
 export type ReviewQueueItem = {

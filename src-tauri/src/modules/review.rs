@@ -1,7 +1,8 @@
-use fsrs::{FSRS, ItemState, MemoryState};
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use fsrs::{ItemState, MemoryState, FSRS};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::Serialize;
 use specta::Type;
+use std::collections::HashSet;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -16,7 +17,14 @@ const PARAMETER_VERSION: &str = "default-6.6.1";
 pub struct ReviewQueueQuery {
     pub account_id: String,
     pub profile_id: String,
-    pub problem_id: Option<String>,
+    pub now_utc_ms: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct StartManualReview {
+    pub account_id: String,
+    pub profile_id: String,
+    pub problem_ids: Vec<String>,
     pub now_utc_ms: i64,
 }
 
@@ -74,6 +82,8 @@ pub enum ReviewUseCaseError {
     Serialization(#[from] serde_json::Error),
     #[error("review session is missing or out of sync")]
     SessionOutOfSync,
+    #[error("manual review selection is invalid")]
+    InvalidManualSelection,
 }
 
 pub fn list_review_queue(
@@ -81,11 +91,6 @@ pub fn list_review_queue(
     query: ReviewQueueQuery,
 ) -> Result<ReviewQueueState, ReviewUseCaseError> {
     let transaction = connection.transaction()?;
-    let mode = if query.problem_id.is_some() {
-        "manual"
-    } else {
-        "due"
-    };
     let active_session = transaction
         .query_row(
             "SELECT id, mode, problem_ids_json, current_index
@@ -105,55 +110,43 @@ pub fn list_review_queue(
     if let Some((session_id, session_mode, ids_json, stored_index)) = active_session {
         let ids: Vec<String> = serde_json::from_str(&ids_json)?;
         let current_index = usize::try_from(stored_index).unwrap_or(ids.len());
-        let requested_matches = match &query.problem_id {
-            Some(requested) => {
-                session_mode == "manual" && ids.get(current_index).is_some_and(|id| id == requested)
-            }
-            None => session_mode == "due",
-        };
-        if requested_matches {
-            let safe_index = current_index.min(ids.len());
-            let entries = queue_entries_for_ids(
-                &transaction,
-                &query.account_id,
-                &query.profile_id,
-                &ids[safe_index..],
-            )?;
-            let mut cleaned_ids = ids[..safe_index].to_vec();
-            cleaned_ids.extend(entries.iter().map(|entry| entry.problem_id.clone()));
-            let completed_count = count_for_ui(safe_index);
-            let total_count = count_for_ui(cleaned_ids.len());
-            let has_remaining_items = !entries.is_empty();
-            let serialized_ids = serde_json::to_string(&cleaned_ids)?;
-            transaction.execute(
-                "UPDATE review_sessions
-                 SET problem_ids_json = ?1,
-                     current_index = ?2,
-                     status = CASE WHEN ?3 = 0 THEN 'completed' ELSE 'active' END,
-                     updated_at_utc_ms = ?4
-                 WHERE id = ?5",
-                params![
-                    serialized_ids,
-                    completed_count,
-                    i32::from(has_remaining_items),
-                    query.now_utc_ms,
-                    session_id
-                ],
-            )?;
-            transaction.commit()?;
-            return Ok(ReviewQueueState {
-                session_id: Some(session_id),
-                mode: session_mode,
-                resumed: true,
-                completed_count,
-                total_count,
-                items: entries,
-            });
-        }
-        transaction.execute(
-            "UPDATE review_sessions SET status = 'cancelled', updated_at_utc_ms = ?1 WHERE id = ?2",
-            params![query.now_utc_ms, session_id],
+        let safe_index = current_index.min(ids.len());
+        let entries = queue_entries_for_ids(
+            &transaction,
+            &query.account_id,
+            &query.profile_id,
+            &ids[safe_index..],
         )?;
+        let mut cleaned_ids = ids[..safe_index].to_vec();
+        cleaned_ids.extend(entries.iter().map(|entry| entry.problem_id.clone()));
+        let completed_count = count_for_ui(safe_index);
+        let total_count = count_for_ui(cleaned_ids.len());
+        let has_remaining_items = !entries.is_empty();
+        let serialized_ids = serde_json::to_string(&cleaned_ids)?;
+        transaction.execute(
+            "UPDATE review_sessions
+             SET problem_ids_json = ?1,
+                 current_index = ?2,
+                 status = CASE WHEN ?3 = 0 THEN 'completed' ELSE 'active' END,
+                 updated_at_utc_ms = ?4
+             WHERE id = ?5",
+            params![
+                serialized_ids,
+                completed_count,
+                i32::from(has_remaining_items),
+                query.now_utc_ms,
+                session_id
+            ],
+        )?;
+        transaction.commit()?;
+        return Ok(ReviewQueueState {
+            session_id: Some(session_id),
+            mode: session_mode,
+            resumed: true,
+            completed_count,
+            total_count,
+            items: entries,
+        });
     }
 
     let entries = query_new_review_entries(&transaction, &query)?;
@@ -173,7 +166,7 @@ pub fn list_review_queue(
                 &session_id,
                 query.account_id,
                 query.profile_id,
-                mode,
+                "due",
                 serde_json::to_string(&problem_ids)?,
                 query.now_utc_ms
             ],
@@ -183,10 +176,65 @@ pub fn list_review_queue(
     transaction.commit()?;
     Ok(ReviewQueueState {
         session_id,
-        mode: mode.to_owned(),
+        mode: "due".to_owned(),
         resumed: false,
         completed_count: 0,
         total_count,
+        items: entries,
+    })
+}
+
+pub fn start_manual_review_queue(
+    connection: &mut Connection,
+    input: StartManualReview,
+) -> Result<ReviewQueueState, ReviewUseCaseError> {
+    if !(1..=100).contains(&input.problem_ids.len()) {
+        return Err(ReviewUseCaseError::InvalidManualSelection);
+    }
+    let unique = input.problem_ids.iter().collect::<HashSet<_>>();
+    if unique.len() != input.problem_ids.len() {
+        return Err(ReviewUseCaseError::InvalidManualSelection);
+    }
+
+    let transaction = connection.transaction()?;
+    let entries = queue_entries_for_ids(
+        &transaction,
+        &input.account_id,
+        &input.profile_id,
+        &input.problem_ids,
+    )?;
+    if entries.len() != input.problem_ids.len() {
+        return Err(ReviewUseCaseError::InvalidManualSelection);
+    }
+
+    transaction.execute(
+        "UPDATE review_sessions
+         SET status = 'cancelled', updated_at_utc_ms = ?1
+         WHERE account_id = ?2 AND profile_id = ?3 AND status = 'active'",
+        params![input.now_utc_ms, input.account_id, input.profile_id],
+    )?;
+    let session_id = Uuid::now_v7().to_string();
+    transaction.execute(
+        "INSERT INTO review_sessions(
+             id, account_id, profile_id, mode, problem_ids_json, current_index,
+             status, created_at_utc_ms, updated_at_utc_ms
+         ) VALUES(?1, ?2, ?3, 'manual', ?4, 0, 'active', ?5, ?5)",
+        params![
+            session_id,
+            input.account_id,
+            input.profile_id,
+            serde_json::to_string(&input.problem_ids)?,
+            input.now_utc_ms,
+        ],
+    )?;
+    transaction.commit()?;
+
+    Ok(ReviewQueueState {
+        session_id: Some(session_id),
+        mode: "manual".to_owned(),
+        resumed: false,
+        completed_count: 0,
+        total_count: count_for_ui(entries.len()),
         items: entries,
     })
 }
@@ -205,19 +253,13 @@ fn query_new_review_entries(
          LEFT JOIN schedule_states s ON s.problem_id = p.id
          LEFT JOIN review_events e ON e.problem_id = p.id
          WHERE p.account_id = ?1 AND p.profile_id = ?2 AND p.status = 'active'
-           AND (?3 IS NULL OR p.id = ?3)
-           AND (?3 IS NOT NULL OR s.due_at_utc_ms IS NULL OR s.due_at_utc_ms <= ?4)
+           AND (s.due_at_utc_ms IS NULL OR s.due_at_utc_ms <= ?3)
          GROUP BY p.id
          ORDER BY COALESCE(s.due_at_utc_ms, 0), p.updated_at_utc_ms, p.id
          LIMIT 100",
     )?;
     let rows = statement.query_map(
-        params![
-            &query.account_id,
-            &query.profile_id,
-            &query.problem_id,
-            query.now_utc_ms
-        ],
+        params![&query.account_id, &query.profile_id, query.now_utc_ms],
         |row| {
             Ok(ReviewQueueEntry {
                 problem_id: row.get(0)?,

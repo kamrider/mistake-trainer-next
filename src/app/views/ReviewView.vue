@@ -37,6 +37,13 @@ const questionImages = computed(() => currentProblem.value?.assets
 const answerImages = computed(() => currentProblem.value?.assets
   .filter(asset => asset.role === 'answer')
   .map(asset => asset.dataUrl) ?? [])
+const isManual = computed(() => overview.value.mode === 'manual')
+const completionHeading = computed(() => isManual.value
+  ? '这组自选卡已经练完。'
+  : '把今天该记住的，认真看完了。')
+const completionSummary = computed(() => isManual.value
+  ? '你挑出的题已全部复盘，进度会在下次打开时保持一致。'
+  : '今天到期的内容已经完成，新的到期题会按计划出现。')
 
 function loadDevelopmentPreview() {
   const previewImage = (label: string, accent: string) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`
@@ -52,7 +59,7 @@ function loadDevelopmentPreview() {
   `)}`
   overview.value = {
     sessionId: 'development-preview',
-    mode: 'due',
+    mode: route.query.preview === 'manual-review' ? 'manual' : 'due',
     resumed: true,
     completedCount: 2,
     totalCount: 5,
@@ -86,17 +93,20 @@ async function loadQueue() {
   try {
     if (!isTauri()) {
       // Explicit development-only component gallery; Vite removes it from release builds.
-      if (import.meta.env.DEV && route.query.preview === 'review')
+      if (import.meta.env.DEV && (route.query.preview === 'review' || route.query.preview === 'manual-review'))
         loadDevelopmentPreview()
       return
     }
-    const queryId = Array.isArray(route.query.problemId) ? route.query.problemId[0] : route.query.problemId
-    const result = normalizeAppResult(await commands.reviewQueue(queryId || null))
+    const result = normalizeAppResult(await commands.reviewQueue())
     if (!result.ok) {
       errorMessage.value = result.error.userMessage
       return
     }
     overview.value = result.data
+    completed.value = Boolean(
+      overview.value.sessionId
+      && overview.value.totalCount === overview.value.completedCount,
+    )
     if (overview.value.items.length > 0)
       await loadCurrentProblem()
   }
@@ -191,10 +201,10 @@ onMounted(loadQueue)
   >
     <span class="complete-seal">完</span>
     <p>本轮完成</p>
-    <h1>把今天该记住的，认真看完了。</h1>
+    <h1>{{ completionHeading }}</h1>
     <span>
-      本次完成 {{ successfulCount }} 道 · 会话进度
-      {{ overview.completedCount + successfulCount }} / {{ overview.totalCount }}
+      {{ completionSummary }}<br>
+      本次完成 {{ successfulCount }} 道 · 会话进度 {{ overview.completedCount + successfulCount }} / {{ overview.totalCount }}
     </span>
     <div class="message-actions">
       <button
@@ -261,6 +271,7 @@ onMounted(loadQueue)
     </p>
     <ReviewRoom
       :subject="currentProblem.subject || '未分类'"
+      :mode="overview.mode"
       :prompt="currentProblem.note || '请观察题图，在心里完整走一遍解题过程。'"
       answer="请对照答案图片，确认关键步骤和易错点。"
       :question-images="questionImages"
@@ -298,11 +309,19 @@ onMounted(loadQueue)
 .message-actions { display: flex; gap: 10px; margin-top: 26px; }
 .review-message .secondary-action { color: var(--green-deep); background: transparent; }
 .complete-seal { display: grid; width: 54px; height: 54px; margin-bottom: 18px; place-items: center; color: var(--paper); border-radius: 12px 2px 12px 12px; background: var(--cinnabar); box-shadow: 0 12px 28px rgba(185, 88, 63, .2); font-family: var(--font-serif); font-size: 22px; transform: rotate(-3deg); }
+.review-complete > :not(.complete-seal) { animation: completion-in var(--motion-page) var(--ease-standard) both; }
+.review-complete > .complete-seal { animation: completion-seal-in var(--motion-page) var(--ease-standard) both; }
+.review-complete > :nth-child(2) { animation-delay: 45ms; }
+.review-complete > :nth-child(3) { animation-delay: 80ms; }
+.review-complete > :nth-child(4) { animation-delay: 115ms; }
+.review-complete > :nth-child(5) { animation-delay: 150ms; }
 .loading-mark { width: 28px; height: 28px; margin-bottom: 14px; border: 2px solid var(--sand); border-top-color: var(--cinnabar); border-radius: 50%; animation: spin .8s linear infinite; }
 .review-error p { max-width: 540px; padding: 14px 18px; color: #7f3829; border: 1px solid rgba(185, 88, 63, .25); border-radius: 10px; background: rgba(185, 88, 63, .08); letter-spacing: 0; }
 .floating-error { position: fixed; z-index: 20; top: 18px; left: 50%; max-width: min(680px, calc(100vw - 40px)); margin: 0; padding: 11px 16px; color: #7f3829; border: 1px solid rgba(185, 88, 63, .25); border-radius: 999px; background: #fbefe8; box-shadow: var(--shadow-soft); transform: translateX(-50%); }
 
 @keyframes spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .loading-mark { animation: none; } }
+@keyframes completion-in { from { opacity: 0; transform: translateY(10px); } }
+@keyframes completion-seal-in { from { opacity: 0; transform: translateY(10px) rotate(-8deg) scale(.94); } to { transform: rotate(-3deg); } }
+@media (prefers-reduced-motion: reduce) { .loading-mark, .review-complete > * { animation: none; } }
 @media (max-width: 560px) { .message-actions { width: 100%; flex-direction: column; } }
 </style>

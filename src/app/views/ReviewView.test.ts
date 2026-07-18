@@ -57,6 +57,7 @@ describe('ReviewView', () => {
     await renderView()
 
     expect(await screen.findByText('2 / 2')).toBeVisible()
+    expect(api.reviewQueue).toHaveBeenCalledWith()
     expect(screen.getByText('已恢复上次进度')).toBeVisible()
     await user.click(screen.getByRole('button', { name: '显示答案' }))
     await user.click(screen.getByRole('button', { name: '记住了' }))
@@ -95,5 +96,20 @@ describe('ReviewView', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('评分没有保存。')
     expect(screen.getByText('2 / 2')).toBeVisible()
     expect(screen.getByRole('button', { name: '记住了' })).toBeEnabled()
+  })
+
+  it('uses manual-deck copy through completion and never reads ids from the route', async () => {
+    const user = userEvent.setup()
+    api.reviewQueue.mockResolvedValue({
+      ok: true,
+      data: { ...queueOverview, mode: 'manual', resumed: false, completedCount: 0, totalCount: 1 },
+    })
+    await renderView()
+
+    expect(await screen.findByText('自选训练')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '显示答案' }))
+    await user.click(screen.getByRole('button', { name: '记住了' }))
+    expect(await screen.findByRole('heading', { name: '这组自选卡已经练完。' })).toBeVisible()
+    expect(api.reviewQueue).toHaveBeenCalledWith()
   })
 })

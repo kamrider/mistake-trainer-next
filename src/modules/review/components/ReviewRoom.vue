@@ -13,6 +13,7 @@ const props = defineProps<{
   current: number
   total: number
   elapsedText: string
+  mode?: 'due' | 'manual' | string
   timeLimitSeconds?: number | null
   expired?: boolean
   resumed?: boolean
@@ -32,6 +33,7 @@ const progress = computed(() => {
   if (props.total <= 0) return '0%'
   return `${Math.round((Math.min(props.current, props.total) / props.total) * 100)}%`
 })
+const modeLabel = computed(() => props.mode === 'manual' ? '自选训练' : '到期复习')
 
 watch(() => props.current, () => {
   revealed.value = false
@@ -162,7 +164,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleShortcut))
             :size="15"
             aria-hidden="true"
           />
-          回忆模式
+          {{ modeLabel }}
         </p>
         <h1 id="review-heading">
           先想一遍，再看答案

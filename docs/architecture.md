@@ -87,6 +87,16 @@ conflict. Deletes create tombstones retained for 30 days.
 - Rust owns the active review session. A queue response includes its opaque session ID,
   original total, persisted completed count, and whether the session was resumed; Vue
   renders that state instead of reconstructing progress from the remaining cards.
+- One profile has at most one active session. Opening the training room resumes that
+  session regardless of whether it is a due queue or a user-selected deck; it creates a
+  new due queue only when no active session exists.
+- A manual deck contains 1 through 100 unique active problems. Rust validates account,
+  profile, status, uniqueness, and caller order before replacing the current session.
+  Any invalid selection leaves the previous session byte-for-byte unchanged.
+- The library persists a manual deck through `review_manual_start` before navigation.
+  The ordinary `review_queue` command accepts no entity IDs, so selected problem IDs do
+  not enter routes, browser history, logs, or filenames. Leaving the room intentionally
+  preserves unfinished progress for the next entry.
 - A rating appends one `ReviewEvent`, updates the derived schedule, advances the active
   session, and writes the sync operation in one transaction. Failed submissions keep the
   current answer visible and retryable; the UI never advances optimistically.

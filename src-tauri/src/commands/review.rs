@@ -8,7 +8,8 @@ use crate::{
     domain::review::FsrsRating,
     infrastructure::runtime::LibraryRuntime,
     modules::review::{
-        ReviewQueueQuery, ReviewSubmission, SubmitReview, list_review_queue, submit_review,
+        list_review_queue, start_manual_review_queue, submit_review, ReviewQueueQuery,
+        ReviewQueueState, ReviewSubmission, StartManualReview, SubmitReview,
     },
 };
 
@@ -39,9 +40,14 @@ pub struct ReviewSubmitInput {
     pub duration_ms: u32,
 }
 
+#[derive(Clone, Debug, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewManualStartInput {
+    pub problem_ids: Vec<String>,
+}
+
 pub fn review_queue_for(
     runtime: &LibraryRuntime,
-    problem_id: Option<String>,
     now_utc_ms: i64,
 ) -> AppResult<ReviewQueueOverview> {
     let profile = runtime.active_profile();
@@ -54,13 +60,48 @@ pub fn review_queue_for(
         ReviewQueueQuery {
             account_id: runtime.account_id().to_owned(),
             profile_id: profile.id,
-            problem_id,
             now_utc_ms,
         },
     ) {
         Ok(overview) => overview,
         Err(_) => return internal_review_error("review_queue_failed"),
     };
+    AppResult::success(queue_overview(overview))
+}
+
+pub fn review_manual_start_for(
+    runtime: &LibraryRuntime,
+    input: ReviewManualStartInput,
+    now_utc_ms: i64,
+) -> AppResult<ReviewQueueOverview> {
+    let profile = runtime.active_profile();
+    let mut connection = match runtime.connection.lock() {
+        Ok(connection) => connection,
+        Err(_) => return internal_review_error("library_lock_poisoned"),
+    };
+    match start_manual_review_queue(
+        &mut connection,
+        StartManualReview {
+            account_id: runtime.account_id().to_owned(),
+            profile_id: profile.id,
+            problem_ids: input.problem_ids,
+            now_utc_ms,
+        },
+    ) {
+        Ok(overview) => AppResult::success(queue_overview(overview)),
+        Err(crate::modules::review::ReviewUseCaseError::InvalidManualSelection) => {
+            AppResult::failure(
+                "review_manual_selection_invalid",
+                "所选题目已经变化，请回到题库重新选择后再试。",
+                false,
+                Uuid::now_v7().to_string(),
+            )
+        }
+        Err(_) => internal_review_error("review_manual_start_failed"),
+    }
+}
+
+fn queue_overview(overview: ReviewQueueState) -> ReviewQueueOverview {
     let items = overview
         .items
         .into_iter()
@@ -70,14 +111,14 @@ pub fn review_queue_for(
             review_count: entry.review_count,
         })
         .collect();
-    AppResult::success(ReviewQueueOverview {
+    ReviewQueueOverview {
         session_id: overview.session_id,
         mode: overview.mode,
         resumed: overview.resumed,
         completed_count: overview.completed_count,
         total_count: overview.total_count,
         items,
-    })
+    }
 }
 
 pub fn review_submit_for(
@@ -109,11 +150,17 @@ pub fn review_submit_for(
 
 #[tauri::command]
 #[specta::specta]
-pub fn review_queue(
+pub fn review_queue(state: State<'_, LibraryRuntime>) -> AppResult<ReviewQueueOverview> {
+    review_queue_for(&state, current_utc_millis())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn review_manual_start(
     state: State<'_, LibraryRuntime>,
-    problem_id: Option<String>,
+    input: ReviewManualStartInput,
 ) -> AppResult<ReviewQueueOverview> {
-    review_queue_for(&state, problem_id, current_utc_millis())
+    review_manual_start_for(&state, input, current_utc_millis())
 }
 
 #[tauri::command]

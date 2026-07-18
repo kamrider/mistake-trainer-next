@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { isTauri } from '@tauri-apps/api/core'
 import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import LibraryWorkspace from '../../modules/library/components/LibraryWorkspace.vue'
 import ProblemDetailDrawer from '../../modules/library/components/ProblemDetailDrawer.vue'
 import { commands, type ProblemDetail, type ProblemStatusFilter, type ProblemSummary } from '../../shared/api/bindings'
 import { normalizeAppResult } from '../../shared/api/normalize-result'
 
 const router = useRouter()
+const route = useRoute()
 const profileName = ref('本机学习档案')
 const status = ref<ProblemStatusFilter>('active')
 const search = ref('')
@@ -15,6 +16,7 @@ const problems = ref<ProblemSummary[]>([])
 const selectedProblemIds = ref<string[]>([])
 const loading = ref(true)
 const errorMessage = ref('')
+const startingReview = ref(false)
 let refreshSequence = 0
 let searchTimer: number | undefined
 let detailSequence = 0
@@ -24,13 +26,24 @@ const detail = ref<ProblemDetail>()
 const detailError = ref('')
 const detailSaving = ref(false)
 
+function loadDevelopmentPreview() {
+  profileName.value = '本机学习档案'
+  problems.value = [
+    { id: 'preview-math', subject: '数学', note: '圆锥曲线：先确认长轴方向，再写焦点关系。', status: 'active', questionAssetCount: 2, answerAssetCount: 1, updatedAtUtcMs: Date.now() },
+    { id: 'preview-physics', subject: '物理', note: '受力分析遗漏了接触面的支持力。', status: 'active', questionAssetCount: 1, answerAssetCount: 2, updatedAtUtcMs: Date.now() - 1 },
+    { id: 'preview-chemistry', subject: '化学', note: '平衡移动方向与转化率变化需要分开判断。', status: 'active', questionAssetCount: 1, answerAssetCount: 1, updatedAtUtcMs: Date.now() - 2 },
+    { id: 'preview-english', subject: '英语', note: '长难句先切分从句，再确认非谓语逻辑主语。', status: 'active', questionAssetCount: 2, answerAssetCount: 2, updatedAtUtcMs: Date.now() - 3 },
+  ]
+}
+
 async function refresh() {
   const sequence = ++refreshSequence
   loading.value = true
   errorMessage.value = ''
   try {
     if (!isTauri()) {
-      problems.value = []
+      if (import.meta.env.DEV && route.query.preview === 'library') loadDevelopmentPreview()
+      else problems.value = []
       return
     }
 
@@ -97,12 +110,7 @@ function closeDetail() {
 }
 
 async function trainProblem(problemId: string) {
-  try {
-    await router.push({ name: 'review', query: { problemId } })
-  }
-  catch {
-    detailError.value = '训练页面暂时无法打开，请稍后重试。'
-  }
+  await startReview([problemId], true)
 }
 
 async function updateProblem(input: { problemId: string; subject: string; note: string; timeLimitSeconds: number | null }) {
@@ -155,9 +163,63 @@ async function changeStatus(nextStatus: ProblemStatusFilter) {
 }
 
 function toggleSelection(problemId: string) {
-  selectedProblemIds.value = selectedProblemIds.value.includes(problemId)
-    ? selectedProblemIds.value.filter(id => id !== problemId)
-    : [...selectedProblemIds.value, problemId]
+  if (selectedProblemIds.value.includes(problemId)) {
+    selectedProblemIds.value = selectedProblemIds.value.filter(id => id !== problemId)
+    return
+  }
+  if (selectedProblemIds.value.length >= 100) {
+    errorMessage.value = '一次训练最多选择 100 道题。'
+    return
+  }
+  errorMessage.value = ''
+  selectedProblemIds.value = [...selectedProblemIds.value, problemId]
+}
+
+function selectAllVisible() {
+  const nextIds = problems.value.slice(0, 100).map(problem => problem.id)
+  selectedProblemIds.value = nextIds
+  errorMessage.value = problems.value.length > 100
+    ? '已按当前顺序选择前 100 道题；单次训练最多 100 道。'
+    : ''
+}
+
+function clearSelection() {
+  selectedProblemIds.value = []
+  errorMessage.value = ''
+}
+
+async function startReview(problemIds = selectedProblemIds.value, fromDetail = false) {
+  if (problemIds.length === 0 || startingReview.value) return
+  startingReview.value = true
+  if (fromDetail) detailError.value = ''
+  else errorMessage.value = ''
+  let sessionCreated = false
+  try {
+    if (!isTauri() && import.meta.env.DEV && route.query.preview === 'library') {
+      await router.push({ name: 'review', query: { preview: 'manual-review' } })
+      selectedProblemIds.value = []
+      return
+    }
+    const result = normalizeAppResult(await commands.reviewManualStart({ problemIds }))
+    if (!result.ok) {
+      if (fromDetail) detailError.value = result.error.userMessage
+      else errorMessage.value = result.error.userMessage
+      return
+    }
+    sessionCreated = true
+    if (!fromDetail) selectedProblemIds.value = []
+    await router.push({ name: 'review' })
+  }
+  catch {
+    const message = sessionCreated
+      ? '训练卡组已安全保存，可从侧边栏“训练室”继续。'
+      : '训练卡组没有创建成功，请保持当前选择并稍后重试。'
+    if (fromDetail) detailError.value = message
+    else errorMessage.value = message
+  }
+  finally {
+    startingReview.value = false
+  }
 }
 
 async function changeBatchStatus(targetStatus: ProblemStatusFilter) {
@@ -194,6 +256,7 @@ onBeforeUnmount(() => {
     :loading="loading"
     :problems="problems"
     :selected-problem-ids="selectedProblemIds"
+    :starting-review="startingReview"
     :error-message="errorMessage"
     @capture="router.push({ name: 'inbox' })"
     @status-change="changeStatus"
@@ -201,12 +264,15 @@ onBeforeUnmount(() => {
     @open-detail="openDetail"
     @toggle-selection="toggleSelection"
     @batch-status="changeBatchStatus"
+    @train-selection="startReview()"
+    @select-all="selectAllVisible"
+    @clear-selection="clearSelection"
   />
   <ProblemDetailDrawer
     v-if="detailOpen"
     :detail="detail"
     :loading="detailLoading"
-    :saving="detailSaving"
+    :saving="detailSaving || startingReview"
     :error-message="detailError"
     @close="closeDetail"
     @train="trainProblem"

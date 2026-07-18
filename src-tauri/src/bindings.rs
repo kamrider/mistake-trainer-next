@@ -1,7 +1,7 @@
 use std::{error::Error, fs, path::Path};
 
 use specta_typescript::Typescript;
-use tauri_specta::{Builder, collect_commands};
+use tauri_specta::{collect_commands, Builder};
 
 use crate::commands;
 
@@ -21,6 +21,7 @@ pub fn builder() -> Builder<tauri::Wry> {
         commands::library::problem_update,
         commands::legacy::legacy_scan,
         commands::review::review_queue,
+        commands::review::review_manual_start,
         commands::review::review_submit,
         commands::insights::dashboard_overview,
         commands::insights::report_summary,

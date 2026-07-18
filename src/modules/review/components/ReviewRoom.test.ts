@@ -97,4 +97,11 @@ describe('ReviewRoom', () => {
     await user.keyboard('2')
     expect(view.emitted('rate')).toBeUndefined()
   })
+
+  it('labels a user-selected deck without changing the review controls', () => {
+    render(ReviewRoom, { props: { ...baseProps, mode: 'manual' } })
+
+    expect(screen.getByText('自选训练')).toBeVisible()
+    expect(screen.getByRole('button', { name: '显示答案' })).toBeVisible()
+  })
 })
