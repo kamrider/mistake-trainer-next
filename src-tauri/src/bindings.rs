@@ -27,6 +27,7 @@ pub fn builder() -> Builder<tauri::Wry> {
         commands::insights::settings_overview,
         commands::preferences::subject_preferences_get,
         commands::preferences::subject_preferences_save,
+        commands::exports::export_candidates,
         commands::exports::export_list,
         commands::exports::export_trash_list,
         commands::exports::export_create,

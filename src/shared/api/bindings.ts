@@ -24,6 +24,7 @@ export const commands = {
 	settingsOverview: () => __TAURI_INVOKE<AppResult<SettingsOverview>>("settings_overview"),
 	subjectPreferencesGet: () => __TAURI_INVOKE<AppResult<SubjectPreferences>>("subject_preferences_get"),
 	subjectPreferencesSave: (input: SubjectPreferencesInput) => __TAURI_INVOKE<AppResult<SubjectPreferences>>("subject_preferences_save", { input }),
+	exportCandidates: (source: ExportCandidateSource) => __TAURI_INVOKE<AppResult<ExportCandidate[]>>("export_candidates", { source }),
 	exportList: () => __TAURI_INVOKE<AppResult<ExportSnapshotSummary[]>>("export_list"),
 	exportTrashList: () => __TAURI_INVOKE<AppResult<DeletedExportSnapshotSummary[]>>("export_trash_list"),
 	exportCreate: (input: ExportCreateInput) => __TAURI_INVOKE<AppResult<ExportSnapshotSummary>>("export_create", { input }),
@@ -260,6 +261,18 @@ export type DeletedExportSnapshotSummary = {
 	deletedAtUtcMs: number | null,
 	purgeAfterUtcMs: number | null,
 };
+
+export type ExportCandidate = {
+	id: string,
+	subject: string,
+	note: string,
+	questionAssetCount: number,
+	answerAssetCount: number,
+	dueAtUtcMs: number | null,
+	reviewCount: number,
+};
+
+export type ExportCandidateSource = "due" | "latest_review_session" | "all_active";
 
 export type ExportCreateInput = {
 	title: string,

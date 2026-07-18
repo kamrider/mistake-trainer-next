@@ -97,6 +97,25 @@ conflict. Deletes create tombstones retained for 30 days.
   asset is decrypted by Rust for the current detail DTO; Vue can enlarge it in a focused,
   keyboard-contained lightbox but receives no filesystem path or blob-store handle.
 
+## Export boundary
+
+- Export candidate queries are profile-scoped, read-only projections. They never create,
+  resume, cancel, or advance a review session. Due candidates use the same rule as the
+  review queue; the latest-session source preserves its persisted problem order, and the
+  all-active source has a deterministic updated-time order.
+- Vue receives only opaque problem IDs and display metadata. It owns transient filtering
+  and selection, while Rust revalidates account ownership, profile ownership, status,
+  uniqueness, order, and the 500-problem limit when the immutable snapshot is created.
+- A snapshot records the ordered selection and layout needed to reproduce an export.
+  Generated DOCX files and image folders remain local artifacts and are not placed in the
+  synchronization outbox.
+- Generation prepares and validates the snapshot while the encrypted database is locked,
+  releases that lock before showing the native folder picker, and performs filesystem work
+  afterward. Vue receives a safe filename or cancellation result, never an output path.
+- Deleted, foreign, corrupt, or oversized exports fail with stable user-facing error codes.
+  Diagnostic details may be logged under a diagnostic ID but must not expose asset paths or
+  database internals to the page.
+
 ## Backup boundary
 
 - A backup is a new directory containing one consistent SQLCipher snapshot, immutable

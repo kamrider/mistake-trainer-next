@@ -4,13 +4,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ReportView from './ReportView.vue'
 
 const api = vi.hoisted(() => ({
-  reportSummary: vi.fn(), exportList: vi.fn(), exportTrashList: vi.fn(), problemList: vi.fn(), exportCreate: vi.fn(), exportGenerate: vi.fn(), exportDelete: vi.fn(), exportRestore: vi.fn(),
+  reportSummary: vi.fn(), exportList: vi.fn(), exportTrashList: vi.fn(), exportCandidates: vi.fn(), exportCreate: vi.fn(), exportGenerate: vi.fn(), exportDelete: vi.fn(), exportRestore: vi.fn(),
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => true }))
 vi.mock('../../shared/api/bindings', () => ({ commands: api }))
 
 describe('ReportView', () => {
+  const mathCandidate = {
+    id: 'problem-1', subject: '数学', note: '圆锥曲线', questionAssetCount: 1,
+    answerAssetCount: 1, dueAtUtcMs: null, reviewCount: 0,
+  }
+
   beforeEach(() => {
     vi.clearAllMocks()
     api.reportSummary.mockResolvedValue({ ok: true, data: {
@@ -21,9 +26,7 @@ describe('ReportView', () => {
     } })
     api.exportList.mockResolvedValue({ ok: true, data: [] })
     api.exportTrashList.mockResolvedValue({ ok: true, data: [] })
-    api.problemList.mockResolvedValue({ ok: true, data: [{
-      id: 'problem-1', subject: '数学', note: '', status: 'active', questionAssetCount: 1, answerAssetCount: 1, updatedAtUtcMs: 1,
-    }] })
+    api.exportCandidates.mockResolvedValue({ ok: true, data: [mathCandidate] })
     api.exportCreate.mockResolvedValue({ ok: true, data: {
       id: 'snapshot-1', title: '本周复盘', problemCount: 1, layout: 'question_answer_alternating', createdAtUtcMs: 1,
     } })
@@ -34,21 +37,77 @@ describe('ReportView', () => {
     api.exportRestore.mockResolvedValue({ ok: true, data: true })
   })
 
-  it('renders real metrics and creates an export snapshot from active problems', async () => {
+  it('renders real metrics and creates an export snapshot from due candidates', async () => {
     const user = userEvent.setup()
     render(ReportView)
 
     expect(await screen.findByText('75')).toBeVisible()
-    expect(screen.getByText('数学')).toBeVisible()
+    expect(screen.getAllByText('数学').length).toBeGreaterThanOrEqual(1)
     const title = screen.getByRole('textbox', { name: '快照名称' })
     await user.clear(title)
     await user.type(title, '本周复盘')
-    await user.click(screen.getByRole('button', { name: /保存 1 道活动题配置/ }))
+    await user.click(screen.getByRole('button', { name: /保存 1 道题的导出快照/ }))
 
     await waitFor(() => expect(api.exportCreate).toHaveBeenCalledWith({
       title: '本周复盘', problemIds: ['problem-1'], layout: 'question_answer_alternating',
     }))
     expect(await screen.findByText('本周复盘')).toBeVisible()
+  })
+
+  it('switches candidate source and saves only the explicitly selected problems', async () => {
+    const user = userEvent.setup()
+    const physicsCandidate = {
+      id: 'problem-2', subject: '物理', note: '受力分析', questionAssetCount: 1,
+      answerAssetCount: 1, dueAtUtcMs: 1_700_000_000_000, reviewCount: 2,
+    }
+    api.exportCandidates
+      .mockResolvedValueOnce({ ok: true, data: [mathCandidate] })
+      .mockResolvedValueOnce({ ok: true, data: [physicsCandidate, mathCandidate] })
+    render(ReportView)
+
+    expect(await screen.findByRole('checkbox', { name: '选择数学：圆锥曲线' })).toBeChecked()
+    await user.click(screen.getByRole('radio', { name: /最近训练批次/ }))
+    await waitFor(() => expect(api.exportCandidates).toHaveBeenLastCalledWith('latest_review_session'))
+    const physics = await screen.findByRole('checkbox', { name: '选择物理：受力分析' })
+    expect(physics).toBeChecked()
+    await user.click(physics)
+    await user.click(screen.getByRole('button', { name: /保存 1 道题的导出快照/ }))
+
+    await waitFor(() => expect(api.exportCreate).toHaveBeenCalledWith(expect.objectContaining({
+      problemIds: ['problem-1'],
+    })))
+  })
+
+  it('retries candidate loading without fabricating a selection', async () => {
+    const user = userEvent.setup()
+    api.exportCandidates
+      .mockResolvedValueOnce({ ok: false, error: {
+        code: 'export_candidates_failed', userMessage: '候选题读取失败。', retryable: true, diagnosticId: 'diag-1',
+      } })
+      .mockResolvedValueOnce({ ok: true, data: [mathCandidate] })
+    render(ReportView)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('候选题读取失败。')
+    expect(screen.getByRole('button', { name: /保存 0 道题的导出快照/ })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: '重新读取候选题' }))
+
+    expect(await screen.findByRole('checkbox', { name: '选择数学：圆锥曲线' })).toBeChecked()
+    expect(api.exportCandidates).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps the explicit selection when snapshot creation fails', async () => {
+    const user = userEvent.setup()
+    api.exportCreate.mockResolvedValue({ ok: false, error: {
+      code: 'export_create_failed', userMessage: '快照没有保存。', retryable: true, diagnosticId: 'diag-2',
+    } })
+    render(ReportView)
+
+    const candidate = await screen.findByRole('checkbox', { name: '选择数学：圆锥曲线' })
+    await user.click(screen.getByRole('button', { name: /保存 1 道题的导出快照/ }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('快照没有保存。')
+    expect(candidate).toBeChecked()
+    expect(screen.getByRole('button', { name: /保存 1 道题的导出快照/ })).toBeEnabled()
   })
 
   it('loads the persistent recycle area and restores a deleted snapshot', async () => {

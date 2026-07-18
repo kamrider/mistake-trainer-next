@@ -6,7 +6,7 @@ use std::{
 };
 
 use docx_rs::{Docx, Paragraph, Pic, Run};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use thiserror::Error;
@@ -28,6 +28,26 @@ pub enum ExportLayout {
     QuestionAnswerAlternating,
     QuestionsThenAnswers,
     OriginalImageFolder,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportCandidateSource {
+    Due,
+    LatestReviewSession,
+    AllActive,
+}
+
+#[derive(Clone, Debug, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportCandidate {
+    pub id: String,
+    pub subject: String,
+    pub note: String,
+    pub question_asset_count: i32,
+    pub answer_asset_count: i32,
+    pub due_at_utc_ms: Option<f64>,
+    pub review_count: i32,
 }
 
 #[derive(Clone, Debug)]
@@ -231,6 +251,94 @@ pub fn list_export_snapshots(
     .collect()
 }
 
+pub fn list_export_candidates(
+    connection: &Connection,
+    account_id: &str,
+    profile_id: &str,
+    source: ExportCandidateSource,
+    now_utc_ms: i64,
+) -> Result<Vec<ExportCandidate>, ExportError> {
+    let select = "SELECT p.id, p.subject, p.note,
+                         (SELECT COUNT(*) FROM problem_assets pa WHERE pa.problem_id = p.id AND pa.role = 'question'),
+                         (SELECT COUNT(*) FROM problem_assets pa WHERE pa.problem_id = p.id AND pa.role = 'answer'),
+                         s.due_at_utc_ms,
+                         (SELECT COUNT(*) FROM review_events e WHERE e.problem_id = p.id)
+                  FROM problems p
+                  LEFT JOIN schedule_states s ON s.problem_id = p.id";
+    match source {
+        ExportCandidateSource::Due => {
+            let sql = format!(
+                "{select}
+                 WHERE p.account_id = ?1 AND p.profile_id = ?2 AND p.status = 'active'
+                   AND (s.due_at_utc_ms IS NULL OR s.due_at_utc_ms <= ?3)
+                 ORDER BY COALESCE(s.due_at_utc_ms, 0), p.updated_at_utc_ms, p.id
+                 LIMIT 500"
+            );
+            let mut statement = connection.prepare(&sql)?;
+            let rows = statement.query_map(
+                params![account_id, profile_id, now_utc_ms],
+                candidate_from_row,
+            )?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(ExportError::Database)
+        }
+        ExportCandidateSource::AllActive => {
+            let sql = format!(
+                "{select}
+                 WHERE p.account_id = ?1 AND p.profile_id = ?2 AND p.status = 'active'
+                 ORDER BY p.updated_at_utc_ms DESC, p.id DESC
+                 LIMIT 500"
+            );
+            let mut statement = connection.prepare(&sql)?;
+            let rows = statement.query_map(params![account_id, profile_id], candidate_from_row)?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(ExportError::Database)
+        }
+        ExportCandidateSource::LatestReviewSession => {
+            let mut statement = connection.prepare(
+                "WITH latest AS (
+                     SELECT problem_ids_json
+                     FROM review_sessions
+                     WHERE account_id = ?1 AND profile_id = ?2
+                     ORDER BY updated_at_utc_ms DESC, id DESC
+                     LIMIT 1
+                 )
+                 SELECT p.id, p.subject, p.note,
+                        (SELECT COUNT(*) FROM problem_assets pa WHERE pa.problem_id = p.id AND pa.role = 'question'),
+                        (SELECT COUNT(*) FROM problem_assets pa WHERE pa.problem_id = p.id AND pa.role = 'answer'),
+                        s.due_at_utc_ms,
+                        (SELECT COUNT(*) FROM review_events e WHERE e.problem_id = p.id)
+                 FROM latest
+                 JOIN json_each(latest.problem_ids_json) item
+                 JOIN problems p ON p.id = item.value
+                 LEFT JOIN schedule_states s ON s.problem_id = p.id
+                 WHERE p.account_id = ?1 AND p.profile_id = ?2 AND p.status != 'trashed'
+                 ORDER BY CAST(item.key AS INTEGER)
+                 LIMIT 500",
+            )?;
+            let rows = statement.query_map(params![account_id, profile_id], candidate_from_row)?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(ExportError::Database)
+        }
+    }
+}
+
+fn candidate_from_row(row: &Row<'_>) -> rusqlite::Result<ExportCandidate> {
+    let question_asset_count = row.get::<_, i64>(3)?;
+    let answer_asset_count = row.get::<_, i64>(4)?;
+    let due_at_utc_ms = row.get::<_, Option<i64>>(5)?;
+    let review_count = row.get::<_, i64>(6)?;
+    Ok(ExportCandidate {
+        id: row.get(0)?,
+        subject: row.get(1)?,
+        note: row.get(2)?,
+        question_asset_count: i32::try_from(question_asset_count).unwrap_or(i32::MAX),
+        answer_asset_count: i32::try_from(answer_asset_count).unwrap_or(i32::MAX),
+        due_at_utc_ms: due_at_utc_ms.map(|value| value as f64),
+        review_count: i32::try_from(review_count).unwrap_or(i32::MAX),
+    })
+}
+
 pub fn list_deleted_export_snapshots(
     connection: &Connection,
     account_id: &str,
@@ -394,12 +502,7 @@ pub(crate) fn prepare_export(
     snapshot_id: &str,
 ) -> Result<PreparedExport, ExportError> {
     let snapshot = load_snapshot(connection, account_id, profile_id, snapshot_id)?;
-    let problems = load_export_problems(
-        connection,
-        account_id,
-        profile_id,
-        &snapshot.problem_ids,
-    )?;
+    let problems = load_export_problems(connection, account_id, profile_id, &snapshot.problem_ids)?;
     Ok(PreparedExport {
         snapshot,
         problems,
@@ -434,15 +537,13 @@ pub(crate) fn write_prepared_export(
     let suffix = Uuid::now_v7().simple().to_string();
     let base_name = format!("{safe_title}-{suffix}");
     let output_name = match snapshot.layout {
-        ExportLayout::OriginalImageFolder => {
-            generate_original_folder(
-                &destination,
-                &base_name,
-                &problems,
-                &canonical_blob_root,
-                &asset_key,
-            )?
-        }
+        ExportLayout::OriginalImageFolder => generate_original_folder(
+            &destination,
+            &base_name,
+            &problems,
+            &canonical_blob_root,
+            &asset_key,
+        )?,
         ExportLayout::QuestionAnswerAlternating | ExportLayout::QuestionsThenAnswers => {
             validate_docx_assets(&problems, &canonical_blob_root, &asset_key)?;
             generate_docx(
@@ -539,25 +640,27 @@ fn load_export_problems(
                 .collect::<Result<Vec<_>, _>>()?;
             let assets = stored_assets
                 .into_iter()
-                .map(|(role, position, media_type, encrypted_path, byte_length)| {
-                    total_assets = total_assets
-                        .checked_add(1)
-                        .filter(|total| *total <= MAX_EXPORT_ASSETS)
-                        .ok_or(ExportError::ExportTooLarge)?;
-                    let byte_length = usize::try_from(byte_length)
-                        .map_err(|_| ExportError::ExportTooLarge)?;
-                    total_plaintext_bytes = total_plaintext_bytes
-                        .checked_add(byte_length)
-                        .filter(|total| *total <= MAX_EXPORT_PLAINTEXT_BYTES)
-                        .ok_or(ExportError::ExportTooLarge)?;
-                    Ok(ExportAsset {
-                        role,
-                        position,
-                        media_type,
-                        encrypted_path,
-                        byte_length,
-                    })
-                })
+                .map(
+                    |(role, position, media_type, encrypted_path, byte_length)| {
+                        total_assets = total_assets
+                            .checked_add(1)
+                            .filter(|total| *total <= MAX_EXPORT_ASSETS)
+                            .ok_or(ExportError::ExportTooLarge)?;
+                        let byte_length = usize::try_from(byte_length)
+                            .map_err(|_| ExportError::ExportTooLarge)?;
+                        total_plaintext_bytes = total_plaintext_bytes
+                            .checked_add(byte_length)
+                            .filter(|total| *total <= MAX_EXPORT_PLAINTEXT_BYTES)
+                            .ok_or(ExportError::ExportTooLarge)?;
+                        Ok(ExportAsset {
+                            role,
+                            position,
+                            media_type,
+                            encrypted_path,
+                            byte_length,
+                        })
+                    },
+                )
                 .collect::<Result<Vec<_>, ExportError>>()?;
             Ok(ExportProblem {
                 subject,
@@ -612,11 +715,8 @@ fn generate_original_folder(
     let result = (|| {
         for (problem_index, problem) in problems.iter().enumerate() {
             for asset in &problem.assets {
-                let bytes = read_decrypted_export_asset(
-                    blob_root,
-                    asset_key,
-                    &asset.encrypted_path,
-                )?;
+                let bytes =
+                    read_decrypted_export_asset(blob_root, asset_key, &asset.encrypted_path)?;
                 if bytes.len() != asset.byte_length {
                     return Err(ExportError::InvalidImage);
                 }
@@ -661,37 +761,35 @@ fn generate_docx(
         .create_new(true)
         .open(&temporary_path)?;
     let result = (|| {
-        let mut document = Docx::new().add_paragraph(
-            Paragraph::new().add_run(Run::new().add_text(&snapshot.title)),
-        );
+        let mut document = Docx::new()
+            .add_paragraph(Paragraph::new().add_run(Run::new().add_text(&snapshot.title)));
         match snapshot.layout {
             ExportLayout::QuestionAnswerAlternating => {
                 for (index, problem) in problems.iter().enumerate() {
                     document = add_problem_heading(document, index, problem, "题目");
                     document = add_assets(document, problem, "question", blob_root, asset_key)?;
-                    document = document.add_paragraph(
-                        Paragraph::new().add_run(Run::new().add_text("答案")),
-                    );
+                    document = document
+                        .add_paragraph(Paragraph::new().add_run(Run::new().add_text("答案")));
                     document = add_assets(document, problem, "answer", blob_root, asset_key)?;
                 }
             }
             ExportLayout::QuestionsThenAnswers => {
-                document = document.add_paragraph(
-                    Paragraph::new().add_run(Run::new().add_text("题目")),
-                );
+                document =
+                    document.add_paragraph(Paragraph::new().add_run(Run::new().add_text("题目")));
                 for (index, problem) in problems.iter().enumerate() {
                     document = add_problem_heading(document, index, problem, "题目");
                     document = add_assets(document, problem, "question", blob_root, asset_key)?;
                 }
-                document = document.add_paragraph(
-                    Paragraph::new().add_run(Run::new().add_text("答案")),
-                );
+                document =
+                    document.add_paragraph(Paragraph::new().add_run(Run::new().add_text("答案")));
                 for (index, problem) in problems.iter().enumerate() {
                     document = add_problem_heading(document, index, problem, "答案");
                     document = add_assets(document, problem, "answer", blob_root, asset_key)?;
                 }
             }
-            ExportLayout::OriginalImageFolder => unreachable!("folder export is handled separately"),
+            ExportLayout::OriginalImageFolder => {
+                unreachable!("folder export is handled separately")
+            }
         }
         document
             .build()
@@ -750,9 +848,8 @@ fn add_assets(
         let width_emu = (f64::from(width) * scale * 9_525_f64).round() as u32;
         let height_emu = (f64::from(height) * scale * 9_525_f64).round() as u32;
         let picture = Pic::new(&png).size(width_emu, height_emu);
-        document = document.add_paragraph(
-            Paragraph::new().add_run(Run::new().add_text("").add_image(picture)),
-        );
+        document = document
+            .add_paragraph(Paragraph::new().add_run(Run::new().add_text("").add_image(picture)));
     }
     Ok(document)
 }
