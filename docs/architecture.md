@@ -141,8 +141,16 @@ conflict. Deletes create tombstones retained for 30 days.
 - Version 1 packages rely on the current trusted Windows account/device credentials.
   Cross-device restore requires the future auth-sync key envelope; it must not be added
   by deriving encryption keys from a weak user password.
-- Validation means “eligible for restore staging”, not “restored”. Atomic staging and
-  next-start replacement are a separate operation and are not implemented yet.
+- Restore preparation validates the selected package, copies only the manifest-listed files
+  into an application-owned opaque candidate, and validates that copy again. Vue receives a
+  UUID token and summary only; selected paths and application-data paths never enter page state.
+- Confirmation writes a bounded pending marker and restarts the app. Before the first SQLCipher
+  connection opens, startup revalidates the candidate and swaps the complete `library` directory
+  on the same volume. The previous directory remains as an app-owned rollback child until the
+  restored database has migrated and selected a valid active profile.
+- Interrupted pre-swap, mid-swap, and post-swap states resume deterministically on the next
+  launch. A damaged restored root is rolled back before it opens; a one-time bounded receipt
+  reports success, automatic rollback, or final validation failure to the application shell.
 - Backup packages cannot be created under the application-owned library root. Validation
   rejects SQLite journal/WAL sidecars and checks a private temporary copy of `library.db`,
   so SQL reads are bound to the same bytes whose ciphertext hash was accepted.

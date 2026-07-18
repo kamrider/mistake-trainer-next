@@ -7,7 +7,8 @@ const api = vi.hoisted(() => ({
   settingsOverview: vi.fn(),
   legacyScan: vi.fn(),
   backupCreate: vi.fn(),
-  backupValidate: vi.fn(),
+  backupPrepareRestore: vi.fn(),
+  backupRestore: vi.fn(),
   subjectPreferencesGet: vi.fn(),
   subjectPreferencesSave: vi.fn(),
 }))
@@ -122,7 +123,7 @@ describe('SettingsView', () => {
     expect(screen.queryByText('referenced image is missing')).not.toBeInTheDocument()
   })
 
-  it('creates and validates encrypted backups without claiming data was restored', async () => {
+  it('prepares an encrypted restore and requires explicit confirmation before restart', async () => {
     api.settingsOverview.mockResolvedValue({ ok: true, data: {
       activeProblemCount: 1, archivedProblemCount: 0, trashedProblemCount: 0,
       pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
@@ -132,20 +133,38 @@ describe('SettingsView', () => {
       formatVersion: 1, createdAtUtcMs: 1_725_000_000_000, assetCount: 4,
       encryptedBytes: 2_097_152, label: 'mistake-trainer-backup-safe', readyForRestore: false,
     } } })
-    api.backupValidate.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
-      formatVersion: 1, createdAtUtcMs: 1_725_000_000_000, assetCount: 4,
-      encryptedBytes: 2_097_152, label: 'mistake-trainer-backup-safe', readyForRestore: true,
+    api.backupPrepareRestore.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      id: 'candidate-opaque-id', expiresAtUtcMs: 1_725_086_400_000,
+      summary: { formatVersion: 1, createdAtUtcMs: 1_725_000_000_000, assetCount: 4,
+        encryptedBytes: 2_097_152, label: 'mistake-trainer-backup-safe', readyForRestore: true },
     } } })
+    api.backupRestore.mockResolvedValue({ status: 'ok', data: { ok: true, data: true } })
     render(SettingsView)
 
     await userEvent.click(await screen.findByRole('button', { name: /创建加密备份/ }))
     expect(await screen.findByText('加密备份已创建')).toBeVisible()
     expect(screen.getByText(/4 个资源 · 2.0 MB/)).toBeVisible()
 
-    await userEvent.click(screen.getByRole('button', { name: /验证恢复包/ }))
-    expect(await screen.findByText('完整性验证通过')).toBeVisible()
-    expect(screen.getByText(/可进入安全恢复暂存，尚未替换当前资料库/)).toBeVisible()
+    await userEvent.click(screen.getByRole('button', { name: /选择备份并准备恢复/ }))
+    expect(await screen.findByText('安全恢复包已就绪')).toBeVisible()
+    expect(screen.getByText(/已复制到隔离区并再次校验，当前资料库尚未改变/)).toBeVisible()
     expect(screen.queryByText('已恢复')).not.toBeInTheDocument()
+
+    const restoreTrigger = screen.getByRole('button', { name: '查看风险并确认恢复' })
+    await userEvent.click(restoreTrigger)
+    expect(screen.getByRole('button', { name: '取消，保持现状' })).toHaveFocus()
+    await userEvent.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(restoreTrigger).toHaveFocus()
+
+    await userEvent.click(restoreTrigger)
+    const confirm = screen.getByRole('button', { name: /确认恢复并重启/ })
+    expect(confirm).toBeDisabled()
+    await userEvent.click(screen.getByRole('checkbox', { name: /我明白：确认后当前题库/ }))
+    await userEvent.click(confirm)
+
+    expect(api.backupRestore).toHaveBeenCalledWith('candidate-opaque-id')
+    expect(await screen.findByText('正在准备重启…')).toBeVisible()
   })
 
   it('clears stale backup validation when a later package fails integrity checks', async () => {
@@ -154,17 +173,18 @@ describe('SettingsView', () => {
       pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
       localEncryptionReady: true, cloudSyncConfigured: false,
     } })
-    api.backupValidate
+    api.backupPrepareRestore
       .mockResolvedValueOnce({ status: 'ok', data: { ok: true, data: {
-        formatVersion: 1, createdAtUtcMs: 1, assetCount: 1, encryptedBytes: 1024,
-        label: 'valid-package', readyForRestore: true,
+        id: 'candidate-one', expiresAtUtcMs: 86_400_001,
+        summary: { formatVersion: 1, createdAtUtcMs: 1, assetCount: 1, encryptedBytes: 1024,
+          label: 'valid-package', readyForRestore: true },
       } } })
       .mockResolvedValueOnce({ status: 'ok', data: { ok: false, error: {
-        code: 'backup_validate_failed', userMessage: '备份包不完整或校验失败，未对现有资料库做任何修改。',
+        code: 'backup_prepare_restore_failed', userMessage: '备份包不完整或校验失败，未对现有资料库做任何修改。',
         retryable: false, diagnosticId: 'diagnostic-1',
       } } })
     render(SettingsView)
-    const validateButton = await screen.findByRole('button', { name: /验证恢复包/ })
+    const validateButton = await screen.findByRole('button', { name: /选择备份并准备恢复/ })
 
     await userEvent.click(validateButton)
     expect(await screen.findByText('valid-package')).toBeVisible()

@@ -4,13 +4,19 @@ use std::{
 };
 
 use rusqlite::Connection;
-use tauri::State;
+use tauri::{AppHandle, State};
 use uuid::Uuid;
 
 use crate::{
     application::result::AppResult,
     infrastructure::runtime::LibraryRuntime,
-    modules::backup::{BackupError, BackupSummary, create_backup, validate_backup},
+    modules::{
+        backup::{
+            BackupError, BackupRestoreCandidate, BackupRestoreReceipt, BackupSummary,
+            create_backup, prepare_backup_restore, schedule_backup_restore, take_restore_receipt,
+        },
+        capture_lan::CaptureLanManager,
+    },
 };
 
 #[tauri::command]
@@ -44,24 +50,98 @@ pub async fn backup_create(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn backup_validate(
+pub async fn backup_prepare_restore(
     state: State<'_, LibraryRuntime>,
-) -> Result<AppResult<Option<BackupSummary>>, ()> {
+) -> Result<AppResult<Option<BackupRestoreCandidate>>, ()> {
     let database_key = state.database_key().to_owned();
     let asset_key = state.asset_key;
     let account_id = state.account_id().to_owned();
+    let application_root = application_root(&state.blob_root);
     drop(state);
     let worker = tauri::async_runtime::spawn_blocking(move || {
         let source = rfd::FileDialog::new()
-            .set_title("选择要验证的 Mistake Trainer 备份目录")
+            .set_title("选择要恢复的 Mistake Trainer 加密备份目录")
             .pick_folder();
-        validate_selected_package(&database_key, &asset_key, &account_id, source)
+        prepare_selected_package(
+            application_root?,
+            &database_key,
+            &asset_key,
+            &account_id,
+            source,
+        )
     });
     Ok(match worker.await {
         Ok(Ok(summary)) => AppResult::success(summary),
-        Ok(Err(error)) => backup_failure("backup_validate_failed", &error),
-        Err(_) => backup_failure("backup_validate_failed", &BackupError::Lock),
+        Ok(Err(error)) => backup_failure("backup_prepare_restore_failed", &error),
+        Err(_) => backup_failure("backup_prepare_restore_failed", &BackupError::Lock),
     })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn backup_restore(
+    app: AppHandle,
+    state: State<'_, LibraryRuntime>,
+    lan: State<'_, CaptureLanManager>,
+    candidate_id: String,
+) -> Result<AppResult<bool>, ()> {
+    if lan.stop().is_err() {
+        return Ok(AppResult::failure(
+            "backup_restore_capture_stop_failed",
+            "手机采集服务暂时无法停止，请稍后重试。现有资料库没有变化。",
+            true,
+            Uuid::now_v7().to_string(),
+        ));
+    }
+    let database_key = state.database_key().to_owned();
+    let asset_key = state.asset_key;
+    let account_id = state.account_id().to_owned();
+    let application_root = application_root(&state.blob_root);
+    drop(state);
+    drop(lan);
+    let worker = tauri::async_runtime::spawn_blocking(move || {
+        schedule_backup_restore(
+            &application_root?,
+            &candidate_id,
+            &database_key,
+            &asset_key,
+            &account_id,
+            current_utc_millis(),
+        )
+    });
+    Ok(match worker.await {
+        Ok(Ok(_)) => {
+            let restart = std::thread::Builder::new()
+                .name("mistake-trainer-restore-restart".to_owned())
+                .spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(450));
+                    app.restart();
+                });
+            match restart {
+                Ok(_) => AppResult::success(true),
+                Err(_) => AppResult::failure(
+                    "backup_restore_restart_failed",
+                    "恢复任务已安全安排，但自动重启没有启动。请关闭并重新打开应用，恢复会在下次启动时继续。",
+                    false,
+                    Uuid::now_v7().to_string(),
+                ),
+            }
+        }
+        Ok(Err(error)) => backup_failure("backup_restore_failed", &error),
+        Err(_) => backup_failure("backup_restore_failed", &BackupError::Lock),
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn backup_restore_status(
+    state: State<'_, LibraryRuntime>,
+) -> AppResult<Option<BackupRestoreReceipt>> {
+    let result = application_root(&state.blob_root).and_then(|root| take_restore_receipt(&root));
+    match result {
+        Ok(receipt) => AppResult::success(receipt),
+        Err(error) => backup_failure("backup_restore_status_failed", &error),
+    }
 }
 
 fn create_for_selected_destination(
@@ -85,16 +165,33 @@ fn create_for_selected_destination(
     .map(Some)
 }
 
-fn validate_selected_package(
+fn prepare_selected_package(
+    application_root: PathBuf,
     database_key: &str,
     asset_key: &[u8; 32],
     account_id: &str,
     source: Option<PathBuf>,
-) -> Result<Option<BackupSummary>, BackupError> {
+) -> Result<Option<BackupRestoreCandidate>, BackupError> {
     let Some(source) = source else {
         return Ok(None);
     };
-    validate_backup(&source, database_key, asset_key, account_id).map(Some)
+    prepare_backup_restore(
+        &source,
+        &application_root,
+        database_key,
+        asset_key,
+        account_id,
+        current_utc_millis(),
+    )
+    .map(Some)
+}
+
+fn application_root(blob_root: &std::path::Path) -> Result<PathBuf, BackupError> {
+    blob_root
+        .parent()
+        .and_then(std::path::Path::parent)
+        .map(std::path::Path::to_path_buf)
+        .ok_or(BackupError::InvalidDestination)
 }
 
 fn backup_failure<T>(code: &str, error: &BackupError) -> AppResult<T> {
@@ -114,6 +211,13 @@ fn backup_failure<T>(code: &str, error: &BackupError) -> AppResult<T> {
         BackupError::InvalidPackage | BackupError::Integrity => {
             ("备份包不完整或校验失败，未对现有资料库做任何修改。", false)
         }
+        BackupError::ExpiredCandidate => {
+            ("这个恢复包的安全暂存已过期，请重新选择并验证备份。", false)
+        }
+        BackupError::RestorePending => (
+            "已有一个恢复任务等待应用重启，请先重新打开应用完成它。",
+            false,
+        ),
         BackupError::TooLarge => ("备份超出当前版本的安全处理上限，未继续读取或写入。", false),
         BackupError::InvalidDestination => {
             ("该位置不能用于保存备份，请选择资料库之外的文件夹。", true)
@@ -135,20 +239,26 @@ fn current_utc_millis() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{backup_failure, validate_selected_package};
+    use super::{backup_failure, prepare_selected_package};
     use crate::modules::backup::BackupError;
 
     #[test]
     fn cancelling_package_selection_returns_no_summary() {
-        let result = validate_selected_package("unused", &[0_u8; 32], "unused", None)
-            .expect("cancel succeeds");
+        let result = prepare_selected_package(
+            std::path::PathBuf::from("unused"),
+            "unused",
+            &[0_u8; 32],
+            "unused",
+            None,
+        )
+        .expect("cancel succeeds");
         assert_eq!(result, None);
     }
 
     #[test]
     fn public_failures_never_serialize_internal_paths() {
         let result: crate::application::result::AppResult<()> = backup_failure(
-            "backup_validate_failed",
+            "backup_prepare_restore_failed",
             &BackupError::Io(std::io::Error::other("C:\\Users\\private\\backup")),
         );
         let serialized = serde_json::to_string(&result).expect("serialize AppResult");

@@ -5,11 +5,15 @@ use mistake_trainer_next_lib::{
         assets::{encrypt_asset, plaintext_sha256},
         database::{open_encrypted_database, open_encrypted_database_read_only, run_migrations},
     },
-    modules::backup::{BackupError, create_backup, validate_backup},
+    modules::backup::{
+        BackupError, create_backup, prepare_backup_restore, validate_backup,
+        validate_restore_candidate,
+    },
 };
 use rusqlite::{Connection, params};
 use sha2::{Digest, Sha256};
 use tempfile::{TempDir, tempdir};
+use uuid::Uuid;
 
 const DATABASE_KEY: &str = "backup-database-key";
 const ASSET_KEY: [u8; 32] = [7_u8; 32];
@@ -187,6 +191,119 @@ fn encrypted_backup_round_trips_without_leaking_identity_or_plaintext() {
     );
     assert!(!package.join("library.db-wal").exists());
     assert!(!package.join("library.db-shm").exists());
+}
+
+#[test]
+fn prepare_restore_copies_a_verified_opaque_candidate_and_revalidates_it() {
+    let fixture = fixture();
+    let (_, package) = created_package(&fixture);
+    let application_root = tempdir().expect("application root");
+
+    let candidate = prepare_backup_restore(
+        &package,
+        application_root.path(),
+        DATABASE_KEY,
+        &ASSET_KEY,
+        ACCOUNT_ID,
+        1_725_000_000_000,
+    )
+    .expect("prepare restore candidate");
+
+    Uuid::parse_str(&candidate.id).expect("opaque UUID candidate id");
+    assert_eq!(candidate.summary.asset_count, 1);
+    assert!(candidate.summary.ready_for_restore);
+    assert_eq!(candidate.expires_at_utc_ms, 1_725_086_400_000_f64);
+    let serialized = serde_json::to_string(&candidate).unwrap();
+    assert!(!serialized.contains(package.to_string_lossy().as_ref()));
+    assert!(!serialized.contains(application_root.path().to_string_lossy().as_ref()));
+
+    let revalidated = validate_restore_candidate(
+        application_root.path(),
+        &candidate.id,
+        DATABASE_KEY,
+        &ASSET_KEY,
+        ACCOUNT_ID,
+        1_725_000_000_001,
+    )
+    .expect("revalidate staged candidate");
+    assert_eq!(revalidated, candidate.summary);
+}
+
+#[test]
+fn prepare_restore_rejects_tampering_expiry_and_forged_ids_without_touching_live_data() {
+    let fixture = fixture();
+    let (_, package) = created_package(&fixture);
+    let application_root = tempdir().expect("application root");
+    let live_database_before = fs::read(fixture.root.path().join("library.db")).unwrap();
+    let live_asset_before = fs::read(fixture.blob_root.join("aa/question.enc")).unwrap();
+
+    let candidate = prepare_backup_restore(
+        &package,
+        application_root.path(),
+        DATABASE_KEY,
+        &ASSET_KEY,
+        ACCOUNT_ID,
+        1_725_000_000_000,
+    )
+    .expect("prepare restore candidate");
+    let staged_asset = application_root
+        .path()
+        .join(format!(".mistake-trainer-restore-{}", candidate.id))
+        .join("assets/aa/question.enc");
+    fs::write(&staged_asset, b"tampered").unwrap();
+
+    assert!(matches!(
+        validate_restore_candidate(
+            application_root.path(),
+            &candidate.id,
+            DATABASE_KEY,
+            &ASSET_KEY,
+            ACCOUNT_ID,
+            1_725_000_000_001,
+        ),
+        Err(BackupError::Integrity)
+    ));
+    assert!(matches!(
+        validate_restore_candidate(
+            application_root.path(),
+            &Uuid::now_v7().to_string(),
+            DATABASE_KEY,
+            &ASSET_KEY,
+            ACCOUNT_ID,
+            1_725_000_000_001,
+        ),
+        Err(BackupError::InvalidPackage)
+    ));
+
+    let fresh = prepare_backup_restore(
+        &package,
+        application_root.path(),
+        DATABASE_KEY,
+        &ASSET_KEY,
+        ACCOUNT_ID,
+        1_725_000_000_000,
+    )
+    .expect("fresh candidate");
+    assert!(matches!(
+        validate_restore_candidate(
+            application_root.path(),
+            &fresh.id,
+            DATABASE_KEY,
+            &ASSET_KEY,
+            ACCOUNT_ID,
+            1_725_086_400_001,
+        ),
+        Err(BackupError::ExpiredCandidate)
+    ));
+
+    assert_eq!(
+        fs::read(fixture.root.path().join("library.db")).unwrap(),
+        live_database_before
+    );
+    assert_eq!(
+        fs::read(fixture.blob_root.join("aa/question.enc")).unwrap(),
+        live_asset_before
+    );
 }
 
 #[test]

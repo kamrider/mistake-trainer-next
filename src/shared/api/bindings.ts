@@ -5,7 +5,9 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 /** Commands */
 export const commands = {
 	backupCreate: () => typedError<AppResult<BackupSummary | null>, null>(__TAURI_INVOKE("backup_create")),
-	backupValidate: () => typedError<AppResult<BackupSummary | null>, null>(__TAURI_INVOKE("backup_validate")),
+	backupPrepareRestore: () => typedError<AppResult<BackupRestoreCandidate | null>, null>(__TAURI_INVOKE("backup_prepare_restore")),
+	backupRestore: (candidateId: string) => typedError<AppResult<boolean>, null>(__TAURI_INVOKE("backup_restore", { candidateId })),
+	backupRestoreStatus: () => __TAURI_INVOKE<AppResult<BackupRestoreReceipt | null>>("backup_restore_status"),
 	systemStatus: () => __TAURI_INVOKE<AppResult<SystemStatus>>("system_status"),
 	profileList: () => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_list"),
 	profileCreate: (input: ProfileNameInput) => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_create", { input }),
@@ -66,6 +68,18 @@ export type AppError = {
 };
 
 export type AppResult<T> = ({ ok: boolean; data: T }) & { error?: never } | ({ ok: boolean; error: AppError }) & { data?: never };
+
+export type BackupRestoreCandidate = {
+	id: string,
+	summary: BackupSummary,
+	expiresAtUtcMs: number | null,
+};
+
+export type BackupRestoreReceipt = {
+	status: string,
+	label: string,
+	finishedAtUtcMs: number | null,
+};
 
 export type BackupSummary = {
 	formatVersion: number,

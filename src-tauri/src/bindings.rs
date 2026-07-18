@@ -1,14 +1,16 @@
 use std::{error::Error, fs, path::Path};
 
 use specta_typescript::Typescript;
-use tauri_specta::{collect_commands, Builder};
+use tauri_specta::{Builder, collect_commands};
 
 use crate::commands;
 
 pub fn builder() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new().commands(collect_commands![
         commands::backup::backup_create,
-        commands::backup::backup_validate,
+        commands::backup::backup_prepare_restore,
+        commands::backup::backup_restore,
+        commands::backup::backup_restore_status,
         commands::system::system_status,
         commands::profiles::profile_list,
         commands::profiles::profile_create,

@@ -24,7 +24,7 @@ pub fn run() {
             let secrets = infrastructure::runtime::KeyringSecretStore::new(
                 "com.mistaketrainer.next.local-library",
             );
-            let runtime = infrastructure::runtime::initialize_local_library(
+            let runtime = application::startup::initialize_application_library(
                 &data_root,
                 &secrets,
                 current_utc_millis(),

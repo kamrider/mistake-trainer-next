@@ -11,6 +11,7 @@ const commandMocks = vi.hoisted(() => ({
   profileCreate: vi.fn(),
   profileRename: vi.fn(),
   profileSelect: vi.fn(),
+  backupRestoreStatus: vi.fn(),
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => true }))
@@ -30,6 +31,7 @@ describe('App profile orchestration', () => {
       ok: true,
       data: { activeProfileId: daily.id, profiles: [daily, contest] },
     })
+    commandMocks.backupRestoreStatus.mockResolvedValue({ ok: true, data: null })
     commandMocks.profileSelect.mockResolvedValue({
       ok: true,
       data: { activeProfileId: contest.id, profiles: [daily, contest] },
@@ -52,5 +54,21 @@ describe('App profile orchestration', () => {
       expect(router.currentRoute.value.name).toBe('dashboard')
       expect(screen.getByRole('button', { name: /当前学习档案：竞赛强化/ })).toBeVisible()
     })
+  })
+
+  it('shows and dismisses the one-time result after a successful restore restart', async () => {
+    commandMocks.backupRestoreStatus.mockResolvedValue({
+      ok: true,
+      data: { status: 'succeeded', label: '周日完整备份', finishedAtUtcMs: 10 },
+    })
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/')
+    await router.isReady()
+    render(App, { global: { plugins: [router], stubs: { transition: false } } })
+
+    expect(await screen.findByText('资料库恢复成功')).toBeInTheDocument()
+    expect(screen.getByText(/周日完整备份/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '关闭恢复结果通知' }))
+    await waitFor(() => expect(screen.queryByText('资料库恢复成功')).not.toBeInTheDocument())
   })
 })

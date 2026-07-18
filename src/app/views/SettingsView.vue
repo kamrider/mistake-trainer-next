@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { isTauri } from '@tauri-apps/api/core'
 import { Archive, ArchiveRestore, BookOpen, CloudOff, Database, FolderCheck, LockKeyhole, Plus, RotateCcw, ShieldCheck, Trash2, TriangleAlert, Volume2 } from '@lucide/vue'
-import { onMounted, ref } from 'vue'
-import { commands, type BackupSummary, type LegacyScanReport, type SettingsOverview, type SubjectPreferences } from '../../shared/api/bindings'
+import { nextTick, onMounted, ref } from 'vue'
+import { commands, type BackupRestoreCandidate, type BackupSummary, type LegacyScanReport, type SettingsOverview, type SubjectPreferences } from '../../shared/api/bindings'
 import { normalizeAppResult } from '../../shared/api/normalize-result'
+import BackupRestoreDialog from '../BackupRestoreDialog.vue'
 
 const overview = ref<SettingsOverview>()
 const loading = ref(true)
@@ -11,9 +12,12 @@ const errorMessage = ref('')
 const legacyReport = ref<LegacyScanReport>()
 const scanningLegacy = ref(false)
 const createdBackup = ref<BackupSummary>()
-const validatedBackup = ref<BackupSummary>()
+const restoreCandidate = ref<BackupRestoreCandidate>()
 const creatingBackup = ref(false)
-const validatingBackup = ref(false)
+const preparingRestore = ref(false)
+const restoreDialogOpen = ref(false)
+const restoring = ref(false)
+const restoreTrigger = ref<HTMLButtonElement>()
 const builtinSubjects = ['语文', '数学', '英语', '政治', '历史', '地理', '物理', '化学', '生物']
 const subjectPreferences = ref<SubjectPreferences>()
 const customSubject = ref('')
@@ -110,28 +114,57 @@ async function createBackup() {
   }
 }
 
-async function validateBackup() {
-  validatingBackup.value = true
+async function prepareRestore() {
+  preparingRestore.value = true
   errorMessage.value = ''
   try {
-    const invocation = await commands.backupValidate()
+    const invocation = await commands.backupPrepareRestore()
     if (invocation.status === 'error') throw new Error('backup command rejected')
     const result = normalizeAppResult(invocation.data)
     if (result.ok) {
-      if (result.data) validatedBackup.value = result.data
+      if (result.data) restoreCandidate.value = result.data
     }
     else {
-      validatedBackup.value = undefined
+      restoreCandidate.value = undefined
       errorMessage.value = result.error.userMessage
     }
   }
   catch {
-    validatedBackup.value = undefined
+    restoreCandidate.value = undefined
     errorMessage.value = '备份包没有验证成功；现有资料库未被修改，请稍后重试。'
   }
   finally {
-    validatingBackup.value = false
+    preparingRestore.value = false
   }
+}
+
+async function confirmRestore() {
+  const candidate = restoreCandidate.value
+  if (!candidate || restoring.value) return
+  restoring.value = true
+  errorMessage.value = ''
+  try {
+    const invocation = await commands.backupRestore(candidate.id)
+    if (invocation.status === 'error') throw new Error('restore command rejected')
+    const result = normalizeAppResult(invocation.data)
+    if (!result.ok) {
+      errorMessage.value = result.error.userMessage
+      restoring.value = false
+      await closeRestoreDialog()
+    }
+  }
+  catch {
+    errorMessage.value = '恢复任务没有开始；当前资料库保持不变，请稍后重试。'
+    restoring.value = false
+    await closeRestoreDialog()
+  }
+}
+
+async function closeRestoreDialog() {
+  if (restoring.value) return
+  restoreDialogOpen.value = false
+  await nextTick()
+  restoreTrigger.value?.focus()
 }
 
 function issueLabel(code: string) {
@@ -342,21 +375,21 @@ onMounted(load)
 
     <section class="backup-panel">
       <header>
-        <div><p>备份与恢复 · 本机加密</p><h2>先生成完整快照，再验证恢复资格</h2><span>数据库和原图密文会一起备份；清单仅记录密文哈希与大小，不包含题图明文、本机绝对路径或原始账户标识。</span></div>
+        <div><p>备份与恢复 · 本机加密</p><h2>完整快照、双重校验与自动回滚</h2><span>数据库和原图密文会一起备份；清单仅记录密文哈希与大小，不包含题图明文、本机绝对路径或原始账户标识。</span></div>
         <div class="backup-actions">
           <button
             type="button"
-            :disabled="creatingBackup || validatingBackup"
+            :disabled="creatingBackup || preparingRestore || restoring"
             @click="createBackup"
           >
             <ArchiveRestore :size="16" />{{ creatingBackup ? '正在创建…' : '创建加密备份' }}
           </button>
           <button
             type="button"
-            :disabled="creatingBackup || validatingBackup"
-            @click="validateBackup"
+            :disabled="creatingBackup || preparingRestore || restoring"
+            @click="prepareRestore"
           >
-            <FolderCheck :size="16" />{{ validatingBackup ? '正在验证…' : '验证恢复包' }}
+            <FolderCheck :size="16" />{{ preparingRestore ? '正在校验并暂存…' : '选择备份并准备恢复' }}
           </button>
         </div>
       </header>
@@ -364,7 +397,7 @@ onMounted(load)
         当前备份依赖这台可信 Windows 设备保存的加密凭据；跨设备恢复将在账户同步阶段使用正式密钥封装接入，不使用弱口令派生方案。
       </p>
       <div
-        v-if="createdBackup || validatedBackup"
+        v-if="createdBackup || restoreCandidate"
         class="backup-results"
       >
         <article v-if="createdBackup">
@@ -372,10 +405,21 @@ onMounted(load)
           <span>{{ createdBackup.label }}</span>
           <small>{{ formatBackupTime(createdBackup.createdAtUtcMs) }} · {{ createdBackup.assetCount }} 个资源 · {{ formatBytes(createdBackup.encryptedBytes) }}</small>
         </article>
-        <article v-if="validatedBackup">
-          <strong><FolderCheck :size="16" />完整性验证通过</strong>
-          <span>{{ validatedBackup.label }}</span>
-          <small>{{ validatedBackup.assetCount }} 个资源 · {{ formatBytes(validatedBackup.encryptedBytes) }} · 可进入安全恢复暂存，尚未替换当前资料库</small>
+        <article
+          v-if="restoreCandidate"
+          class="restore-ready-card"
+        >
+          <strong><FolderCheck :size="16" />安全恢复包已就绪</strong>
+          <span>{{ restoreCandidate.summary.label }}</span>
+          <small>{{ restoreCandidate.summary.assetCount }} 个资源 · {{ formatBytes(restoreCandidate.summary.encryptedBytes) }} · 已复制到隔离区并再次校验，当前资料库尚未改变</small>
+          <button
+            ref="restoreTrigger"
+            type="button"
+            :disabled="restoring"
+            @click="restoreDialogOpen = true"
+          >
+            查看风险并确认恢复
+          </button>
         </article>
       </div>
     </section>
@@ -438,13 +482,21 @@ onMounted(load)
     </section>
 
     <section class="roadmap-panel">
-      <div><p>下一步接线</p><h2>备份、设备与同步会建立在同一套真实状态上</h2></div>
+      <div><p>安全底座</p><h2>恢复已接通，设备与同步继续建立在真实状态上</h2></div>
       <ol>
-        <li><strong>恢复暂存</strong><span>验证通过后复制到隔离区，并在重启前进行最后一次原子切换检查。</span></li>
+        <li><strong>已接通 · 恢复与回滚</strong><span>备份经两次校验后自动重启切换；新资料库打不开时恢复原资料。</span></li>
         <li><strong>可信设备</strong><span>显示设备、最后同步时间，并支持撤销离线解锁。</span></li>
         <li><strong>冲突中心</strong><span>只呈现同字段真冲突；不同字段自动合并。</span></li>
       </ol>
     </section>
+
+    <BackupRestoreDialog
+      v-if="restoreDialogOpen && restoreCandidate"
+      :candidate="restoreCandidate"
+      :busy="restoring"
+      @cancel="closeRestoreDialog"
+      @confirm="confirmRestore"
+    />
   </main>
 </template>
 
@@ -461,6 +513,7 @@ button { display: inline-flex; gap: 7px; align-items: center; padding: 10px 14px
 .subject-panel { margin-top: 16px; padding: 26px; }.subject-panel>header { align-items: center; margin-bottom: 18px; }.subject-panel>header p { margin: 0 0 8px; color: var(--cinnabar); font-size: 12px; font-weight: 800; letter-spacing: .14em; }.builtin-subjects { display: flex; gap: 9px; flex-wrap: wrap; }.builtin-subjects label { position: relative; cursor: pointer; }.builtin-subjects input { position: absolute; opacity: 0; pointer-events: none; }.builtin-subjects span { display: grid; min-width: 58px; min-height: 38px; padding: 0 13px; place-items: center; color: var(--ink-muted); border: 1px solid var(--line); border-radius: 999px; background: var(--paper); transition: transform var(--motion-feedback), color var(--motion-feedback), background var(--motion-feedback); }.builtin-subjects label.selected span { color: var(--paper); border-color: var(--green-deep); background: var(--green-deep); }.builtin-subjects label:hover span { transform: translateY(-1px); }.builtin-subjects input:focus-visible+span { outline: 3px solid rgba(185,88,63,.24); outline-offset: 2px; }.custom-subjects { display: flex; gap: 8px; flex-wrap: wrap; min-height: 8px; margin-top: 12px; }.custom-subjects>span { display: inline-flex; gap: 5px; align-items: center; padding: 6px 7px 6px 11px; color: #7e412f; border-radius: 999px; background: rgba(185,88,63,.1); font-size: 11px; }.custom-subjects button { display: grid; width: 25px; height: 25px; padding: 0; place-items: center; border: 0; border-radius: 50%; background: transparent; }.subject-controls { display: grid; grid-template-columns: minmax(280px,1fr) minmax(250px,1fr) auto; gap: 12px; align-items: center; margin-top: 17px; }.subject-controls form { display: flex; gap: 8px; }.subject-controls form input { flex: 1; min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }.sound-toggle { display: flex; gap: 9px; align-items: center; padding: 8px 11px; border: 1px solid var(--line); border-radius: 11px; cursor: pointer; }.sound-toggle>span { display: grid; }.sound-toggle small { color: var(--ink-muted); font-size: 9px; }.save-subjects { color: var(--paper); border-color: var(--green-deep); background: var(--green-deep); }.subject-message { margin: 12px 0 0; color: #557263; font-size: 12px; }
 .migration-panel { margin-top: 16px; padding: 26px; }.migration-panel header { margin-bottom: 20px; }.migration-panel header span { max-width: 680px; }.migration-panel header button { flex: 0 0 auto; }.migration-stats { display: grid; grid-template-columns: repeat(6,minmax(0,1fr)); gap: 10px; margin: 0; }.migration-stats div { padding: 15px; border-radius: 12px; background: rgba(232,221,199,.34); }.migration-stats dt { color: var(--ink-muted); font-size: 11px; }.migration-stats dd { margin: 6px 0 0; color: var(--green-deep); font-family: Georgia,serif; font-size: 25px; font-weight: 700; }.preflight-note { margin: 16px 0 0; color: var(--ink-muted); font-size: 12px; }.preflight-note.ready { color: #557263; }.issue-list { display: grid; gap: 8px; max-height: 330px; margin: 16px 0 0; padding: 0; overflow: auto; list-style: none; }.issue-list li { display: grid; grid-template-columns: 108px minmax(120px,.6fr) 1fr; gap: 12px; align-items: start; padding: 12px 14px; border-radius: 10px; background: rgba(185,88,63,.06); }.issue-list strong { color: #843d2c; font-size: 12px; }.issue-list span, .issue-list small { color: var(--ink-muted); font-size: 11px; overflow-wrap: anywhere; }
 .backup-panel { margin-top: 16px; padding: 26px; }.backup-panel header { margin-bottom: 16px; }.backup-panel header p { margin: 0 0 8px; color: var(--cinnabar); font-size: 12px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }.backup-panel header span { max-width: 690px; }.backup-actions { display: flex; flex: 0 0 auto; gap: 8px; }.backup-boundary { margin: 0; padding: 13px 15px; border-left: 3px solid var(--cinnabar); border-radius: 7px; background: rgba(232,221,199,.28); color: var(--ink-muted); font-size: 12px; line-height: 1.7; }.backup-results { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; margin-top: 14px; }.backup-results article { display: grid; gap: 6px; padding: 15px; border-radius: 12px; background: rgba(33,51,45,.055); }.backup-results strong { display: flex; gap: 6px; align-items: center; color: #557263; font-size: 13px; }.backup-results span { color: var(--green-deep); font-size: 12px; overflow-wrap: anywhere; }.backup-results small { color: var(--ink-muted); line-height: 1.6; }
+.backup-results .restore-ready-card button { width: fit-content; margin-top: 5px; color: #fffdf7; border-color: var(--cinnabar); background: var(--cinnabar); transition: transform var(--motion-feedback), box-shadow var(--motion-feedback); }.backup-results .restore-ready-card button:hover { transform: translateY(-1px); box-shadow: 0 8px 20px rgba(185,88,63,.18); }
 .preflight-note.warning { color: #843d2c; font-weight: 700; }
 .builtin-subjects input { width: 1px; height: 1px; pointer-events: auto; }
 @media (max-width: 980px) { .migration-stats { grid-template-columns: repeat(3,minmax(0,1fr)); }.subject-controls { grid-template-columns: 1fr; } }

@@ -66,6 +66,12 @@ pub struct LibraryRuntime {
     profile_transition: Mutex<()>,
 }
 
+pub(crate) struct RestoreCredentials {
+    pub database_key: String,
+    pub asset_key: [u8; 32],
+    pub account_id: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActiveProfile {
     pub id: String,
@@ -278,6 +284,33 @@ pub fn initialize_local_library(
             name: profile_name,
         }),
         profile_transition: Mutex::new(()),
+    })
+}
+
+pub(crate) fn load_restore_credentials(
+    secrets: &dyn SecretStore,
+) -> Result<RestoreCredentials, RuntimeError> {
+    let database_key = secrets
+        .get(DATABASE_KEY)
+        .map_err(RuntimeError::SecretStore)?
+        .ok_or(RuntimeError::MissingCredentials)?;
+    if decode_key(&database_key).is_none() {
+        return Err(RuntimeError::InvalidDatabaseKey);
+    }
+    let asset_key = secrets
+        .get(ASSET_KEY)
+        .map_err(RuntimeError::SecretStore)?
+        .ok_or(RuntimeError::MissingCredentials)?;
+    let asset_key = decode_key(&asset_key).ok_or(RuntimeError::InvalidAssetKey)?;
+    let account_id = secrets
+        .get(ACCOUNT_ID)
+        .map_err(RuntimeError::SecretStore)?
+        .ok_or(RuntimeError::MissingCredentials)?;
+    Uuid::parse_str(&account_id).map_err(|_| RuntimeError::InvalidAccountId)?;
+    Ok(RestoreCredentials {
+        database_key,
+        asset_key,
+        account_id,
     })
 }
 
