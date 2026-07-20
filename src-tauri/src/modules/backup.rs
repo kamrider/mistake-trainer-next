@@ -20,7 +20,7 @@ use crate::infrastructure::{
 };
 
 const FORMAT_VERSION: i32 = 1;
-const CURRENT_SCHEMA_VERSION: i64 = 7;
+const CURRENT_SCHEMA_VERSION: i64 = 8;
 const DATABASE_FILE: &str = "library.db";
 const MANIFEST_FILE: &str = "manifest.json";
 const ASSETS_DIRECTORY: &str = "assets";
@@ -1099,6 +1099,32 @@ fn ensure_single_account(
         return Err(BackupError::Integrity);
     }
     if has_review_sessions {
+        if schema_version >= 7 {
+            for column in [
+                "experience",
+                "exam_phase",
+                "exam_question_index",
+                "exam_correct_count",
+                "exam_wrong_count",
+            ] {
+                if !column_exists(connection, "review_sessions", column)? {
+                    return Err(BackupError::Integrity);
+                }
+            }
+        }
+        if schema_version >= 8 {
+            for column in [
+                "focus_policy",
+                "focus_round",
+                "focus_order_json",
+                "focus_next_number",
+                "focus_elapsed_ms",
+            ] {
+                if !column_exists(connection, "review_sessions", column)? {
+                    return Err(BackupError::Integrity);
+                }
+            }
+        }
         let has_foreign_session: i64 = connection.query_row(
             "SELECT EXISTS(
                SELECT 1 FROM review_sessions WHERE account_id <> ?1 LIMIT 1
@@ -1148,6 +1174,11 @@ fn ensure_single_account(
         return Err(BackupError::Integrity);
     }
     if has_profile_preferences {
+        if schema_version >= 8
+            && !column_exists(connection, "profile_preferences", "review_focus_policy")?
+        {
+            return Err(BackupError::Integrity);
+        }
         let has_foreign_preferences: i64 = connection.query_row(
             "SELECT EXISTS(
                SELECT 1 FROM profile_preferences WHERE account_id <> ?1 LIMIT 1
@@ -1195,6 +1226,18 @@ fn table_exists(connection: &Connection, table: &str) -> Result<bool, BackupErro
         |row| row.get(0),
     )?;
     Ok(exists != 0)
+}
+
+fn column_exists(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+) -> Result<bool, BackupError> {
+    let mut statement = connection.prepare(&format!("PRAGMA table_info('{table}')"))?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(columns.iter().any(|candidate| candidate == column))
 }
 
 fn reject_sqlite_sidecars(root: &Path) -> Result<(), BackupError> {

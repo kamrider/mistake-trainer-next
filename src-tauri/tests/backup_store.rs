@@ -496,6 +496,52 @@ fn validation_requires_account_preferences_for_schema_v6_and_rejects_foreign_row
 }
 
 #[test]
+fn validation_requires_focus_columns_for_schema_v8() {
+    let preference_fixture = fixture();
+    let (_, package) = created_package(&preference_fixture);
+    {
+        let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        database
+            .execute(
+                "ALTER TABLE profile_preferences DROP COLUMN review_focus_policy",
+                [],
+            )
+            .unwrap();
+        database
+            .pragma_update(None, "journal_mode", "DELETE")
+            .unwrap();
+    }
+    refresh_database_manifest(&package, 8);
+    assert!(matches!(
+        validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID),
+        Err(BackupError::Integrity)
+    ));
+
+    let session_fixture = fixture();
+    let (_, package) = created_package(&session_fixture);
+    {
+        let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        database
+            .execute("DROP TRIGGER review_sessions_focus_state_insert_guard", [])
+            .unwrap();
+        database
+            .execute("DROP TRIGGER review_sessions_focus_state_update_guard", [])
+            .unwrap();
+        database
+            .execute("ALTER TABLE review_sessions DROP COLUMN focus_order_json", [])
+            .unwrap();
+        database
+            .pragma_update(None, "journal_mode", "DELETE")
+            .unwrap();
+    }
+    refresh_database_manifest(&package, 8);
+    assert!(matches!(
+        validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID),
+        Err(BackupError::Integrity)
+    ));
+}
+
+#[test]
 fn creation_rejects_application_storage_and_mixed_account_libraries() {
     let fixture = fixture();
     assert!(matches!(

@@ -67,7 +67,8 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
                 "../../migrations/0006_account_preferences.sql"
             ))?;
             transaction.execute_batch(include_str!("../../migrations/0007_review_exam.sql"))?;
-            transaction.pragma_update(None, "user_version", 7)?;
+            transaction.execute_batch(include_str!("../../migrations/0008_review_focus.sql"))?;
+            transaction.pragma_update(None, "user_version", 8)?;
             transaction.commit()?;
             Ok(())
         }
@@ -85,7 +86,8 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
                 "../../migrations/0006_account_preferences.sql"
             ))?;
             transaction.execute_batch(include_str!("../../migrations/0007_review_exam.sql"))?;
-            transaction.pragma_update(None, "user_version", 7)?;
+            transaction.execute_batch(include_str!("../../migrations/0008_review_focus.sql"))?;
+            transaction.pragma_update(None, "user_version", 8)?;
             transaction.commit()?;
             Ok(())
         }
@@ -102,7 +104,8 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
                 "../../migrations/0006_account_preferences.sql"
             ))?;
             transaction.execute_batch(include_str!("../../migrations/0007_review_exam.sql"))?;
-            transaction.pragma_update(None, "user_version", 7)?;
+            transaction.execute_batch(include_str!("../../migrations/0008_review_focus.sql"))?;
+            transaction.pragma_update(None, "user_version", 8)?;
             transaction.commit()?;
             Ok(())
         }
@@ -118,7 +121,8 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
                 "../../migrations/0006_account_preferences.sql"
             ))?;
             transaction.execute_batch(include_str!("../../migrations/0007_review_exam.sql"))?;
-            transaction.pragma_update(None, "user_version", 7)?;
+            transaction.execute_batch(include_str!("../../migrations/0008_review_focus.sql"))?;
+            transaction.pragma_update(None, "user_version", 8)?;
             transaction.commit()?;
             Ok(())
         }
@@ -131,7 +135,8 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
                 "../../migrations/0006_account_preferences.sql"
             ))?;
             transaction.execute_batch(include_str!("../../migrations/0007_review_exam.sql"))?;
-            transaction.pragma_update(None, "user_version", 7)?;
+            transaction.execute_batch(include_str!("../../migrations/0008_review_focus.sql"))?;
+            transaction.pragma_update(None, "user_version", 8)?;
             transaction.commit()?;
             Ok(())
         }
@@ -141,18 +146,27 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
                 "../../migrations/0006_account_preferences.sql"
             ))?;
             transaction.execute_batch(include_str!("../../migrations/0007_review_exam.sql"))?;
-            transaction.pragma_update(None, "user_version", 7)?;
+            transaction.execute_batch(include_str!("../../migrations/0008_review_focus.sql"))?;
+            transaction.pragma_update(None, "user_version", 8)?;
             transaction.commit()?;
             Ok(())
         }
         6 => {
             let transaction = connection.transaction()?;
             transaction.execute_batch(include_str!("../../migrations/0007_review_exam.sql"))?;
-            transaction.pragma_update(None, "user_version", 7)?;
+            transaction.execute_batch(include_str!("../../migrations/0008_review_focus.sql"))?;
+            transaction.pragma_update(None, "user_version", 8)?;
             transaction.commit()?;
             Ok(())
         }
-        7 => Ok(()),
+        7 => {
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(include_str!("../../migrations/0008_review_focus.sql"))?;
+            transaction.pragma_update(None, "user_version", 8)?;
+            transaction.commit()?;
+            Ok(())
+        }
+        8 => Ok(()),
         newer => Err(DatabaseError::UnsupportedSchema(newer)),
     }
 }
