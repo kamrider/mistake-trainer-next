@@ -20,7 +20,7 @@ use crate::infrastructure::{
 };
 
 const FORMAT_VERSION: i32 = 1;
-const CURRENT_SCHEMA_VERSION: i64 = 9;
+const CURRENT_SCHEMA_VERSION: i64 = 10;
 const DATABASE_FILE: &str = "library.db";
 const MANIFEST_FILE: &str = "manifest.json";
 const ASSETS_DIRECTORY: &str = "assets";
@@ -1074,6 +1074,57 @@ fn ensure_single_account(
     account_id: &str,
     schema_version: i64,
 ) -> Result<(), BackupError> {
+    let legacy_tables = ["legacy_imports", "legacy_import_entities"];
+    let legacy_table_count = legacy_tables
+        .iter()
+        .map(|table| table_exists(connection, table))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|exists| *exists)
+        .count();
+    if (schema_version < 10 && legacy_table_count != 0)
+        || (schema_version >= 10 && legacy_table_count != legacy_tables.len())
+    {
+        return Err(BackupError::Integrity);
+    }
+    if schema_version >= 10 {
+        if !table_columns_match(
+            connection,
+            "legacy_imports",
+            &[
+                "id",
+                "account_id",
+                "source_fingerprint",
+                "member_count",
+                "problem_count",
+                "asset_count",
+                "review_count",
+                "status",
+                "created_at_utc_ms",
+                "rolled_back_at_utc_ms",
+            ],
+        )? || !table_columns_match(
+            connection,
+            "legacy_import_entities",
+            &["import_id", "entity_type", "entity_id", "created_by_import"],
+        )? || !index_columns_match(
+            connection,
+            "legacy_import_entities_import_idx",
+            &["import_id", "entity_type"],
+        )? {
+            return Err(BackupError::Integrity);
+        }
+        let has_foreign_import: i64 = connection.query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM legacy_imports WHERE account_id <> ?1 LIMIT 1
+             )",
+            [account_id],
+            |row| row.get(0),
+        )?;
+        if has_foreign_import != 0 {
+            return Err(BackupError::ForeignAccountData);
+        }
+    }
     if schema_version >= 9
         && !index_columns_match(
             connection,
@@ -1237,16 +1288,27 @@ fn table_exists(connection: &Connection, table: &str) -> Result<bool, BackupErro
     Ok(exists != 0)
 }
 
-fn column_exists(
-    connection: &Connection,
-    table: &str,
-    column: &str,
-) -> Result<bool, BackupError> {
+fn column_exists(connection: &Connection, table: &str, column: &str) -> Result<bool, BackupError> {
     let mut statement = connection.prepare(&format!("PRAGMA table_info('{table}')"))?;
     let columns = statement
         .query_map([], |row| row.get::<_, String>(1))?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(columns.iter().any(|candidate| candidate == column))
+}
+
+fn table_columns_match(
+    connection: &Connection,
+    table: &str,
+    expected: &[&str],
+) -> Result<bool, BackupError> {
+    let mut statement = connection.prepare(&format!("PRAGMA table_info('{table}')"))?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(columns
+        .iter()
+        .map(String::as_str)
+        .eq(expected.iter().copied()))
 }
 
 fn index_columns_match(
@@ -1258,7 +1320,10 @@ fn index_columns_match(
     let columns = statement
         .query_map([], |row| row.get::<_, String>(2))?
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(columns.iter().map(String::as_str).eq(expected.iter().copied()))
+    Ok(columns
+        .iter()
+        .map(String::as_str)
+        .eq(expected.iter().copied()))
 }
 
 fn reject_sqlite_sidecars(root: &Path) -> Result<(), BackupError> {

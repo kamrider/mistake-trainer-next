@@ -99,7 +99,7 @@ git commit -m "feat: plan bounded legacy imports"
 - Produces tables `legacy_imports` and `legacy_import_entities` and index `legacy_import_entities_import_idx`.
 - Consumes later: atomic import writes one receipt plus every created/reused entity relation; rollback reads only rows owned by that import.
 
-- [ ] **Step 1: Write failing v9→v10 and backup tests**
+- [x] **Step 1: Write failing v9→v10 and backup tests**
 
 Assert migration preserves every existing table/asset and creates:
 
@@ -120,13 +120,13 @@ CREATE TABLE legacy_imports (
 
 `legacy_import_entities` stores `import_id`, `entity_type`, `entity_id`, and `created_by_import` with a unique `(import_id, entity_type, entity_id)` key. Backup schema v10 must require both tables and the index while v1–v9 backups remain restorable and migrate on startup.
 
-- [ ] **Step 2: Run migration and backup tests and verify failure**
+- [x] **Step 2: Run migration and backup tests and verify failure**
 
 Run: `./scripts/cargo-msvc.cmd test --manifest-path src-tauri/Cargo.toml --test database_schema --test backup_store`
 
 Expected: FAIL at schema version and missing ledger assertions.
 
-- [ ] **Step 3: Implement the additive migration and validation**
+- [x] **Step 3: Implement the additive migration and validation**
 
 Wire starting versions 0–9 through migration 10, set `PRAGMA user_version = 10`, update current backup schema to 10, and validate exact ledger columns/index without weakening validation for older supported packages.
 
@@ -138,13 +138,13 @@ const LEGACY_IMPORT_COLUMNS: &[&str] = &[
 ];
 ```
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Run: `./scripts/cargo-msvc.cmd test --manifest-path src-tauri/Cargo.toml --test database_schema --test backup_store`
 
 Expected: PASS.
 
-- [ ] **Step 5: Create a local checkpoint**
+- [x] **Step 5: Create a local checkpoint**
 
 ```bash
 git add src-tauri/migrations/0010_legacy_import_ledger.sql src-tauri/src/infrastructure/database.rs src-tauri/src/modules/backup.rs src-tauri/tests/database_schema.rs src-tauri/tests/backup_store.rs

@@ -71,7 +71,10 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             transaction.execute_batch(include_str!(
                 "../../migrations/0009_review_history_index.sql"
             ))?;
-            transaction.pragma_update(None, "user_version", 9)?;
+            transaction.execute_batch(include_str!(
+                "../../migrations/0010_legacy_import_ledger.sql"
+            ))?;
+            transaction.pragma_update(None, "user_version", 10)?;
             transaction.commit()?;
             Ok(())
         }
@@ -93,7 +96,10 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             transaction.execute_batch(include_str!(
                 "../../migrations/0009_review_history_index.sql"
             ))?;
-            transaction.pragma_update(None, "user_version", 9)?;
+            transaction.execute_batch(include_str!(
+                "../../migrations/0010_legacy_import_ledger.sql"
+            ))?;
+            transaction.pragma_update(None, "user_version", 10)?;
             transaction.commit()?;
             Ok(())
         }
@@ -114,7 +120,10 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             transaction.execute_batch(include_str!(
                 "../../migrations/0009_review_history_index.sql"
             ))?;
-            transaction.pragma_update(None, "user_version", 9)?;
+            transaction.execute_batch(include_str!(
+                "../../migrations/0010_legacy_import_ledger.sql"
+            ))?;
+            transaction.pragma_update(None, "user_version", 10)?;
             transaction.commit()?;
             Ok(())
         }
@@ -134,7 +143,10 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             transaction.execute_batch(include_str!(
                 "../../migrations/0009_review_history_index.sql"
             ))?;
-            transaction.pragma_update(None, "user_version", 9)?;
+            transaction.execute_batch(include_str!(
+                "../../migrations/0010_legacy_import_ledger.sql"
+            ))?;
+            transaction.pragma_update(None, "user_version", 10)?;
             transaction.commit()?;
             Ok(())
         }
@@ -151,7 +163,10 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             transaction.execute_batch(include_str!(
                 "../../migrations/0009_review_history_index.sql"
             ))?;
-            transaction.pragma_update(None, "user_version", 9)?;
+            transaction.execute_batch(include_str!(
+                "../../migrations/0010_legacy_import_ledger.sql"
+            ))?;
+            transaction.pragma_update(None, "user_version", 10)?;
             transaction.commit()?;
             Ok(())
         }
@@ -165,7 +180,10 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             transaction.execute_batch(include_str!(
                 "../../migrations/0009_review_history_index.sql"
             ))?;
-            transaction.pragma_update(None, "user_version", 9)?;
+            transaction.execute_batch(include_str!(
+                "../../migrations/0010_legacy_import_ledger.sql"
+            ))?;
+            transaction.pragma_update(None, "user_version", 10)?;
             transaction.commit()?;
             Ok(())
         }
@@ -176,7 +194,10 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             transaction.execute_batch(include_str!(
                 "../../migrations/0009_review_history_index.sql"
             ))?;
-            transaction.pragma_update(None, "user_version", 9)?;
+            transaction.execute_batch(include_str!(
+                "../../migrations/0010_legacy_import_ledger.sql"
+            ))?;
+            transaction.pragma_update(None, "user_version", 10)?;
             transaction.commit()?;
             Ok(())
         }
@@ -186,7 +207,10 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             transaction.execute_batch(include_str!(
                 "../../migrations/0009_review_history_index.sql"
             ))?;
-            transaction.pragma_update(None, "user_version", 9)?;
+            transaction.execute_batch(include_str!(
+                "../../migrations/0010_legacy_import_ledger.sql"
+            ))?;
+            transaction.pragma_update(None, "user_version", 10)?;
             transaction.commit()?;
             Ok(())
         }
@@ -195,11 +219,23 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             transaction.execute_batch(include_str!(
                 "../../migrations/0009_review_history_index.sql"
             ))?;
-            transaction.pragma_update(None, "user_version", 9)?;
+            transaction.execute_batch(include_str!(
+                "../../migrations/0010_legacy_import_ledger.sql"
+            ))?;
+            transaction.pragma_update(None, "user_version", 10)?;
             transaction.commit()?;
             Ok(())
         }
-        9 => Ok(()),
+        9 => {
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(include_str!(
+                "../../migrations/0010_legacy_import_ledger.sql"
+            ))?;
+            transaction.pragma_update(None, "user_version", 10)?;
+            transaction.commit()?;
+            Ok(())
+        }
+        10 => Ok(()),
         newer => Err(DatabaseError::UnsupportedSchema(newer)),
     }
 }

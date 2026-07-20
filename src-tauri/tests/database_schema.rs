@@ -28,6 +28,8 @@ fn initial_migration_creates_the_offline_first_core_schema() {
         "capture_draft_items",
         "profile_preferences",
         "account_preferences",
+        "legacy_imports",
+        "legacy_import_entities",
     ];
     for table in expected {
         let found: i64 = connection
@@ -43,8 +45,98 @@ fn initial_migration_creates_the_offline_first_core_schema() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        9
+        10
     );
+}
+
+#[test]
+fn version_nine_library_adds_reversible_legacy_import_ledger_without_changing_rows() {
+    let directory = tempdir().expect("temp directory");
+    let path = directory.path().join("library.db");
+    let mut connection =
+        open_encrypted_database(&path, "legacy-ledger-upgrade-key").expect("open database");
+
+    for migration in [
+        include_str!("../migrations/0001_initial.sql"),
+        include_str!("../migrations/0002_review_sessions.sql"),
+        include_str!("../migrations/0003_capture_inbox.sql"),
+        include_str!("../migrations/0004_capture_staged_roles.sql"),
+        include_str!("../migrations/0005_profile_preferences.sql"),
+        include_str!("../migrations/0006_account_preferences.sql"),
+        include_str!("../migrations/0007_review_exam.sql"),
+        include_str!("../migrations/0008_review_focus.sql"),
+        include_str!("../migrations/0009_review_history_index.sql"),
+    ] {
+        connection.execute_batch(migration).unwrap();
+    }
+    connection.pragma_update(None, "user_version", 9).unwrap();
+    connection.execute(
+        "INSERT INTO learner_profiles(id, account_id, name, created_at_utc_ms, updated_at_utc_ms, revision)
+         VALUES('profile', 'account', 'existing', 1, 1, 1)",
+        [],
+    ).unwrap();
+
+    run_migrations(&mut connection).expect("upgrade schema v9 to v10");
+
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT name FROM learner_profiles WHERE id = 'profile'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "existing"
+    );
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .unwrap(),
+        10
+    );
+    let import_columns = connection
+        .prepare("SELECT name FROM pragma_table_info('legacy_imports') ORDER BY cid")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        import_columns,
+        [
+            "id",
+            "account_id",
+            "source_fingerprint",
+            "member_count",
+            "problem_count",
+            "asset_count",
+            "review_count",
+            "status",
+            "created_at_utc_ms",
+            "rolled_back_at_utc_ms"
+        ]
+    );
+    let entity_columns = connection
+        .prepare("SELECT name FROM pragma_table_info('legacy_import_entities') ORDER BY cid")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        entity_columns,
+        ["import_id", "entity_type", "entity_id", "created_by_import"]
+    );
+    let index_columns = connection
+        .prepare(
+            "SELECT name FROM pragma_index_info('legacy_import_entities_import_idx') ORDER BY seqno",
+        )
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(index_columns, ["import_id", "entity_type"]);
 }
 
 #[test]
@@ -84,7 +176,7 @@ fn version_two_library_upgrades_without_changing_existing_problem_data() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        9
+        10
     );
 
     let staged_role: String = connection
@@ -147,7 +239,7 @@ fn version_five_library_adds_active_profile_preferences_without_changing_existin
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        9
+        10
     );
 }
 
@@ -218,7 +310,7 @@ fn version_six_library_adds_exam_state_without_changing_existing_session_progres
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        9
+        10
     );
 
     let invalid_phase = connection.execute(
@@ -345,7 +437,7 @@ fn version_seven_library_adds_focus_state_without_changing_existing_preferences_
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        9
+        10
     );
 
     assert!(connection.execute(
@@ -471,7 +563,7 @@ fn version_eight_library_adds_review_history_index_without_changing_existing_row
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        9
+        10
     );
 }
 

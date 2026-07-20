@@ -399,6 +399,10 @@ fn validation_requires_review_sessions_exactly_when_the_schema_requires_it() {
     {
         let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
         database
+            .execute("DROP TABLE legacy_import_entities", [])
+            .unwrap();
+        database.execute("DROP TABLE legacy_imports", []).unwrap();
+        database
             .execute("DROP TABLE account_preferences", [])
             .unwrap();
         database
@@ -528,7 +532,10 @@ fn validation_requires_focus_columns_for_schema_v8() {
             .execute("DROP TRIGGER review_sessions_focus_state_update_guard", [])
             .unwrap();
         database
-            .execute("ALTER TABLE review_sessions DROP COLUMN focus_order_json", [])
+            .execute(
+                "ALTER TABLE review_sessions DROP COLUMN focus_order_json",
+                [],
+            )
             .unwrap();
         database
             .pragma_update(None, "journal_mode", "DELETE")
@@ -562,6 +569,10 @@ fn validation_requires_review_history_index_only_for_schema_v9() {
 
     {
         let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        database
+            .execute("DROP TABLE legacy_import_entities", [])
+            .unwrap();
+        database.execute("DROP TABLE legacy_imports", []).unwrap();
         database.pragma_update(None, "user_version", 8).unwrap();
         database
             .pragma_update(None, "journal_mode", "DELETE")
@@ -571,6 +582,43 @@ fn validation_requires_review_history_index_only_for_schema_v9() {
     assert!(
         validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID).is_ok(),
         "schema v8 remains valid before the history index existed"
+    );
+}
+
+#[test]
+fn validation_requires_legacy_import_ledger_only_for_schema_v10() {
+    let fixture = fixture();
+    let (_, package) = created_package(&fixture);
+    {
+        let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        database
+            .execute("DROP INDEX legacy_import_entities_import_idx", [])
+            .unwrap();
+        database
+            .pragma_update(None, "journal_mode", "DELETE")
+            .unwrap();
+    }
+    refresh_database_manifest(&package, 10);
+    assert!(matches!(
+        validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID),
+        Err(BackupError::Integrity)
+    ));
+
+    {
+        let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        database
+            .execute("DROP TABLE legacy_import_entities", [])
+            .unwrap();
+        database.execute("DROP TABLE legacy_imports", []).unwrap();
+        database.pragma_update(None, "user_version", 9).unwrap();
+        database
+            .pragma_update(None, "journal_mode", "DELETE")
+            .unwrap();
+    }
+    refresh_database_manifest(&package, 9);
+    assert!(
+        validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID).is_ok(),
+        "schema v9 remains valid before the import ledger existed"
     );
 }
 
