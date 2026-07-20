@@ -246,15 +246,15 @@ git commit -m "feat: import legacy libraries atomically"
 - Produces commands `legacy_scan`, `legacy_import`, `legacy_import_list`, and `legacy_rollback` using `AppResult<T>`.
 - Produces public types `LegacyImportCandidate`, `LegacyImportReceipt`, `LegacyImportSummary`, `LegacyRollbackReceipt`, and raw Tauri event payload `legacy_import_progress`.
 
-- [ ] **Step 1: Write failing command/security tests**
+- [x] **Step 1: Write failing command/security tests**
 
 Assert candidate IDs are opaque UUIDv7 values, expire after 30 minutes, a second scan replaces the first, foreign import IDs return the same missing error, input JSON has no path/account/profile/key fields, and serialized errors never contain source paths, SQL, or image names.
 
-- [ ] **Step 2: Run command and binding tests and verify failure**
+- [x] **Step 2: Run command and binding tests and verify failure**
 
 Run: `./scripts/cargo-msvc.cmd test --manifest-path src-tauri/Cargo.toml --test legacy_command --test command_contract --test bindings_contract`
 
-- [ ] **Step 3: Implement `LegacyImportManager` and commands**
+- [x] **Step 3: Implement `LegacyImportManager` and commands**
 
 ```rust
 pub struct LegacyImportManager {
@@ -271,19 +271,19 @@ pub struct LegacyImportProgress {
 
 Hold `runtime.lock_profile_transition()` through import/rollback, use transition-before-connection lock order, spawn blocking work, emit bounded progress without paths, consume a candidate only after success, and map cancellation to `Ok(None)`.
 
-- [ ] **Step 4: Register commands and regenerate bindings**
+- [x] **Step 4: Register commands and regenerate bindings**
 
 Run: `pnpm bindings:generate`
 
 Expected: generated clients contain all four commands and no runtime identity/path inputs.
 
-- [ ] **Step 5: Run command/binding tests**
+- [x] **Step 5: Run command/binding tests**
 
 Run: `./scripts/cargo-msvc.cmd test --manifest-path src-tauri/Cargo.toml --test legacy_command --test command_contract --test bindings_contract`
 
 Expected: PASS.
 
-- [ ] **Step 6: Create a local checkpoint**
+- [x] **Step 6: Create a local checkpoint**
 
 ```bash
 git add src-tauri/src/commands/legacy.rs src-tauri/src/commands/mod.rs src-tauri/src/bindings.rs src-tauri/src/lib.rs src/shared/api/bindings.ts src-tauri/tests/legacy_command.rs src-tauri/tests/command_contract.rs src-tauri/tests/bindings_contract.rs

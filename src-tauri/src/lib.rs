@@ -31,6 +31,7 @@ pub fn run() {
             )?;
             app.manage(runtime);
             app.manage(modules::capture_lan::CaptureLanManager::default());
+            app.manage(modules::legacy::LegacyImportManager::default());
             specta.mount_events(app);
             Ok(())
         })

@@ -3,6 +3,7 @@ use std::{
     fs,
     io::{self, Read},
     path::{Component, Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 
 use image::GenericImageView;
@@ -100,6 +101,7 @@ pub enum LegacyImportPhase {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct LegacyImportProgress {
+    pub candidate_id: String,
     pub phase: LegacyImportPhase,
     pub completed: i32,
     pub total: i32,
@@ -126,6 +128,137 @@ pub struct LegacyRollbackReceipt {
     pub removed_asset_count: i32,
     pub preserved_entity_count: i32,
     pub rolled_back_at_utc_ms: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyImportCandidate {
+    pub candidate_id: String,
+    pub report: LegacyScanReport,
+    pub problem_count: i32,
+    pub expires_at_utc_ms: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyImportSummary {
+    pub import_id: String,
+    pub member_count: i32,
+    pub problem_count: i32,
+    pub asset_count: i32,
+    pub review_count: i32,
+    pub status: String,
+    pub created_at_utc_ms: f64,
+    pub rolled_back_at_utc_ms: Option<f64>,
+}
+
+#[derive(Clone)]
+pub struct LegacyImportManager {
+    candidate: Arc<Mutex<Option<PreparedLegacyCandidate>>>,
+}
+
+#[derive(Clone)]
+struct PreparedLegacyCandidate {
+    public: LegacyImportCandidate,
+    plan: LegacyImportPlan,
+}
+
+impl Default for LegacyImportManager {
+    fn default() -> Self {
+        Self {
+            candidate: Arc::new(Mutex::new(None)),
+        }
+    }
+}
+
+impl LegacyImportManager {
+    pub fn prepare(
+        &self,
+        root: &Path,
+        now_utc_ms: i64,
+    ) -> Result<LegacyImportCandidate, LegacyImportError> {
+        let plan = build_legacy_import_plan(root)?;
+        let problem_count = plan
+            .members
+            .iter()
+            .map(|member| member.problems.len())
+            .sum::<usize>();
+        let public = LegacyImportCandidate {
+            candidate_id: Uuid::now_v7().to_string(),
+            report: plan.public_report(),
+            problem_count: i32::try_from(problem_count).unwrap_or(i32::MAX),
+            expires_at_utc_ms: now_utc_ms.saturating_add(30 * 60 * 1_000) as f64,
+        };
+        *self
+            .candidate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(PreparedLegacyCandidate {
+            public: public.clone(),
+            plan,
+        });
+        Ok(public)
+    }
+
+    pub fn plan_for(
+        &self,
+        candidate_id: &str,
+        now_utc_ms: i64,
+    ) -> Result<LegacyImportPlan, LegacyImportError> {
+        let mut slot = self
+            .candidate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(candidate) = slot.as_ref() else {
+            return Err(LegacyImportError::ImportNotFound);
+        };
+        if candidate.public.candidate_id != candidate_id {
+            return Err(LegacyImportError::ImportNotFound);
+        }
+        if candidate.public.expires_at_utc_ms <= now_utc_ms as f64 {
+            *slot = None;
+            return Err(LegacyImportError::ImportNotFound);
+        }
+        Ok(candidate.plan.clone())
+    }
+
+    pub fn consume(&self, candidate_id: &str) {
+        let mut slot = self
+            .candidate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if slot
+            .as_ref()
+            .is_some_and(|candidate| candidate.public.candidate_id == candidate_id)
+        {
+            *slot = None;
+        }
+    }
+}
+
+pub fn list_legacy_imports(
+    connection: &Connection,
+    account_id: &str,
+) -> Result<Vec<LegacyImportSummary>, LegacyImportError> {
+    let mut statement = connection.prepare(
+        "SELECT id, member_count, problem_count, asset_count, review_count, status,
+                created_at_utc_ms, rolled_back_at_utc_ms
+         FROM legacy_imports WHERE account_id = ?1
+         ORDER BY created_at_utc_ms DESC, id DESC LIMIT 100",
+    )?;
+    Ok(statement
+        .query_map([account_id], |row| {
+            Ok(LegacyImportSummary {
+                import_id: row.get(0)?,
+                member_count: row.get(1)?,
+                problem_count: row.get(2)?,
+                asset_count: row.get(3)?,
+                review_count: row.get(4)?,
+                status: row.get(5)?,
+                created_at_utc_ms: row.get::<_, i64>(6)? as f64,
+                rolled_back_at_utc_ms: row.get::<_, Option<i64>>(7)?.map(|value| value as f64),
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?)
 }
 
 #[derive(Debug, Error)]
@@ -168,6 +301,7 @@ pub fn import_legacy_plan(
     blob_root: &Path,
     key: &[u8; 32],
     account_id: &str,
+    candidate_id: &str,
     plan: LegacyImportPlan,
     now_utc_ms: i64,
     mut progress: impl FnMut(LegacyImportProgress),
@@ -176,6 +310,7 @@ pub fn import_legacy_plan(
         return Err(LegacyImportError::UnsafeSource);
     }
     progress(LegacyImportProgress {
+        candidate_id: candidate_id.to_owned(),
         phase: LegacyImportPhase::Validating,
         completed: 0,
         total: 1,
@@ -223,6 +358,7 @@ pub fn import_legacy_plan(
     let stage_result = (|| -> Result<(), LegacyImportError> {
         for (index, (hash, source)) in unique_assets.into_iter().enumerate() {
             progress(LegacyImportProgress {
+                candidate_id: candidate_id.to_owned(),
                 phase: LegacyImportPhase::Encrypting,
                 completed: i32::try_from(index).unwrap_or(i32::MAX),
                 total: asset_total,
@@ -284,6 +420,7 @@ pub fn import_legacy_plan(
     let persist_result = persist_legacy_import(
         connection,
         account_id,
+        candidate_id,
         &plan,
         now_utc_ms,
         &receipt,
@@ -304,6 +441,7 @@ pub fn import_legacy_plan(
 fn persist_legacy_import(
     connection: &mut Connection,
     account_id: &str,
+    candidate_id: &str,
     plan: &LegacyImportPlan,
     now_utc_ms: i64,
     receipt: &LegacyImportReceipt,
@@ -563,6 +701,7 @@ fn persist_legacy_import(
             }
             completed = completed.saturating_add(1);
             progress(LegacyImportProgress {
+                candidate_id: candidate_id.to_owned(),
                 phase: LegacyImportPhase::Writing,
                 completed,
                 total: receipt.problem_count,
@@ -628,6 +767,7 @@ fn persist_legacy_import(
         asset.moved_to_final = true;
     }
     progress(LegacyImportProgress {
+        candidate_id: candidate_id.to_owned(),
         phase: LegacyImportPhase::Verifying,
         completed: 0,
         total: 1,
@@ -637,6 +777,7 @@ fn persist_legacy_import(
     }
     transaction.commit()?;
     progress(LegacyImportProgress {
+        candidate_id: candidate_id.to_owned(),
         phase: LegacyImportPhase::Completed,
         completed: 1,
         total: 1,

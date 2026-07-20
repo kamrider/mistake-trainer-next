@@ -18,7 +18,10 @@ export const commands = {
 	problemChangeStatus: (input: ProblemStatusInput) => __TAURI_INVOKE<AppResult<number>>("problem_change_status", { input }),
 	problemList: (status: ProblemStatusFilter, search: string | null) => __TAURI_INVOKE<AppResult<ProblemSummary[]>>("problem_list", { status, search }),
 	problemUpdate: (input: ProblemUpdateInput) => __TAURI_INVOKE<AppResult<boolean>>("problem_update", { input }),
-	legacyScan: () => __TAURI_INVOKE<AppResult<LegacyScanReport | null>>("legacy_scan"),
+	legacyScan: () => typedError<AppResult<LegacyImportCandidate | null>, null>(__TAURI_INVOKE("legacy_scan")),
+	legacyImport: (candidateId: string) => typedError<AppResult<LegacyImportReceipt>, null>(__TAURI_INVOKE("legacy_import", { candidateId })),
+	legacyImportList: () => __TAURI_INVOKE<AppResult<LegacyImportSummary[]>>("legacy_import_list"),
+	legacyRollback: (importId: string) => typedError<AppResult<LegacyRollbackReceipt>, null>(__TAURI_INVOKE("legacy_rollback", { importId })),
 	reviewQueue: () => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_queue"),
 	reviewCurrentProblem: () => __TAURI_INVOKE<AppResult<ProblemDetail>>("review_current_problem"),
 	reviewManualStart: (input: ReviewManualStartInput) => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_manual_start", { input }),
@@ -333,11 +336,48 @@ export type GeneratedExportSummary = {
 	layout: ExportLayout,
 };
 
+export type LegacyImportCandidate = {
+	candidateId: string,
+	report: LegacyScanReport,
+	problemCount: number,
+	expiresAtUtcMs: number | null,
+};
+
+export type LegacyImportReceipt = {
+	importId: string,
+	memberCount: number,
+	problemCount: number,
+	assetCount: number,
+	reviewCount: number,
+	frozenProblemCount: number,
+	createdAtUtcMs: number | null,
+};
+
+export type LegacyImportSummary = {
+	importId: string,
+	memberCount: number,
+	problemCount: number,
+	assetCount: number,
+	reviewCount: number,
+	status: string,
+	createdAtUtcMs: number | null,
+	rolledBackAtUtcMs: number | null,
+};
+
 export type LegacyIssue = {
 	code: string,
 	member: string,
 	recordId: string | null,
 	detail: string,
+};
+
+export type LegacyRollbackReceipt = {
+	importId: string,
+	removedProblemCount: number,
+	removedProfileCount: number,
+	removedAssetCount: number,
+	preservedEntityCount: number,
+	rolledBackAtUtcMs: number | null,
 };
 
 export type LegacyScanReport = {

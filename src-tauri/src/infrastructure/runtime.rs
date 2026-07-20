@@ -63,7 +63,7 @@ pub struct LibraryRuntime {
     account_id: String,
     device_id: String,
     active_profile: RwLock<ActiveProfile>,
-    profile_transition: Mutex<()>,
+    profile_transition: Arc<Mutex<()>>,
 }
 
 pub(crate) struct RestoreCredentials {
@@ -114,6 +114,10 @@ impl LibraryRuntime {
         self.profile_transition
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    pub fn profile_transition_lock(&self) -> Arc<Mutex<()>> {
+        Arc::clone(&self.profile_transition)
     }
 
     pub fn activate_profile(
@@ -283,7 +287,7 @@ pub fn initialize_local_library(
             id: profile_id,
             name: profile_name,
         }),
-        profile_transition: Mutex::new(()),
+        profile_transition: Arc::new(Mutex::new(())),
     })
 }
 

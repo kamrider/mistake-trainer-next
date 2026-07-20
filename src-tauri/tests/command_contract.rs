@@ -93,3 +93,15 @@ fn review_history_input_uses_only_public_filters_and_stable_values() {
         "30_days"
     );
 }
+
+#[test]
+fn legacy_command_identifiers_do_not_expose_runtime_identity_or_paths() {
+    let import_input = serde_json::json!({ "candidateId": "0190f3ff-opaque" });
+    let rollback_input = serde_json::json!({ "importId": "0190f400-opaque" });
+    for value in [import_input, rollback_input] {
+        let serialized = value.to_string();
+        for forbidden in ["path", "root", "accountId", "profileId", "database", "key"] {
+            assert!(!serialized.contains(forbidden));
+        }
+    }
+}
