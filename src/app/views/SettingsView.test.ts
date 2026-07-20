@@ -6,6 +6,9 @@ import SettingsView from './SettingsView.vue'
 const api = vi.hoisted(() => ({
   settingsOverview: vi.fn(),
   legacyScan: vi.fn(),
+  legacyImport: vi.fn(),
+  legacyImportList: vi.fn(),
+  legacyRollback: vi.fn(),
   backupCreate: vi.fn(),
   backupPrepareRestore: vi.fn(),
   backupRestore: vi.fn(),
@@ -20,6 +23,7 @@ vi.mock('../../shared/api/bindings', () => ({ commands: api }))
 describe('SettingsView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    api.legacyImportList.mockResolvedValue({ ok: true, data: [] })
     api.subjectPreferencesGet.mockResolvedValue({ ok: true, data: {
       enabledSubjects: ['语文', '数学', '英语'],
       customSubjects: [],
@@ -116,19 +120,22 @@ describe('SettingsView', () => {
       localEncryptionReady: true, cloudSyncConfigured: false,
     } })
     api.legacyScan.mockResolvedValue({ ok: true, data: {
-      members: 2,
-      metadataRecords: 8,
-      existingAssets: 7,
-      trainingRecords: 3,
-      frozenRecords: 1,
-      duplicateAssets: 1,
-      truncated: false,
-      issues: [{
-        code: 'missing_asset',
-        member: '小树',
-        recordId: 'answer-1',
-        detail: 'referenced image is missing',
-      }],
+      candidateId: 'candidate-one', problemCount: 3, expiresAtUtcMs: Date.now() + 30 * 60_000,
+      report: {
+        members: 2,
+        metadataRecords: 8,
+        existingAssets: 7,
+        trainingRecords: 3,
+        frozenRecords: 1,
+        duplicateAssets: 1,
+        truncated: false,
+        issues: [{
+          code: 'missing_asset',
+          member: '小树',
+          recordId: 'answer-1',
+          detail: 'referenced image is missing',
+        }],
+      },
     } })
     render(SettingsView)
 
@@ -138,7 +145,7 @@ describe('SettingsView', () => {
     expect(await screen.findByText('图片缺失')).toBeVisible()
     expect(screen.getByText('referenced image is missing')).toBeVisible()
     expect(screen.getByText(/尚未写入新题库/)).toBeVisible()
-    expect(screen.queryByText(/可以进入复制与校验阶段/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '查看范围并确认导入' })).toBeEnabled()
   })
 
   it('clears a stale preflight report when a later scan fails', async () => {
@@ -149,9 +156,12 @@ describe('SettingsView', () => {
     } })
     api.legacyScan
       .mockResolvedValueOnce({ ok: true, data: {
-        members: 1, metadataRecords: 1, existingAssets: 0, trainingRecords: 0,
-        frozenRecords: 0, duplicateAssets: 0, truncated: false,
-        issues: [{ code: 'missing_asset', member: '小树', recordId: 'q-1', detail: 'referenced image is missing' }],
+        candidateId: 'candidate-stale', problemCount: 1, expiresAtUtcMs: Date.now() + 30 * 60_000,
+        report: {
+          members: 1, metadataRecords: 1, existingAssets: 0, trainingRecords: 0,
+          frozenRecords: 0, duplicateAssets: 0, truncated: false,
+          issues: [{ code: 'missing_asset', member: '小树', recordId: 'q-1', detail: 'referenced image is missing' }],
+        },
       } })
       .mockRejectedValueOnce(new Error('worker failed'))
     render(SettingsView)

@@ -2,15 +2,14 @@
 import { isTauri } from '@tauri-apps/api/core'
 import { Archive, ArchiveRestore, BookOpen, CloudOff, Database, FolderCheck, LockKeyhole, Plus, RotateCcw, ShieldCheck, Trash2, TriangleAlert, Volume2 } from '@lucide/vue'
 import { nextTick, onMounted, ref } from 'vue'
-import { commands, type BackupRestoreCandidate, type BackupSummary, type LegacyScanReport, type ReviewFocusPolicy, type ReviewPreferences, type SettingsOverview, type SubjectPreferences } from '../../shared/api/bindings'
+import { commands, type BackupRestoreCandidate, type BackupSummary, type ReviewFocusPolicy, type ReviewPreferences, type SettingsOverview, type SubjectPreferences } from '../../shared/api/bindings'
 import { normalizeAppResult } from '../../shared/api/normalize-result'
+import LegacyImportPanel from '../../modules/legacy/components/LegacyImportPanel.vue'
 import BackupRestoreDialog from '../BackupRestoreDialog.vue'
 
 const overview = ref<SettingsOverview>()
 const loading = ref(true)
 const errorMessage = ref('')
-const legacyReport = ref<LegacyScanReport>()
-const scanningLegacy = ref(false)
 const createdBackup = ref<BackupSummary>()
 const restoreCandidate = ref<BackupRestoreCandidate>()
 const creatingBackup = ref(false)
@@ -196,49 +195,6 @@ async function closeRestoreDialog() {
   restoreDialogOpen.value = false
   await nextTick()
   restoreTrigger.value?.focus()
-}
-
-function issueLabel(code: string) {
-  return {
-    missing_metadata: '缺少 metadata',
-    invalid_metadata: 'metadata 损坏',
-    missing_pair: '配对缺失',
-    missing_relative_path: '路径缺失',
-    unsafe_relative_path: '路径越界',
-    unsafe_metadata_path: '元数据越界',
-    unsafe_member_path: '档案目录越界',
-    unsafe_files_root: '图片目录越界',
-    unsafe_asset_path: '资源越界',
-    missing_asset: '图片缺失',
-    metadata_too_large: '元数据过大',
-    asset_too_large: '图片过大',
-    scan_limit_exceeded: '扫描已截断',
-    hash_mismatch: '哈希不一致',
-    duplicate_asset: '重复图片',
-    unreadable_asset: '图片不可读',
-  }[code] ?? code
-}
-
-async function scanLegacy() {
-  scanningLegacy.value = true
-  errorMessage.value = ''
-  try {
-    const result = normalizeAppResult(await commands.legacyScan())
-    if (result.ok) {
-      if (result.data) legacyReport.value = result.data
-    }
-    else {
-      legacyReport.value = undefined
-      errorMessage.value = result.error.userMessage
-    }
-  }
-  catch {
-    legacyReport.value = undefined
-    errorMessage.value = '旧版目录没有扫描成功；原目录未被修改，请稍后重试。'
-  }
-  finally {
-    scanningLegacy.value = false
-  }
 }
 
 async function load() {
@@ -509,62 +465,7 @@ onMounted(load)
       </div>
     </section>
 
-    <section class="migration-panel">
-      <header>
-        <div><p>旧版迁移 · 只读预检</p><h2>先看清旧数据，再决定是否导入</h2><span>扫描只读取 metadata 与图片哈希，不会移动、重命名或删除旧目录中的任何文件。</span></div>
-        <button
-          type="button"
-          :disabled="scanningLegacy"
-          @click="scanLegacy"
-        >
-          {{ scanningLegacy ? '正在扫描…' : '选择旧版目录并扫描' }}
-        </button>
-      </header>
-      <template v-if="legacyReport">
-        <dl class="migration-stats">
-          <div><dt>学习档案</dt><dd>{{ legacyReport.members }}</dd></div>
-          <div><dt>元数据记录</dt><dd>{{ legacyReport.metadataRecords }}</dd></div>
-          <div><dt>可读图片</dt><dd>{{ legacyReport.existingAssets }}</dd></div>
-          <div><dt>训练记录</dt><dd>{{ legacyReport.trainingRecords }}</dd></div>
-          <div><dt>重复图片</dt><dd>{{ legacyReport.duplicateAssets }}</dd></div>
-          <div><dt>待处理问题</dt><dd>{{ legacyReport.issues.length }}</dd></div>
-        </dl>
-        <p class="preflight-note">
-          当前阶段只生成预检报告，尚未写入新题库。
-        </p>
-        <p
-          v-if="legacyReport.truncated"
-          class="preflight-note warning"
-        >
-          数据量超过安全扫描上限；下面是截断报告，请先处理标记项再导入。
-        </p>
-        <ol
-          v-if="legacyReport.issues.length"
-          class="issue-list"
-        >
-          <li
-            v-for="(issue, index) in legacyReport.issues.slice(0, 50)"
-            :key="`${issue.member}-${issue.recordId}-${index}`"
-          >
-            <strong>{{ issueLabel(issue.code) }}</strong>
-            <span>{{ issue.member }}<template v-if="issue.recordId"> · {{ issue.recordId }}</template></span>
-            <small>{{ issue.detail }}</small>
-          </li>
-        </ol>
-        <p
-          v-if="legacyReport.issues.length > 50"
-          class="preflight-note"
-        >
-          当前页面仅展示前 50 项；完整扫描共发现 {{ legacyReport.issues.length }} 项问题。
-        </p>
-        <p
-          v-if="legacyReport.issues.length === 0"
-          class="preflight-note ready"
-        >
-          未发现缺失、损坏或越界记录，可以进入复制与校验阶段。
-        </p>
-      </template>
-    </section>
+    <LegacyImportPanel @changed="load" />
 
     <section class="roadmap-panel">
       <div><p>安全底座</p><h2>恢复已接通，设备与同步继续建立在真实状态上</h2></div>

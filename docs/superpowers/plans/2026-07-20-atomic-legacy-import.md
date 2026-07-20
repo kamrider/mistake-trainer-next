@@ -305,15 +305,15 @@ git commit -m "feat: expose safe legacy import commands"
 - Consumes: `legacyScan`, `legacyImport`, `legacyImportList`, `legacyRollback`, and `legacy_import_progress`.
 - Produces: a settings-page migration workflow with explicit source safety, confirmation, progress, result, and rollback states.
 
-- [ ] **Step 1: Write failing UI state-machine tests**
+- [x] **Step 1: Write failing UI state-machine tests**
 
 Cover cancellation, safe candidate report, truncated/zero-problem import disabled, confirmation focus trap/Escape restore, import progress, success counts, failure preserving the candidate for retry, past receipt list, rollback confirmation, double-submit prevention, profile refresh notice, and reduced motion.
 
-- [ ] **Step 2: Run focused Vue tests and verify failure**
+- [x] **Step 2: Run focused Vue tests and verify failure**
 
 Run: `pnpm exec vitest run src/modules/legacy/components/LegacyImportPanel.test.ts src/modules/legacy/components/LegacyImportDialog.test.ts src/app/views/SettingsView.test.ts`
 
-- [ ] **Step 3: Implement the migration state machine**
+- [x] **Step 3: Implement the migration state machine**
 
 Render five explicit states: `idle`, `candidate`, `confirming`, `importing`, and `completed`. Show member/problem/image/review/frozen counts and issues before confirmation; never show a local path. Require one checkbox reading `我确认：导入只复制数据，不会修改旧目录`, then focus the cancel action first. During import show phase plus a real determinate progress bar. After success show created profiles/problems/images/reviews and a `前往题库验收` action.
 
@@ -326,7 +326,7 @@ type LegacyUiState =
   | { kind: 'completed'; receipt: LegacyImportReceipt }
 ```
 
-- [ ] **Step 4: Implement rollback and animation**
+- [x] **Step 4: Implement rollback and animation**
 
 Past completed imports show an overflow action `撤销这次导入`; confirmation explains preserved reused/modified data. Progress fill, result seal, and dialog sheet animate only `transform`/`opacity` for 180/240 ms; reduced motion renders the final state immediately. Every target is at least 44×44 px.
 
@@ -336,13 +336,13 @@ Past completed imports show an overflow action `撤销这次导入`; confirmatio
 @media (prefers-reduced-motion: reduce) { .legacy-progress__fill,.legacy-result-enter-active,.legacy-dialog-enter-active { transition: none; } }
 ```
 
-- [ ] **Step 5: Run focused UI tests**
+- [x] **Step 5: Run focused UI tests**
 
 Run: `pnpm exec vitest run src/modules/legacy/components/LegacyImportPanel.test.ts src/modules/legacy/components/LegacyImportDialog.test.ts src/app/views/SettingsView.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 6: Create a local checkpoint**
+- [x] **Step 6: Create a local checkpoint**
 
 ```bash
 git add src/modules/legacy src/app/views/SettingsView.vue src/app/views/SettingsView.test.ts
