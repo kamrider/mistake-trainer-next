@@ -8,8 +8,9 @@ use mistake_trainer_next_lib::{
         },
         profiles::{create_profile, CreateProfile},
         review::{
-            list_review_queue, start_manual_review_queue, submit_review, ReviewQueueQuery,
-            ReviewUseCaseError, StartManualReview, SubmitReview,
+            begin_exam_grading, list_review_queue, navigate_exam, start_exam_review_queue,
+            start_manual_review_queue, submit_review, BeginExamGrading, NavigateExam,
+            ReviewQueueQuery, ReviewUseCaseError, StartExamReview, StartManualReview, SubmitReview,
         },
     },
 };
@@ -48,6 +49,294 @@ fn create_fixture() -> (tempfile::TempDir, rusqlite::Connection, String, String)
     )
     .unwrap();
     (directory, connection, profile.id, problem.id)
+}
+
+#[test]
+fn exam_hides_grading_until_the_persisted_answering_pass_is_complete() {
+    let (directory, mut connection, profile_id, first_problem_id) = create_fixture();
+    let second_problem = create_problem(
+        &mut connection,
+        &directory.path().join("assets"),
+        &[47_u8; 32],
+        CreateProblem {
+            account_id: "account-1".to_owned(),
+            profile_id: profile_id.clone(),
+            subject: "物理".to_owned(),
+            note: String::new(),
+            assets: vec![CaptureAsset {
+                role: AssetRole::Question,
+                media_type: "image/png".to_owned(),
+                bytes: b"exam-second-question".to_vec(),
+            }],
+            now_utc_ms: 201,
+        },
+    )
+    .unwrap();
+    let now = 1_700_100_000_000_i64;
+
+    list_review_queue(
+        &mut connection,
+        ReviewQueueQuery {
+            account_id: "account-1".to_owned(),
+            profile_id: profile_id.clone(),
+            now_utc_ms: now,
+        },
+    )
+    .expect("create the due session that the exam replaces");
+
+    let started = start_exam_review_queue(
+        &mut connection,
+        StartExamReview {
+            account_id: "account-1".to_owned(),
+            profile_id: profile_id.clone(),
+            problem_ids: vec![second_problem.id.clone(), first_problem_id.clone()],
+            now_utc_ms: now + 1,
+        },
+    )
+    .expect("start exam");
+    assert_eq!(started.mode, "exam");
+    assert_eq!(started.exam_phase.as_deref(), Some("answering"));
+    assert_eq!(started.exam_question_index, 0);
+    assert_eq!(started.completed_count, 0);
+    assert_eq!(started.total_count, 2);
+    assert_eq!(
+        started
+            .items
+            .iter()
+            .map(|item| item.problem_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![second_problem.id.as_str(), first_problem_id.as_str()]
+    );
+
+    assert!(matches!(
+        begin_exam_grading(
+            &mut connection,
+            BeginExamGrading {
+                account_id: "account-1".to_owned(),
+                profile_id: profile_id.clone(),
+                now_utc_ms: now + 2,
+            }
+        ),
+        Err(ReviewUseCaseError::InvalidExamState)
+    ));
+
+    let navigated = navigate_exam(
+        &mut connection,
+        NavigateExam {
+            account_id: "account-1".to_owned(),
+            profile_id: profile_id.clone(),
+            position: 1,
+            now_utc_ms: now + 2,
+        },
+    )
+    .expect("persist navigation");
+    assert_eq!(navigated.exam_question_index, 1);
+    assert!(matches!(
+        navigate_exam(
+            &mut connection,
+            NavigateExam {
+                account_id: "account-1".to_owned(),
+                profile_id: profile_id.clone(),
+                position: 2,
+                now_utc_ms: now + 3,
+            }
+        ),
+        Err(ReviewUseCaseError::InvalidExamState)
+    ));
+
+    let resumed = list_review_queue(
+        &mut connection,
+        ReviewQueueQuery {
+            account_id: "account-1".to_owned(),
+            profile_id: profile_id.clone(),
+            now_utc_ms: now + 4,
+        },
+    )
+    .expect("resume answering pass");
+    assert!(resumed.resumed);
+    assert_eq!(resumed.mode, "exam");
+    assert_eq!(resumed.exam_phase.as_deref(), Some("answering"));
+    assert_eq!(resumed.exam_question_index, 1);
+
+    let early_grade = submit_review(
+        &mut connection,
+        SubmitReview {
+            account_id: "account-1".to_owned(),
+            profile_id: profile_id.clone(),
+            problem_id: second_problem.id.clone(),
+            device_id: "device-1".to_owned(),
+            rating: SimpleRating::Forgot.into_fsrs(),
+            duration_ms: 900,
+            occurred_at_utc_ms: now + 5,
+        },
+    );
+    assert!(matches!(
+        early_grade,
+        Err(ReviewUseCaseError::SessionOutOfSync)
+    ));
+    let event_count: i64 = connection
+        .query_row("SELECT count(*) FROM review_events", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(event_count, 0, "a forbidden early grade must roll back");
+
+    let grading = begin_exam_grading(
+        &mut connection,
+        BeginExamGrading {
+            account_id: "account-1".to_owned(),
+            profile_id: profile_id.clone(),
+            now_utc_ms: now + 6,
+        },
+    )
+    .expect("begin grading");
+    assert_eq!(grading.exam_phase.as_deref(), Some("grading"));
+    assert_eq!(grading.exam_question_index, 0);
+
+    submit_review(
+        &mut connection,
+        SubmitReview {
+            account_id: "account-1".to_owned(),
+            profile_id: profile_id.clone(),
+            problem_id: second_problem.id.clone(),
+            device_id: "device-1".to_owned(),
+            rating: SimpleRating::Forgot.into_fsrs(),
+            duration_ms: 1_000,
+            occurred_at_utc_ms: now + 7,
+        },
+    )
+    .expect("grade wrong");
+    let after_wrong = list_review_queue(
+        &mut connection,
+        ReviewQueueQuery {
+            account_id: "account-1".to_owned(),
+            profile_id: profile_id.clone(),
+            now_utc_ms: now + 8,
+        },
+    )
+    .expect("resume grading");
+    assert_eq!(after_wrong.completed_count, 1);
+    assert_eq!(after_wrong.exam_correct_count, 0);
+    assert_eq!(after_wrong.exam_wrong_count, 1);
+    assert_eq!(after_wrong.items[0].problem_id, first_problem_id);
+
+    submit_review(
+        &mut connection,
+        SubmitReview {
+            account_id: "account-1".to_owned(),
+            profile_id: profile_id.clone(),
+            problem_id: first_problem_id,
+            device_id: "device-1".to_owned(),
+            rating: SimpleRating::Remembered.into_fsrs(),
+            duration_ms: 1_100,
+            occurred_at_utc_ms: now + 9,
+        },
+    )
+    .expect("grade correct");
+    let completed: (String, i64, i64, i64) = connection
+        .query_row(
+            "SELECT status, current_index, exam_correct_count, exam_wrong_count
+             FROM review_sessions WHERE id = ?1",
+            [started.session_id.unwrap()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(completed, ("completed".to_owned(), 2, 1, 1));
+}
+
+#[test]
+fn answering_exam_keeps_the_same_question_selected_when_an_earlier_card_is_archived() {
+    let (directory, mut connection, profile_id, first_problem_id) = create_fixture();
+    let second_problem = create_problem(
+        &mut connection,
+        &directory.path().join("assets"),
+        &[47_u8; 32],
+        CreateProblem {
+            account_id: "account-1".to_owned(),
+            profile_id: profile_id.clone(),
+            subject: "物理".to_owned(),
+            note: String::new(),
+            assets: vec![CaptureAsset {
+                role: AssetRole::Question,
+                media_type: "image/png".to_owned(),
+                bytes: b"exam-archive-second".to_vec(),
+            }],
+            now_utc_ms: 201,
+        },
+    )
+    .unwrap();
+    let third_problem = create_problem(
+        &mut connection,
+        &directory.path().join("assets"),
+        &[47_u8; 32],
+        CreateProblem {
+            account_id: "account-1".to_owned(),
+            profile_id: profile_id.clone(),
+            subject: "化学".to_owned(),
+            note: String::new(),
+            assets: vec![CaptureAsset {
+                role: AssetRole::Question,
+                media_type: "image/png".to_owned(),
+                bytes: b"exam-archive-third".to_vec(),
+            }],
+            now_utc_ms: 202,
+        },
+    )
+    .unwrap();
+    let now = 1_700_200_000_000_i64;
+
+    start_exam_review_queue(
+        &mut connection,
+        StartExamReview {
+            account_id: "account-1".to_owned(),
+            profile_id: profile_id.clone(),
+            problem_ids: vec![
+                first_problem_id.clone(),
+                second_problem.id.clone(),
+                third_problem.id.clone(),
+            ],
+            now_utc_ms: now,
+        },
+    )
+    .unwrap();
+    navigate_exam(
+        &mut connection,
+        NavigateExam {
+            account_id: "account-1".to_owned(),
+            profile_id: profile_id.clone(),
+            position: 1,
+            now_utc_ms: now + 1,
+        },
+    )
+    .unwrap();
+    connection
+        .execute(
+            "UPDATE problems SET status = 'archived' WHERE id = ?1",
+            [&first_problem_id],
+        )
+        .unwrap();
+
+    let resumed = list_review_queue(
+        &mut connection,
+        ReviewQueueQuery {
+            account_id: "account-1".to_owned(),
+            profile_id,
+            now_utc_ms: now + 2,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(resumed.exam_question_index, 0);
+    assert_eq!(
+        resumed
+            .items
+            .iter()
+            .map(|item| item.problem_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![second_problem.id.as_str(), third_problem.id.as_str()]
+    );
+    assert_eq!(
+        resumed.items[resumed.exam_question_index as usize].problem_id,
+        second_problem.id
+    );
 }
 
 #[test]

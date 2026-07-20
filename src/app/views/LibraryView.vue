@@ -16,7 +16,7 @@ const problems = ref<ProblemSummary[]>([])
 const selectedProblemIds = ref<string[]>([])
 const loading = ref(true)
 const errorMessage = ref('')
-const startingReview = ref(false)
+const startingExperience = ref<'review' | 'exam' | null>(null)
 let refreshSequence = 0
 let searchTimer: number | undefined
 let detailSequence = 0
@@ -110,7 +110,7 @@ function closeDetail() {
 }
 
 async function trainProblem(problemId: string) {
-  await startReview([problemId], true)
+  await startReview([problemId], true, 'review')
 }
 
 async function updateProblem(input: { problemId: string; subject: string; note: string; timeLimitSeconds: number | null }) {
@@ -188,19 +188,28 @@ function clearSelection() {
   errorMessage.value = ''
 }
 
-async function startReview(problemIds = selectedProblemIds.value, fromDetail = false) {
-  if (problemIds.length === 0 || startingReview.value) return
-  startingReview.value = true
+async function startReview(
+  problemIds = selectedProblemIds.value,
+  fromDetail = false,
+  experience: 'review' | 'exam' = 'review',
+) {
+  if (problemIds.length === 0 || startingExperience.value) return
+  startingExperience.value = experience
   if (fromDetail) detailError.value = ''
   else errorMessage.value = ''
   let sessionCreated = false
   try {
     if (!isTauri() && import.meta.env.DEV && route.query.preview === 'library') {
-      await router.push({ name: 'review', query: { preview: 'manual-review' } })
+      await router.push({
+        name: 'review',
+        query: { preview: experience === 'exam' ? 'exam-answering' : 'manual-review' },
+      })
       selectedProblemIds.value = []
       return
     }
-    const result = normalizeAppResult(await commands.reviewManualStart({ problemIds }))
+    const result = normalizeAppResult(experience === 'exam'
+      ? await commands.reviewExamStart({ problemIds })
+      : await commands.reviewManualStart({ problemIds }))
     if (!result.ok) {
       if (fromDetail) detailError.value = result.error.userMessage
       else errorMessage.value = result.error.userMessage
@@ -212,13 +221,13 @@ async function startReview(problemIds = selectedProblemIds.value, fromDetail = f
   }
   catch {
     const message = sessionCreated
-      ? '训练卡组已安全保存，可从侧边栏“训练室”继续。'
-      : '训练卡组没有创建成功，请保持当前选择并稍后重试。'
+      ? `${experience === 'exam' ? '模拟考试' : '训练卡组'}已安全保存，可从侧边栏“训练室”继续。`
+      : `${experience === 'exam' ? '模拟考试' : '训练卡组'}没有创建成功，请保持当前选择并稍后重试。`
     if (fromDetail) detailError.value = message
     else errorMessage.value = message
   }
   finally {
-    startingReview.value = false
+    startingExperience.value = null
   }
 }
 
@@ -256,7 +265,7 @@ onBeforeUnmount(() => {
     :loading="loading"
     :problems="problems"
     :selected-problem-ids="selectedProblemIds"
-    :starting-review="startingReview"
+    :starting-experience="startingExperience"
     :error-message="errorMessage"
     @capture="router.push({ name: 'inbox' })"
     @status-change="changeStatus"
@@ -265,6 +274,7 @@ onBeforeUnmount(() => {
     @toggle-selection="toggleSelection"
     @batch-status="changeBatchStatus"
     @train-selection="startReview()"
+    @start-exam="startReview(selectedProblemIds, false, 'exam')"
     @select-all="selectAllVisible"
     @clear-selection="clearSelection"
   />
@@ -272,7 +282,7 @@ onBeforeUnmount(() => {
     v-if="detailOpen"
     :detail="detail"
     :loading="detailLoading"
-    :saving="detailSaving || startingReview"
+    :saving="detailSaving || Boolean(startingExperience)"
     :error-message="detailError"
     @close="closeDetail"
     @train="trainProblem"

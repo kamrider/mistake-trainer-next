@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ArrowLeft, Clock3, Eye, Expand, RotateCcw, Sparkles } from '@lucide/vue'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { ArrowLeft, ChevronLeft, ChevronRight, ClipboardCheck, Clock3, Eye, Expand, RotateCcw, Sparkles } from '@lucide/vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { FsrsRating, SimpleRating } from '../domain/rating'
 import ReviewMediaLightbox from './ReviewMediaLightbox.vue'
 
@@ -14,6 +14,7 @@ const props = defineProps<{
   total: number
   elapsedText: string
   mode?: 'due' | 'manual' | string
+  examPhase?: 'answering' | 'grading' | null
   timeLimitSeconds?: number | null
   expired?: boolean
   resumed?: boolean
@@ -24,20 +25,53 @@ const emit = defineEmits<{
   exit: []
   reveal: []
   rate: [rating: SimpleRating | FsrsRating]
+  previous: []
+  next: []
+  beginGrading: []
 }>()
 
-const revealed = ref(false)
+const revealed = ref(props.mode === 'exam' && props.examPhase === 'grading')
 const advanced = ref(false)
+const cardDirection = ref<'forward' | 'backward'>('forward')
+const headingElement = ref<HTMLElement>()
 const lightbox = ref<{ images: string[]; index: number; label: string }>()
+const isExamAnswering = computed(() => props.mode === 'exam' && props.examPhase === 'answering')
+const isExamGrading = computed(() => props.mode === 'exam' && props.examPhase === 'grading')
 const progress = computed(() => {
   if (props.total <= 0) return '0%'
   return `${Math.round((Math.min(props.current, props.total) / props.total) * 100)}%`
 })
-const modeLabel = computed(() => props.mode === 'manual' ? '自选训练' : '到期复习')
+const modeLabel = computed(() => {
+  if (isExamAnswering.value) return '模拟考试 · 独立作答'
+  if (isExamGrading.value) return '模拟考试 · 核对答案'
+  return props.mode === 'manual' ? '自选训练' : '到期复习'
+})
+const heading = computed(() => {
+  if (isExamAnswering.value) return '先独立完成整组，再统一看答案'
+  if (isExamGrading.value) return '对照答案，诚实判定'
+  return '先想一遍，再看答案'
+})
+const cardTransitionName = computed(() => cardDirection.value === 'backward'
+  ? 'card-shift-backward'
+  : 'card-shift-forward')
 
-watch(() => props.current, () => {
-  revealed.value = false
+function focusHeadingIfIdle() {
+  const previousActive = document.activeElement
+  void nextTick(() => {
+    const active = document.activeElement
+    if (
+      active !== previousActive
+      && active !== document.body
+      && active !== document.documentElement
+    ) return
+    headingElement.value?.focus({ preventScroll: true })
+  })
+}
+
+watch([() => props.current, () => props.examPhase], () => {
+  revealed.value = isExamGrading.value
   lightbox.value = undefined
+  focusHeadingIfIdle()
 })
 
 function revealAnswer() {
@@ -49,6 +83,24 @@ function revealAnswer() {
 function submit(rating: SimpleRating | FsrsRating) {
   if (!revealed.value || props.submitting) return
   emit('rate', rating)
+}
+
+function previousCard() {
+  if (!isExamAnswering.value || props.current <= 1 || props.submitting) return
+  cardDirection.value = 'backward'
+  emit('previous')
+}
+
+function nextCard() {
+  if (!isExamAnswering.value || props.current >= props.total || props.submitting) return
+  cardDirection.value = 'forward'
+  emit('next')
+}
+
+function beginGrading() {
+  if (!isExamAnswering.value || props.current !== props.total || props.submitting) return
+  cardDirection.value = 'forward'
+  emit('beginGrading')
 }
 
 function inspect(images: string[], index: number, label: string) {
@@ -68,6 +120,21 @@ function handleShortcut(event: KeyboardEvent) {
   if (event.key === 'Escape') {
     event.preventDefault()
     emit('exit')
+    return
+  }
+  if (isExamAnswering.value) {
+    if (event.key === 'ArrowLeft' && props.current > 1) {
+      event.preventDefault()
+      previousCard()
+    }
+    else if (event.key === 'ArrowRight' && props.current < props.total) {
+      event.preventDefault()
+      nextCard()
+    }
+    else if ((event.key === 'Enter' || event.key === ' ') && props.current === props.total) {
+      event.preventDefault()
+      beginGrading()
+    }
     return
   }
   if (!revealed.value) {
@@ -106,7 +173,10 @@ function handleShortcut(event: KeyboardEvent) {
   }
 }
 
-onMounted(() => window.addEventListener('keydown', handleShortcut))
+onMounted(() => {
+  window.addEventListener('keydown', handleShortcut)
+  focusHeadingIfIdle()
+})
 onBeforeUnmount(() => window.removeEventListener('keydown', handleShortcut))
 </script>
 
@@ -152,11 +222,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleShortcut))
     </header>
 
     <Transition
-      name="card-shift"
+      :name="cardTransitionName"
       mode="out-in"
     >
       <section
-        :key="current"
+        :key="`${current}-${examPhase || 'review'}`"
         class="review-stage"
       >
         <p class="stage-kicker">
@@ -166,8 +236,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleShortcut))
           />
           {{ modeLabel }}
         </p>
-        <h1 id="review-heading">
-          先想一遍，再看答案
+        <h1
+          id="review-heading"
+          ref="headingElement"
+          tabindex="-1"
+        >
+          {{ heading }}
         </h1>
 
         <article class="problem-paper">
@@ -204,8 +278,59 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleShortcut))
           已到建议时限，仍可继续作答
         </p>
 
+        <div
+          v-if="isExamAnswering"
+          class="exam-navigation"
+          aria-label="考试题目导航"
+        >
+          <button
+            type="button"
+            class="exam-nav-action"
+            aria-label="上一题"
+            :disabled="current <= 1 || submitting"
+            @click="previousCard"
+          >
+            <ChevronLeft
+              :size="19"
+              aria-hidden="true"
+            />
+            上一题
+            <kbd>←</kbd>
+          </button>
+          <button
+            v-if="current < total"
+            type="button"
+            class="exam-nav-action exam-next-action"
+            aria-label="下一题"
+            :disabled="submitting"
+            @click="nextCard"
+          >
+            下一题
+            <ChevronRight
+              :size="19"
+              aria-hidden="true"
+            />
+            <kbd>→</kbd>
+          </button>
+          <button
+            v-else
+            type="button"
+            class="exam-nav-action begin-grading-action"
+            aria-label="开始核对答案"
+            :disabled="submitting"
+            @click="beginGrading"
+          >
+            <ClipboardCheck
+              :size="19"
+              aria-hidden="true"
+            />
+            {{ submitting ? '正在切换…' : '开始核对答案' }}
+            <kbd>Enter</kbd>
+          </button>
+        </div>
+
         <button
-          v-if="!revealed"
+          v-else-if="!revealed"
           class="reveal-action"
           type="button"
           aria-label="显示答案"
@@ -259,10 +384,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleShortcut))
 
             <div class="rating-heading">
               <div>
-                <p>这次你记得怎么样？</p>
-                <small>评分成功后会自动进入下一题</small>
+                <p>{{ isExamGrading ? '这道题实际答对了吗？' : '这次你记得怎么样？' }}</p>
+                <small>{{ isExamGrading ? '判定会计入本场正确率，并更新复习计划' : '评分成功后会自动进入下一题' }}</small>
               </div>
               <button
+                v-if="!isExamGrading"
                 type="button"
                 class="mode-toggle"
                 :aria-pressed="advanced"
@@ -273,35 +399,35 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleShortcut))
             </div>
 
             <div
-              v-if="!advanced"
+              v-if="!advanced || isExamGrading"
               class="rating-actions"
             >
               <button
                 class="forgot-action"
                 type="button"
-                aria-label="忘记了"
+                :aria-label="isExamGrading ? '答错' : '忘记了'"
                 :disabled="submitting"
                 @click="submit('forgot')"
               >
                 <RotateCcw :size="18" />
-                <span>忘记了</span>
+                <span>{{ isExamGrading ? '答错' : '忘记了' }}</span>
                 <kbd>1</kbd>
               </button>
               <button
                 class="remember-action"
                 type="button"
-                aria-label="记住了"
+                :aria-label="isExamGrading ? '答对' : '记住了'"
                 :disabled="submitting"
                 @click="submit('remembered')"
               >
                 <Sparkles :size="18" />
-                <span>{{ submitting ? '正在保存' : '记住了' }}</span>
+                <span>{{ submitting ? '正在保存' : isExamGrading ? '答对' : '记住了' }}</span>
                 <kbd>2</kbd>
               </button>
             </div>
 
             <div
-              v-else
+              v-else-if="!isExamGrading"
               class="rating-actions advanced-actions"
             >
               <button
@@ -427,6 +553,14 @@ h1 { margin: 10px 0 26px; font-size: clamp(30px, 4vw, 46px); font-weight: 650; l
 .reveal-action:hover { transform: translateY(-2px); box-shadow: 0 14px 30px rgba(33, 51, 45, .2); }
 .reveal-action:active,
 .rating-actions button:active { transform: scale(.985); }
+.exam-navigation { display: grid; max-width: 560px; grid-template-columns: 1fr 1fr; gap: 12px; margin: 26px auto 0; }
+.exam-nav-action { display: inline-flex; gap: 9px; align-items: center; justify-content: center; min-height: 50px; padding: 0 18px; color: var(--green-deep); border: 1px solid rgba(33,51,45,.22); border-radius: 999px; background: rgba(255,253,247,.82); cursor: pointer; font-weight: 740; transition: transform var(--motion-feedback) var(--ease-standard), background var(--motion-standard) var(--ease-standard), box-shadow var(--motion-standard) var(--ease-standard); }
+.exam-nav-action:hover:not(:disabled) { transform: translateY(-2px); background: var(--paper-raised); box-shadow: 0 10px 22px rgba(33,51,45,.1); }
+.exam-nav-action:disabled { cursor: not-allowed; opacity: .42; }
+.exam-next-action { color: var(--paper); border-color: var(--green-deep); background: var(--green-deep); }
+.exam-next-action:hover:not(:disabled) { background: #182923; }
+.begin-grading-action { color: var(--paper); border-color: var(--cinnabar); background: var(--cinnabar); box-shadow: 0 10px 24px rgba(185,88,63,.16); }
+.begin-grading-action:hover:not(:disabled) { background: #a84b35; }
 
 kbd { min-width: 24px; padding: 2px 6px; color: inherit; border: 1px solid currentColor; border-radius: 6px; font-family: inherit; font-size: 10px; line-height: 1.35; opacity: .62; }
 .answer-area { margin-top: 18px; }
@@ -449,12 +583,16 @@ kbd { min-width: 24px; padding: 2px 6px; color: inherit; border: 1px solid curre
 .advanced-actions button:nth-child(3),
 .advanced-actions button:nth-child(4) { color: var(--white); border-color: var(--green-deep); background: var(--green-deep); }
 
-.card-shift-enter-active,
-.card-shift-leave-active,
+.card-shift-forward-enter-active,
+.card-shift-forward-leave-active,
+.card-shift-backward-enter-active,
+.card-shift-backward-leave-active,
 .paper-turn-enter-active,
 .paper-turn-leave-active { transition: opacity var(--motion-page) var(--ease-standard), transform var(--motion-page) var(--ease-standard); }
-.card-shift-enter-from { opacity: 0; transform: translateX(18px) scale(.99); }
-.card-shift-leave-to { opacity: 0; transform: translateX(-14px) scale(.99); }
+.card-shift-forward-enter-from { opacity: 0; transform: translateX(22px) scale(.985); }
+.card-shift-forward-leave-to { opacity: 0; transform: translateX(-16px) scale(.99); }
+.card-shift-backward-enter-from { opacity: 0; transform: translateX(-22px) scale(.985); }
+.card-shift-backward-leave-to { opacity: 0; transform: translateX(16px) scale(.99); }
 .paper-turn-enter-from { opacity: 0; transform: translateY(-10px) scale(.985); }
 .paper-turn-leave-to { opacity: 0; transform: translateY(-5px) scale(.99); }
 
@@ -468,6 +606,7 @@ button:focus-visible { outline: 3px solid rgba(185, 88, 63, .32); outline-offset
   .answer-paper { padding: 36px 22px 24px; }
   .rating-heading { align-items: flex-start; flex-direction: column; }
   .advanced-actions { grid-template-columns: 1fr 1fr; }
+  .exam-navigation { grid-template-columns: 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -475,13 +614,18 @@ button:focus-visible { outline: 3px solid rgba(185, 88, 63, .32); outline-offset
   .progress-track i,
   .media-button span,
   .reveal-action,
+  .exam-nav-action,
   .rating-actions button,
-  .card-shift-enter-active,
-  .card-shift-leave-active,
+  .card-shift-forward-enter-active,
+  .card-shift-forward-leave-active,
+  .card-shift-backward-enter-active,
+  .card-shift-backward-leave-active,
   .paper-turn-enter-active,
   .paper-turn-leave-active { transition: none; }
-  .card-shift-enter-from,
-  .card-shift-leave-to,
+  .card-shift-forward-enter-from,
+  .card-shift-forward-leave-to,
+  .card-shift-backward-enter-from,
+  .card-shift-backward-leave-to,
   .paper-turn-enter-from,
   .paper-turn-leave-to { transform: none; }
 }

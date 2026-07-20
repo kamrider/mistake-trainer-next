@@ -20,7 +20,11 @@ export const commands = {
 	problemUpdate: (input: ProblemUpdateInput) => __TAURI_INVOKE<AppResult<boolean>>("problem_update", { input }),
 	legacyScan: () => __TAURI_INVOKE<AppResult<LegacyScanReport | null>>("legacy_scan"),
 	reviewQueue: () => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_queue"),
+	reviewCurrentProblem: () => __TAURI_INVOKE<AppResult<ProblemDetail>>("review_current_problem"),
 	reviewManualStart: (input: ReviewManualStartInput) => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_manual_start", { input }),
+	reviewExamStart: (input: ReviewExamStartInput) => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_exam_start", { input }),
+	reviewExamNavigate: (input: ReviewExamNavigateInput) => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_exam_navigate", { input }),
+	reviewExamBeginGrading: () => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_exam_begin_grading"),
 	reviewSubmit: (input: ReviewSubmitInput) => __TAURI_INVOKE<AppResult<ReviewSubmission>>("review_submit", { input }),
 	dashboardOverview: (utcOffsetMinutes: number) => __TAURI_INVOKE<AppResult<DashboardOverview>>("dashboard_overview", { utcOffsetMinutes }),
 	reportSummary: () => __TAURI_INVOKE<AppResult<ReportSummary>>("report_summary"),
@@ -413,6 +417,14 @@ export type ReportSummary = {
 	subjectActivity: SubjectActivity[],
 };
 
+export type ReviewExamNavigateInput = {
+	position: number,
+};
+
+export type ReviewExamStartInput = {
+	problemIds: string[],
+};
+
 export type ReviewManualStartInput = {
 	problemIds: string[],
 };
@@ -429,6 +441,10 @@ export type ReviewQueueOverview = {
 	resumed: boolean,
 	completedCount: number,
 	totalCount: number,
+	examPhase: string | null,
+	examQuestionIndex: number,
+	examCorrectCount: number,
+	examWrongCount: number,
 	items: ReviewQueueItem[],
 };
 

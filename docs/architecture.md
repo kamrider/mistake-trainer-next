@@ -106,6 +106,16 @@ conflict. Deletes create tombstones retained for 30 days.
 - Review media is displayed in stored role and position order. The original encrypted
   asset is decrypted by Rust for the current detail DTO; Vue can enlarge it in a focused,
   keyboard-contained lightbox but receives no filesystem path or blob-store handle.
+- Review session source (`due | manual`) is independent from its experience
+  (`review | exam`). An exam persists an `answering` pass, its question position, a
+  separate `grading` pass, and correct/wrong counters so either pass resumes after a crash.
+- Vue cannot request an arbitrary problem while training. `review_current_problem` derives
+  the current opaque problem from the active session. During an exam's answering pass Rust
+  removes every answer asset before constructing the DTO; only the grading pass can receive
+  answer media. Ratings submitted before grading are rejected transactionally.
+- Exam grading reuses the normal FSRS transaction. The review event, schedule projection,
+  sync outbox operation, session advance, and exam score counter either all commit or all
+  roll back.
 
 ## Export boundary
 

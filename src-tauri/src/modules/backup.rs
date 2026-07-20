@@ -20,7 +20,7 @@ use crate::infrastructure::{
 };
 
 const FORMAT_VERSION: i32 = 1;
-const CURRENT_SCHEMA_VERSION: i64 = 6;
+const CURRENT_SCHEMA_VERSION: i64 = 7;
 const DATABASE_FILE: &str = "library.db";
 const MANIFEST_FILE: &str = "manifest.json";
 const ASSETS_DIRECTORY: &str = "assets";

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Archive, BookOpen, CheckCheck, Image, LoaderCircle, Play, Plus, RotateCcw, Search, Trash2, X } from '@lucide/vue'
+import { Archive, BookOpen, CheckCheck, ClipboardCheck, Image, LoaderCircle, Play, Plus, RotateCcw, Search, Trash2, X } from '@lucide/vue'
 import type { ProblemStatusFilter, ProblemSummary } from '../../../shared/api/bindings'
 
 defineProps<{
@@ -10,7 +10,7 @@ defineProps<{
   problems: ProblemSummary[]
   errorMessage?: string
   selectedProblemIds?: string[]
-  startingReview?: boolean
+  startingExperience?: 'review' | 'exam' | null
 }>()
 
 defineEmits<{
@@ -21,6 +21,7 @@ defineEmits<{
   toggleSelection: [problemId: string]
   batchStatus: [status: ProblemStatusFilter]
   trainSelection: []
+  startExam: []
   selectAll: []
   clearSelection: []
 }>()
@@ -95,7 +96,7 @@ const filters: Array<{ value: ProblemStatusFilter; label: string }> = [
         v-if="status === 'active' && problems.length"
         class="select-all-action"
         type="button"
-        :disabled="startingReview"
+        :disabled="Boolean(startingExperience)"
         @click="$emit('selectAll')"
       >
         <CheckCheck
@@ -121,11 +122,11 @@ const filters: Array<{ value: ProblemStatusFilter; label: string }> = [
             v-if="status === 'active'"
             class="start-review-action"
             type="button"
-            :disabled="startingReview"
+            :disabled="Boolean(startingExperience)"
             @click="$emit('trainSelection')"
           >
             <LoaderCircle
-              v-if="startingReview"
+              v-if="startingExperience === 'review'"
               class="spin"
               :size="17"
               aria-hidden="true"
@@ -135,12 +136,32 @@ const filters: Array<{ value: ProblemStatusFilter; label: string }> = [
               :size="17"
               aria-hidden="true"
             />
-            {{ startingReview ? '正在整理训练卡组…' : `开始训练 ${selectedProblemIds.length} 道题` }}
+            {{ startingExperience === 'review' ? '正在整理训练卡组…' : `开始训练 ${selectedProblemIds.length} 道题` }}
           </button>
           <button
             v-if="status === 'active'"
             type="button"
-            :disabled="startingReview"
+            class="start-exam-action"
+            :disabled="Boolean(startingExperience)"
+            @click="$emit('startExam')"
+          >
+            <LoaderCircle
+              v-if="startingExperience === 'exam'"
+              class="spin"
+              :size="17"
+              aria-hidden="true"
+            />
+            <ClipboardCheck
+              v-else
+              :size="17"
+              aria-hidden="true"
+            />
+            {{ startingExperience === 'exam' ? '正在准备模拟考试…' : `模拟考试 ${selectedProblemIds.length} 道题` }}
+          </button>
+          <button
+            v-if="status === 'active'"
+            type="button"
+            :disabled="Boolean(startingExperience)"
             @click="$emit('batchStatus', 'archived')"
           >
             <Archive
@@ -151,7 +172,7 @@ const filters: Array<{ value: ProblemStatusFilter; label: string }> = [
           <button
             v-if="status !== 'trashed'"
             type="button"
-            :disabled="startingReview"
+            :disabled="Boolean(startingExperience)"
             @click="$emit('batchStatus', 'trashed')"
           >
             <Trash2
@@ -162,7 +183,7 @@ const filters: Array<{ value: ProblemStatusFilter; label: string }> = [
           <button
             v-else
             type="button"
-            :disabled="startingReview"
+            :disabled="Boolean(startingExperience)"
             @click="$emit('batchStatus', 'active')"
           >
             <RotateCcw
@@ -173,7 +194,7 @@ const filters: Array<{ value: ProblemStatusFilter; label: string }> = [
           <button
             class="clear-selection"
             type="button"
-            :disabled="startingReview"
+            :disabled="Boolean(startingExperience)"
             @click="$emit('clearSelection')"
           >
             <X
@@ -314,6 +335,10 @@ h1 { margin: 0; font-size: clamp(42px,5vw,64px); letter-spacing: -.055em; line-h
 .batch-bar button:disabled, .select-all-action:disabled { opacity: .58; cursor: wait; }
 .batch-bar .start-review-action { min-height: 40px; padding-inline: 16px; color: var(--paper); border-color: var(--green-deep); background: var(--green-deep); box-shadow: 0 7px 18px rgba(33,51,45,.18); }
 .batch-bar .start-review-action:hover:not(:disabled) { background: #182923; }
+.batch-bar .start-exam-action { min-height: 40px; padding-inline: 16px; color: #873e2f; border-color: rgba(185,88,63,.42); background: #fff6ed; box-shadow: 0 7px 18px rgba(185,88,63,.1); }
+.batch-bar .start-exam-action:hover:not(:disabled) { color: #713123; border-color: var(--cinnabar); background: #fffaf3; }
+.batch-bar .start-review-action:not(:disabled):active,
+.batch-bar .start-exam-action:not(:disabled):active { transform: scale(.975); }
 .deck-dock-enter-active, .deck-dock-leave-active { transition: transform var(--motion-page) var(--ease-standard), opacity var(--motion-standard) var(--ease-standard); }
 .deck-dock-enter-from, .deck-dock-leave-to { opacity: 0; transform: translateY(12px) scale(.98); }
 .spin { animation: spin .8s linear infinite; }
@@ -352,6 +377,6 @@ h1 { margin: 0; font-size: clamp(42px,5vw,64px); letter-spacing: -.055em; line-h
 @keyframes pulse { from { opacity: .45; } to { opacity: .8; } }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 980px) { .batch-bar { align-items: flex-start; flex-direction: column; } .batch-actions { width: 100%; flex-wrap: wrap; } }
-@media (max-width: 820px) { .library-workspace { padding: 34px 22px 110px; } .library-header { align-items: flex-start; flex-direction: column; } .library-toolbar { align-items: stretch; flex-direction: column; } .search-field { min-width: 0; } .select-all-action { justify-content: center; } .problem-grid { grid-template-columns: 1fr; } .batch-actions .start-review-action { flex: 1 0 100%; justify-content: center; } }
-@media (prefers-reduced-motion: reduce) { .loading-state span, .spin { animation: none; } .deck-dock-enter-active, .deck-dock-leave-active, .problem-card { transition: none; } }
+@media (max-width: 820px) { .library-workspace { padding: 34px 22px 110px; } .library-header { align-items: flex-start; flex-direction: column; } .library-toolbar { align-items: stretch; flex-direction: column; } .search-field { min-width: 0; } .select-all-action { justify-content: center; } .problem-grid { grid-template-columns: 1fr; } .batch-actions .start-review-action, .batch-actions .start-exam-action { flex: 1 0 calc(50% - 4px); justify-content: center; } }
+@media (prefers-reduced-motion: reduce) { .loading-state span, .spin { animation: none; } .primary-action, .batch-bar button, .deck-dock-enter-active, .deck-dock-leave-active, .problem-card { transition: none; } .deck-dock-enter-from, .deck-dock-leave-to { transform: none; } }
 </style>

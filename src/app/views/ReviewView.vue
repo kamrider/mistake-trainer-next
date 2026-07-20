@@ -16,6 +16,10 @@ const overview = ref<ReviewQueueOverview>({
   resumed: false,
   completedCount: 0,
   totalCount: 0,
+  examPhase: null,
+  examQuestionIndex: 0,
+  examCorrectCount: 0,
+  examWrongCount: 0,
   items: [],
 })
 const currentIndex = ref(0)
@@ -23,14 +27,21 @@ const currentProblem = ref<ProblemDetail>()
 const loading = ref(true)
 const itemLoading = ref(false)
 const submitting = ref(false)
+const transitioning = ref(false)
 const completed = ref(false)
 const successfulCount = ref(0)
+const examCorrectCount = ref(0)
+const examWrongCount = ref(0)
 const errorMessage = ref('')
 const clock = useReviewClock()
 
 const queue = computed(() => overview.value.items)
 const currentItem = computed(() => queue.value[currentIndex.value])
-const currentNumber = computed(() => overview.value.completedCount + currentIndex.value + 1)
+const isExam = computed(() => overview.value.mode === 'exam')
+const isExamAnswering = computed(() => isExam.value && overview.value.examPhase === 'answering')
+const currentNumber = computed(() => isExamAnswering.value
+  ? currentIndex.value + 1
+  : overview.value.completedCount + currentIndex.value + 1)
 const questionImages = computed(() => currentProblem.value?.assets
   .filter(asset => asset.role === 'question')
   .map(asset => asset.dataUrl) ?? [])
@@ -38,14 +49,25 @@ const answerImages = computed(() => currentProblem.value?.assets
   .filter(asset => asset.role === 'answer')
   .map(asset => asset.dataUrl) ?? [])
 const isManual = computed(() => overview.value.mode === 'manual')
-const completionHeading = computed(() => isManual.value
-  ? '这组自选卡已经练完。'
-  : '把今天该记住的，认真看完了。')
-const completionSummary = computed(() => isManual.value
-  ? '你挑出的题已全部复盘，进度会在下次打开时保持一致。'
-  : '今天到期的内容已经完成，新的到期题会按计划出现。')
+const completionHeading = computed(() => {
+  if (isExam.value) return '这场模拟考试已经核对完。'
+  return isManual.value ? '这组自选卡已经练完。' : '把今天该记住的，认真看完了。'
+})
+const completionSummary = computed(() => {
+  if (isExam.value) return '整组题已完成独立作答与统一核对，结果也已写入复习计划。'
+  return isManual.value
+    ? '你挑出的题已全部复盘，进度会在下次打开时保持一致。'
+    : '今天到期的内容已经完成，新的到期题会按计划出现。'
+})
+const examAccuracy = computed(() => {
+  const graded = examCorrectCount.value + examWrongCount.value
+  return graded === 0 ? 0 : Math.round((examCorrectCount.value / graded) * 100)
+})
 
 function loadDevelopmentPreview() {
+  const previewMode = typeof route.query.preview === 'string' ? route.query.preview : 'review'
+  const examPreview = previewMode.startsWith('exam-')
+  const examPhase = previewMode === 'exam-grading' ? 'grading' : examPreview ? 'answering' : null
   const previewImage = (label: string, accent: string) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`
     <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="820" viewBox="0 0 1200 820">
       <rect width="1200" height="820" fill="#fffdf7"/>
@@ -59,10 +81,14 @@ function loadDevelopmentPreview() {
   `)}`
   overview.value = {
     sessionId: 'development-preview',
-    mode: route.query.preview === 'manual-review' ? 'manual' : 'due',
+    mode: previewMode === 'manual-review' ? 'manual' : examPreview ? 'exam' : 'due',
     resumed: true,
     completedCount: 2,
     totalCount: 5,
+    examPhase,
+    examQuestionIndex: 0,
+    examCorrectCount: previewMode === 'exam-complete' ? 4 : 0,
+    examWrongCount: previewMode === 'exam-complete' ? 1 : 0,
     items: [{ problemId: 'development-preview-problem', dueAtUtcMs: Date.now() - 1_000, reviewCount: 3 }],
   }
   currentProblem.value = {
@@ -80,6 +106,12 @@ function loadDevelopmentPreview() {
   }
   clock.reset(currentProblem.value.timeLimitSeconds)
   clock.start()
+  if (previewMode === 'exam-complete') {
+    examCorrectCount.value = 4
+    examWrongCount.value = 1
+    successfulCount.value = 5
+    completed.value = true
+  }
 }
 
 async function loadQueue() {
@@ -87,13 +119,15 @@ async function loadQueue() {
   completed.value = false
   currentIndex.value = 0
   successfulCount.value = 0
+  examCorrectCount.value = 0
+  examWrongCount.value = 0
   currentProblem.value = undefined
   errorMessage.value = ''
   clock.reset()
   try {
     if (!isTauri()) {
       // Explicit development-only component gallery; Vite removes it from release builds.
-      if (import.meta.env.DEV && (route.query.preview === 'review' || route.query.preview === 'manual-review'))
+      if (import.meta.env.DEV && ['review', 'manual-review', 'exam-answering', 'exam-grading', 'exam-complete'].includes(String(route.query.preview)))
         loadDevelopmentPreview()
       return
     }
@@ -103,6 +137,11 @@ async function loadQueue() {
       return
     }
     overview.value = result.data
+    examCorrectCount.value = result.data.examCorrectCount
+    examWrongCount.value = result.data.examWrongCount
+    currentIndex.value = result.data.mode === 'exam' && result.data.examPhase === 'answering'
+      ? Math.max(0, Math.min(result.data.examQuestionIndex, result.data.items.length - 1))
+      : 0
     completed.value = Boolean(
       overview.value.sessionId
       && overview.value.totalCount === overview.value.completedCount,
@@ -126,9 +165,13 @@ async function loadCurrentProblem() {
   itemLoading.value = true
   errorMessage.value = ''
   try {
-    const result = normalizeAppResult(await commands.problemDetail(item.problemId))
+    const result = normalizeAppResult(await commands.reviewCurrentProblem())
     if (!result.ok) {
       errorMessage.value = result.error.userMessage
+      return
+    }
+    if (result.data.id !== item.problemId) {
+      errorMessage.value = '训练进度已经变化，请重新读取训练。'
       return
     }
     currentProblem.value = result.data
@@ -140,6 +183,58 @@ async function loadCurrentProblem() {
   }
   finally {
     itemLoading.value = false
+  }
+}
+
+async function moveExam(direction: -1 | 1) {
+  if (!isExamAnswering.value || transitioning.value) return
+  const position = currentIndex.value + direction
+  if (position < 0 || position >= queue.value.length) return
+  transitioning.value = true
+  errorMessage.value = ''
+  clock.stop()
+  try {
+    const result = normalizeAppResult(await commands.reviewExamNavigate({ position }))
+    if (!result.ok) {
+      errorMessage.value = result.error.userMessage
+      clock.start()
+      return
+    }
+    overview.value = result.data
+    currentIndex.value = result.data.examQuestionIndex
+    await loadCurrentProblem()
+  }
+  catch {
+    errorMessage.value = '题目位置没有保存，请保持当前页面并重试。'
+    clock.start()
+  }
+  finally {
+    transitioning.value = false
+  }
+}
+
+async function beginExamGrading() {
+  if (!isExamAnswering.value || transitioning.value) return
+  transitioning.value = true
+  errorMessage.value = ''
+  clock.stop()
+  try {
+    const result = normalizeAppResult(await commands.reviewExamBeginGrading())
+    if (!result.ok) {
+      errorMessage.value = result.error.userMessage
+      clock.start()
+      return
+    }
+    overview.value = result.data
+    currentIndex.value = 0
+    await loadCurrentProblem()
+  }
+  catch {
+    errorMessage.value = '暂时无法进入答案核对，请保持当前页面并重试。'
+    clock.start()
+  }
+  finally {
+    transitioning.value = false
   }
 }
 
@@ -168,6 +263,12 @@ async function submitRating(rating: SimpleRating | FsrsRating) {
     }
 
     successfulCount.value += 1
+    if (isExam.value) {
+      if (rating === 'remembered' || rating === 'good' || rating === 'easy')
+        examCorrectCount.value += 1
+      else
+        examWrongCount.value += 1
+    }
     currentIndex.value += 1
     if (currentIndex.value >= queue.value.length)
       completed.value = true
@@ -204,7 +305,12 @@ onMounted(loadQueue)
     <h1>{{ completionHeading }}</h1>
     <span>
       {{ completionSummary }}<br>
-      本次完成 {{ successfulCount }} 道 · 会话进度 {{ overview.completedCount + successfulCount }} / {{ overview.totalCount }}
+      <template v-if="isExam">
+        答对 {{ examCorrectCount }} 道 · 答错 {{ examWrongCount }} 道 · 正确率 {{ examAccuracy }}%
+      </template>
+      <template v-else>
+        本次完成 {{ successfulCount }} 道 · 会话进度 {{ overview.completedCount + successfulCount }} / {{ overview.totalCount }}
+      </template>
     </span>
     <div class="message-actions">
       <button
@@ -272,6 +378,7 @@ onMounted(loadQueue)
     <ReviewRoom
       :subject="currentProblem.subject || '未分类'"
       :mode="overview.mode"
+      :exam-phase="overview.examPhase === 'answering' || overview.examPhase === 'grading' ? overview.examPhase : null"
       :prompt="currentProblem.note || '请观察题图，在心里完整走一遍解题过程。'"
       answer="请对照答案图片，确认关键步骤和易错点。"
       :question-images="questionImages"
@@ -281,10 +388,13 @@ onMounted(loadQueue)
       :elapsed-text="clock.displayText.value"
       :time-limit-seconds="currentProblem.timeLimitSeconds"
       :expired="clock.expired.value"
-      :resumed="overview.resumed && currentIndex === 0"
-      :submitting="submitting"
+      :resumed="overview.resumed && (isExamAnswering || currentIndex === 0)"
+      :submitting="submitting || transitioning"
       @reveal="clock.stop"
       @exit="router.push({ name: 'dashboard' })"
+      @previous="moveExam(-1)"
+      @next="moveExam(1)"
+      @begin-grading="beginExamGrading"
       @rate="submitRating"
     />
   </template>

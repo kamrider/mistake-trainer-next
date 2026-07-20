@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/vue'
+import { render, screen, waitFor } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import ReviewRoom from './ReviewRoom.vue'
@@ -103,5 +103,43 @@ describe('ReviewRoom', () => {
 
     expect(screen.getByText('自选训练')).toBeVisible()
     expect(screen.getByRole('button', { name: '显示答案' })).toBeVisible()
+  })
+
+  it('keeps every answer secret while navigating the exam answering pass', async () => {
+    const user = userEvent.setup()
+    const view = render(ReviewRoom, {
+      props: { ...baseProps, mode: 'exam', examPhase: 'answering', current: 1, total: 2 },
+    })
+
+    expect(screen.getByText('模拟考试 · 独立作答')).toBeVisible()
+    await waitFor(() => expect(screen.getByRole('heading', { name: '先独立完成整组，再统一看答案' })).toHaveFocus())
+    expect(screen.queryByText(baseProps.answer)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '显示答案' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '上一题' })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: '下一题' }))
+    expect(view.emitted('next')).toHaveLength(1)
+
+    await view.rerender({ current: 2 })
+    expect(screen.getByRole('button', { name: '开始核对答案' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '开始核对答案' }))
+    expect(view.emitted('beginGrading')).toHaveLength(1)
+
+    await user.keyboard('{ArrowLeft}')
+    expect(view.emitted('previous')).toHaveLength(1)
+  })
+
+  it('shows answers immediately in exam grading and only exposes right or wrong', async () => {
+    const user = userEvent.setup()
+    const view = render(ReviewRoom, {
+      props: { ...baseProps, mode: 'exam', examPhase: 'grading' },
+    })
+
+    expect(screen.getByText('模拟考试 · 核对答案')).toBeVisible()
+    expect(screen.getByText(baseProps.answer)).toBeVisible()
+    expect(screen.queryByRole('button', { name: '使用 FSRS 四档评分' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '答错' }))
+    expect(view.emitted('rate')).toEqual([['forgot']])
+    await user.click(screen.getByRole('button', { name: '答对' }))
+    expect(view.emitted('rate')).toEqual([['forgot'], ['remembered']])
   })
 })

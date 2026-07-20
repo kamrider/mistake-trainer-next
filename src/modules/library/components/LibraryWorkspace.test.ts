@@ -91,13 +91,17 @@ describe('LibraryWorkspace', () => {
     })
 
     expect(screen.getByRole('button', { name: '开始训练 2 道题' })).toBeVisible()
+    expect(screen.getByRole('button', { name: '模拟考试 2 道题' })).toBeVisible()
     await user.click(screen.getByRole('button', { name: '开始训练 2 道题' }))
     expect(view.emitted('trainSelection')).toHaveLength(1)
+    await user.click(screen.getByRole('button', { name: '模拟考试 2 道题' }))
+    expect(view.emitted('startExam')).toHaveLength(1)
 
     await user.click(screen.getByRole('button', { name: '清空选择' }))
     expect(view.emitted('clearSelection')).toHaveLength(1)
 
-    await view.rerender({ startingReview: true })
+    await view.rerender({ startingExperience: 'review' })
     expect(screen.getByRole('button', { name: '正在整理训练卡组…' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '模拟考试 2 道题' })).toBeDisabled()
   })
 })
