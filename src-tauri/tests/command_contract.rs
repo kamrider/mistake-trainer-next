@@ -37,9 +37,7 @@ fn command_errors_never_serialize_internal_diagnostics_as_user_messages() {
 
 #[test]
 fn review_focus_preferences_use_the_stable_public_values() {
-    use mistake_trainer_next_lib::modules::preferences::{
-        ReviewFocusPolicy, ReviewPreferences,
-    };
+    use mistake_trainer_next_lib::modules::preferences::{ReviewFocusPolicy, ReviewPreferences};
 
     for (policy, expected) in [
         (ReviewFocusPolicy::Off, "off"),
@@ -52,4 +50,46 @@ fn review_focus_preferences_use_the_stable_public_values() {
         .expect("serialize review preference");
         assert_eq!(value, json!({ "focusPolicy": expected }));
     }
+}
+
+#[test]
+fn review_history_input_uses_only_public_filters_and_stable_values() {
+    use mistake_trainer_next_lib::{
+        commands::review_history::ReviewHistoryInput, domain::review::FsrsRating,
+        modules::review_history::ReviewHistoryRange,
+    };
+
+    let value = serde_json::to_value(ReviewHistoryInput {
+        range: ReviewHistoryRange::SevenDays,
+        rating: Some(FsrsRating::Good),
+        subject: Some("数学".to_owned()),
+        search: "圆锥曲线".to_owned(),
+        cursor: None,
+        limit: 20,
+    })
+    .unwrap();
+    assert_eq!(
+        value,
+        json!({
+            "range": "7_days",
+            "rating": "good",
+            "subject": "数学",
+            "search": "圆锥曲线",
+            "cursor": null,
+            "limit": 20
+        })
+    );
+    let serialized = value.to_string();
+    for forbidden in ["accountId", "profileId", "deviceId", "problemId"] {
+        assert!(!serialized.contains(forbidden));
+    }
+
+    assert_eq!(
+        serde_json::to_value(ReviewHistoryRange::All).unwrap(),
+        "all"
+    );
+    assert_eq!(
+        serde_json::to_value(ReviewHistoryRange::ThirtyDays).unwrap(),
+        "30_days"
+    );
 }

@@ -8,4 +8,5 @@ pub mod library;
 pub mod preferences;
 pub mod profiles;
 pub mod review;
+pub mod review_history;
 pub mod system;

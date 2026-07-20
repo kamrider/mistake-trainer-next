@@ -28,6 +28,8 @@ export const commands = {
 	reviewSubmit: (input: ReviewSubmitInput) => __TAURI_INVOKE<AppResult<ReviewSubmission>>("review_submit", { input }),
 	reviewFocusSelect: (input: ReviewFocusSelectInput) => __TAURI_INVOKE<AppResult<ReviewFocusState | null>>("review_focus_select", { input }),
 	reviewFocusSkip: () => __TAURI_INVOKE<AppResult<ReviewFocusState | null>>("review_focus_skip"),
+	reviewHistoryList: (input: ReviewHistoryInput) => __TAURI_INVOKE<AppResult<ReviewHistoryPage>>("review_history_list", { input }),
+	reviewHistoryDetail: (eventId: string) => __TAURI_INVOKE<AppResult<ReviewHistoryDetail>>("review_history_detail", { eventId }),
 	dashboardOverview: (utcOffsetMinutes: number) => __TAURI_INVOKE<AppResult<DashboardOverview>>("dashboard_overview", { utcOffsetMinutes }),
 	reportSummary: () => __TAURI_INVOKE<AppResult<ReportSummary>>("report_summary"),
 	settingsOverview: () => __TAURI_INVOKE<AppResult<SettingsOverview>>("settings_overview"),
@@ -262,6 +264,15 @@ export type CaptureLayoutInput = {
 
 export type CaptureLayoutMode = "alternating" | "split" | "questions_only" | "manual";
 
+export type CurrentScheduleProjection = {
+	dueAtUtcMs: number | null,
+	stability: number | null,
+	difficulty: number | null,
+	lastReviewedAtUtcMs: number | null,
+	algorithmVersion: string,
+	parameterVersion: string,
+};
+
 export type DailyActivity = {
 	dayStartUtcMs: number | null,
 	reviewCount: number,
@@ -443,6 +454,56 @@ export type ReviewFocusState = {
 	nextNumber: number,
 	elapsedMs: number,
 };
+
+export type ReviewHistoryDetail = {
+	eventId: string,
+	subject: string,
+	note: string,
+	problemStatus: string,
+	rating: FsrsRating,
+	durationMs: number | null,
+	occurredAtUtcMs: number | null,
+	algorithmVersion: string,
+	parameterVersion: string,
+	algorithmIsCurrent: boolean,
+	parametersAreCurrent: boolean,
+	isCurrentDevice: boolean,
+	reviewOrdinal: number,
+	problemReviewCount: number,
+	currentSchedule: CurrentScheduleProjection | null,
+};
+
+export type ReviewHistoryInput = {
+	range: ReviewHistoryRange,
+	rating: FsrsRating | null,
+	subject: string | null,
+	search: string,
+	cursor: string | null,
+	limit: number,
+};
+
+export type ReviewHistoryItem = {
+	eventId: string,
+	subject: string,
+	notePreview: string,
+	problemStatus: string,
+	rating: FsrsRating,
+	durationMs: number | null,
+	occurredAtUtcMs: number | null,
+	algorithmVersion: string,
+	parameterVersion: string,
+	algorithmIsCurrent: boolean,
+	parametersAreCurrent: boolean,
+};
+
+export type ReviewHistoryPage = {
+	items: ReviewHistoryItem[],
+	nextCursor: string | null,
+	totalCount: number,
+	availableSubjects: string[],
+};
+
+export type ReviewHistoryRange = "all" | "7_days" | "30_days";
 
 export type ReviewManualStartInput = {
 	problemIds: string[],

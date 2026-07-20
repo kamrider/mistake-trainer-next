@@ -31,6 +31,8 @@ pub fn builder() -> Builder<tauri::Wry> {
         commands::review::review_submit,
         commands::review::review_focus_select,
         commands::review::review_focus_skip,
+        commands::review_history::review_history_list,
+        commands::review_history::review_history_detail,
         commands::insights::dashboard_overview,
         commands::insights::report_summary,
         commands::insights::settings_overview,

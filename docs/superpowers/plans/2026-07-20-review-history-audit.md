@@ -185,25 +185,25 @@ git commit -m "feat: query auditable review history"
 - Produces `review_history_detail(eventId: string)`.
 - Both return the shared `AppResult<T>` and derive identity from `LibraryRuntime`.
 
-- [ ] **Step 1: Write failing command contract tests**
+- [x] **Step 1: Write failing command contract tests**
 
 Serialize the exact range union, rating nullable field, page/detail DTO camelCase names, and stable invalid-input/not-found errors. Assert serialized public errors contain no SQL, raw device ID, local path, or internal error text.
 
-- [ ] **Step 2: Run command tests and verify they fail**
+- [x] **Step 2: Run command tests and verify they fail**
 
 Run: `.\scripts\cargo-msvc.cmd test --manifest-path src-tauri\Cargo.toml --test command_contract`
 
 Expected: FAIL because history commands are absent.
 
-- [ ] **Step 3: Implement runtime-identity command adapters**
+- [x] **Step 3: Implement runtime-identity command adapters**
 
 Map invalid query/cursor to non-retryable `review_history_query_invalid`, missing/foreign detail to non-retryable `review_history_event_missing`, and database/serialization failures to retryable `review_history_read_failed`. User messages must remain Chinese and path-free.
 
-- [ ] **Step 4: Register commands and regenerate bindings**
+- [x] **Step 4: Register commands and regenerate bindings**
 
 Register both commands in `bindings.rs`, export TypeScript, and confirm inputs contain only filters/cursor or event ID. No account/profile/device ID may appear in the generated inputs.
 
-- [ ] **Step 5: Run contracts and binding generation**
+- [x] **Step 5: Run contracts and binding generation**
 
 Run:
 
@@ -215,7 +215,7 @@ pnpm typecheck
 
 Expected: PASS and generated bindings contain both commands and exact unions.
 
-- [ ] **Step 6: Create a local checkpoint**
+- [x] **Step 6: Create a local checkpoint**
 
 ```powershell
 git add src-tauri/src/commands/review_history.rs src-tauri/src/commands/mod.rs src-tauri/src/bindings.rs src-tauri/tests/command_contract.rs src/shared/api/bindings.ts
