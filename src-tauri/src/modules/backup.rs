@@ -20,7 +20,7 @@ use crate::infrastructure::{
 };
 
 const FORMAT_VERSION: i32 = 1;
-const CURRENT_SCHEMA_VERSION: i64 = 8;
+const CURRENT_SCHEMA_VERSION: i64 = 9;
 const DATABASE_FILE: &str = "library.db";
 const MANIFEST_FILE: &str = "manifest.json";
 const ASSETS_DIRECTORY: &str = "assets";
@@ -1074,6 +1074,15 @@ fn ensure_single_account(
     account_id: &str,
     schema_version: i64,
 ) -> Result<(), BackupError> {
+    if schema_version >= 9
+        && !index_columns_match(
+            connection,
+            "review_events_profile_time_idx",
+            &["account_id", "profile_id", "occurred_at_utc_ms", "id"],
+        )?
+    {
+        return Err(BackupError::Integrity);
+    }
     let has_foreign_account: i64 = connection.query_row(
         "SELECT EXISTS(
            SELECT 1 FROM (
@@ -1238,6 +1247,18 @@ fn column_exists(
         .query_map([], |row| row.get::<_, String>(1))?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(columns.iter().any(|candidate| candidate == column))
+}
+
+fn index_columns_match(
+    connection: &Connection,
+    index: &str,
+    expected: &[&str],
+) -> Result<bool, BackupError> {
+    let mut statement = connection.prepare(&format!("PRAGMA index_info('{index}')"))?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(2))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(columns.iter().map(String::as_str).eq(expected.iter().copied()))
 }
 
 fn reject_sqlite_sidecars(root: &Path) -> Result<(), BackupError> {

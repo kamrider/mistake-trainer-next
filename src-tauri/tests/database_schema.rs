@@ -43,7 +43,7 @@ fn initial_migration_creates_the_offline_first_core_schema() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        8
+        9
     );
 }
 
@@ -84,7 +84,7 @@ fn version_two_library_upgrades_without_changing_existing_problem_data() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        8
+        9
     );
 
     let staged_role: String = connection
@@ -147,7 +147,7 @@ fn version_five_library_adds_active_profile_preferences_without_changing_existin
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        8
+        9
     );
 }
 
@@ -218,7 +218,7 @@ fn version_six_library_adds_exam_state_without_changing_existing_session_progres
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        8
+        9
     );
 
     let invalid_phase = connection.execute(
@@ -341,7 +341,7 @@ fn version_seven_library_adds_focus_state_without_changing_existing_preferences_
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        8
+        9
     );
 
     assert!(connection.execute(
@@ -356,6 +356,88 @@ fn version_seven_library_adds_focus_state_without_changing_existing_preferences_
         "UPDATE review_sessions SET focus_order_json = NULL, focus_next_number = 1 WHERE id = 'session'",
         [],
     ).is_err());
+}
+
+#[test]
+fn version_eight_library_adds_review_history_index_without_changing_existing_rows() {
+    let directory = tempdir().expect("temp directory");
+    let path = directory.path().join("library.db");
+    let mut connection =
+        open_encrypted_database(&path, "history-index-upgrade-key").expect("open database");
+
+    for migration in [
+        include_str!("../migrations/0001_initial.sql"),
+        include_str!("../migrations/0002_review_sessions.sql"),
+        include_str!("../migrations/0003_capture_inbox.sql"),
+        include_str!("../migrations/0004_capture_staged_roles.sql"),
+        include_str!("../migrations/0005_profile_preferences.sql"),
+        include_str!("../migrations/0006_account_preferences.sql"),
+        include_str!("../migrations/0007_review_exam.sql"),
+        include_str!("../migrations/0008_review_focus.sql"),
+    ] {
+        connection.execute_batch(migration).unwrap();
+    }
+    connection.pragma_update(None, "user_version", 8).unwrap();
+    connection.execute(
+        "INSERT INTO learner_profiles(id, account_id, name, created_at_utc_ms, updated_at_utc_ms, revision)
+         VALUES('profile', 'account', '小树', 1, 1, 1)",
+        [],
+    ).unwrap();
+    connection.execute(
+        "INSERT INTO problems(id, account_id, profile_id, subject, note, status, created_at_utc_ms, updated_at_utc_ms, revision)
+         VALUES('problem', 'account', 'profile', '数学', '保留历史', 'active', 2, 2, 1)",
+        [],
+    ).unwrap();
+    connection.execute(
+        "INSERT INTO review_events(
+             id, account_id, profile_id, problem_id, device_id, rating, duration_ms,
+             occurred_at_utc_ms, algorithm_version, parameter_version
+         ) VALUES('event', 'account', 'profile', 'problem', 'device', 'good', 1234,
+                  10, 'fsrs-6.6.1', 'default-6.6.1')",
+        [],
+    ).unwrap();
+    connection.execute(
+        "INSERT INTO schedule_states(
+             problem_id, due_at_utc_ms, stability, difficulty, last_reviewed_at_utc_ms,
+             algorithm_version, parameter_version, rebuilt_at_utc_ms
+         ) VALUES('problem', 20, 2.5, 4.0, 10, 'fsrs-6.6.1', 'default-6.6.1', 11)",
+        [],
+    ).unwrap();
+
+    let before: (String, String, i64, i64, f64, f64) = connection.query_row(
+        "SELECT e.rating, e.algorithm_version, e.duration_ms, s.due_at_utc_ms,
+                s.stability, s.difficulty
+         FROM review_events e JOIN schedule_states s ON s.problem_id = e.problem_id
+         WHERE e.id = 'event'",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+    ).unwrap();
+
+    run_migrations(&mut connection).expect("upgrade schema v8 to v9");
+
+    let after: (String, String, i64, i64, f64, f64) = connection.query_row(
+        "SELECT e.rating, e.algorithm_version, e.duration_ms, s.due_at_utc_ms,
+                s.stability, s.difficulty
+         FROM review_events e JOIN schedule_states s ON s.problem_id = e.problem_id
+         WHERE e.id = 'event'",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+    ).unwrap();
+    assert_eq!(after, before);
+    let index_columns = connection
+        .prepare("SELECT name FROM pragma_index_info('review_events_profile_time_idx') ORDER BY seqno")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(index_columns, ["account_id", "profile_id", "occurred_at_utc_ms", "id"]);
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .unwrap(),
+        9
+    );
 }
 
 #[test]

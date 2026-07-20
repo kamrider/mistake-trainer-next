@@ -542,6 +542,39 @@ fn validation_requires_focus_columns_for_schema_v8() {
 }
 
 #[test]
+fn validation_requires_review_history_index_only_for_schema_v9() {
+    let fixture = fixture();
+    let (_, package) = created_package(&fixture);
+    {
+        let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        database
+            .execute("DROP INDEX review_events_profile_time_idx", [])
+            .unwrap();
+        database
+            .pragma_update(None, "journal_mode", "DELETE")
+            .unwrap();
+    }
+    refresh_database_manifest(&package, 9);
+    assert!(matches!(
+        validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID),
+        Err(BackupError::Integrity)
+    ));
+
+    {
+        let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        database.pragma_update(None, "user_version", 8).unwrap();
+        database
+            .pragma_update(None, "journal_mode", "DELETE")
+            .unwrap();
+    }
+    refresh_database_manifest(&package, 8);
+    assert!(
+        validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID).is_ok(),
+        "schema v8 remains valid before the history index existed"
+    );
+}
+
+#[test]
 fn creation_rejects_application_storage_and_mixed_account_libraries() {
     let fixture = fixture();
     assert!(matches!(
