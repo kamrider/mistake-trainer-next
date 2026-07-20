@@ -243,31 +243,31 @@ git commit -m "feat: expose typed review history commands"
 - Consumes generated `reviewHistoryList` and `reviewHistoryDetail` commands.
 - Produces lazy route `/report/history` named `review-history` with `meta.shellPage='report'`.
 
-- [ ] **Step 1: Write failing component and view tests**
+- [x] **Step 1: Write failing component and view tests**
 
 Cover initial loading, genuine empty state, filter submission/reset, cursor append, append failure preserving prior rows, retry, deterministic date grouping, rating copy, row keyboard activation, detail request race cancellation, drawer close/focus restoration, current versus legacy version badges, no raw device/event ID in visible copy, and reduced-motion-independent state changes.
 
-- [ ] **Step 2: Write failing route and report-entry tests**
+- [x] **Step 2: Write failing route and report-entry tests**
 
 Assert the history route is lazy, carries `shellPage='report'`, and report contains a discoverable “查看完整复习历史” link. Update `App.vue` so the report navigation remains active on the child page.
 
-- [ ] **Step 3: Implement explicit filters**
+- [x] **Step 3: Implement explicit filters**
 
 Render rolling range, exact rating, subject, and search controls in a single labelled form. Submitting or clearing resets cursor and selected detail, starts request epoch protection, and replaces the list only after a successful response. A failed replacement keeps the prior list visibly marked as stale and retryable.
 
-- [ ] **Step 4: Implement the date-grouped timeline**
+- [x] **Step 4: Implement the date-grouped timeline**
 
 Use button rows grouped by the Windows local date. Each row shows time, subject, note preview, rating seal, and duration. “加载更多” appends only on success and is removed when `nextCursor` is null. Card entry uses a 120 ms transform/opacity transition; no layout animation runs for bulk page append.
 
-- [ ] **Step 5: Implement the audit detail surface**
+- [x] **Step 5: Implement the audit detail surface**
 
 Desktop uses a sticky right panel; at 760 px and below it becomes an overlay sheet with focusable close control and background scrim. Show full note, rating/time/duration, review ordinal, problem status, current due/stability/difficulty, immutable event versions, current/legacy badges, and “本机设备/其他设备” only. Never render raw event or device IDs.
 
-- [ ] **Step 6: Add development preview and restrained motion**
+- [x] **Step 6: Add development preview and restrained motion**
 
 Support `/#/report/history?preview=history` with static non-private sample data. Use only transform/opacity transitions, remove them under `prefers-reduced-motion`, keep every interactive target at least 44 px, and preserve visible focus/high contrast.
 
-- [ ] **Step 7: Run focused UI tests, lint, typecheck, and build**
+- [x] **Step 7: Run focused UI tests, lint, typecheck, and build**
 
 Run:
 
@@ -280,7 +280,7 @@ pnpm build
 
 Expected: all PASS; initial and lazy chunks remain within budget.
 
-- [ ] **Step 8: Create a local checkpoint**
+- [x] **Step 8: Create a local checkpoint**
 
 ```powershell
 git add src/modules/review-history src/app/views/ReviewHistoryView.vue src/app/views/ReviewHistoryView.test.ts src/app/views/ReportView.vue src/app/views/ReportView.test.ts src/app/router.ts src/app/router.test.ts src/app/App.vue

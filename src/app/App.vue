@@ -11,7 +11,7 @@ import AppShell, { type AppPage } from './AppShell.vue'
 
 const route = useRoute()
 const router = useRouter()
-const activePage = computed(() => (route.name ?? 'dashboard') as AppPage)
+const activePage = computed(() => (route.meta.shellPage ?? route.name ?? 'dashboard') as AppPage)
 const systemStatus = ref<AppResult<SystemStatus>>()
 const statusLabel = computed(() => systemStatusLabel(systemStatus.value))
 const profiles = ref<ProfileSummary[]>([])

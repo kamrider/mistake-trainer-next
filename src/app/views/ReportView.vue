@@ -291,16 +291,25 @@ onMounted(load)
         <h1>把练习变成看得见的节奏</h1>
         <span>只呈现事实，不用夸张的红色数字制造焦虑。</span>
       </div>
-      <button
-        type="button"
-        :disabled="loading"
-        @click="load"
-      >
-        <RotateCcw
+      <div class="heading-actions">
+        <a
+          class="history-link"
+          href="#/report/history"
+        ><Clock3
           :size="16"
           aria-hidden="true"
-        />刷新
-      </button>
+        />查看完整复习历史</a>
+        <button
+          type="button"
+          :disabled="loading"
+          @click="load"
+        >
+          <RotateCcw
+            :size="16"
+            aria-hidden="true"
+          />刷新
+        </button>
+      </div>
     </header>
 
     <p
@@ -483,6 +492,7 @@ h1 { font-size: clamp(28px,4vw,44px); } h2 { font-size: 22px; }
 .page-heading span, .paper-panel header span { display: block; margin-top: 9px; color: var(--ink-muted); }
 button { display: inline-flex; gap: 7px; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 10px; background: var(--paper-raised); color: var(--ink); cursor: pointer; }
 .page-heading button { padding: 10px 14px; } button:disabled { cursor: not-allowed; opacity: .48; }
+.heading-actions { display: flex; gap: 8px; align-items: center; }.history-link { display: inline-flex; gap: 7px; align-items: center; min-height: 44px; padding: 0 14px; color: var(--paper-raised); border-radius: 999px; background: var(--green-deep); font-size: 12px; font-weight: 720; text-decoration: none; transition: transform var(--motion-feedback) var(--ease-standard), box-shadow var(--motion-standard) var(--ease-standard); }.history-link:hover { transform: translateY(-1px); box-shadow: 0 8px 20px rgba(33,51,45,.16); }
 .error-banner { padding: 12px 14px; border: 1px solid rgba(185,88,63,.28); border-radius: 10px; background: rgba(185,88,63,.08); color: #843d2c; }
 .metric-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 14px; }
 .metric-grid article, .paper-panel { border: 1px solid var(--line); border-radius: 17px; background: rgba(255,253,247,.78); box-shadow: 0 16px 48px rgba(34,48,43,.05); }
@@ -530,7 +540,7 @@ fieldset label { display: flex; gap: 7px; align-items: flex-start; }
 .success-banner { margin: 16px 0 0; padding: 11px 13px; border: 1px solid rgba(33,51,45,.16); border-radius: 10px; background: var(--green-soft); color: var(--green-deep); font-size: 12px; }
 .empty-copy { color: var(--ink-muted); font-size: 13px; }
 @media (max-width: 1050px) { .metric-grid { grid-template-columns: repeat(2,1fr); } .report-grid { grid-template-columns: 1fr; } .configuration-step { grid-template-columns: 1fr; } .configuration-step .step-heading { grid-column: auto; } }
-@media (max-width: 760px) { fieldset { grid-template-columns: 1fr; } }
+@media (max-width: 760px) { fieldset { grid-template-columns: 1fr; } .page-heading { flex-direction: column; } .heading-actions { width: 100%; flex-wrap: wrap; } }
 @media (max-width: 620px) { .report-page { padding: 24px 16px 92px; } .metric-grid { grid-template-columns: 1fr; } .bar-chart { gap: 3px; overflow: hidden; } .bar-column small { writing-mode: vertical-rl; } }
-@media (prefers-reduced-motion: reduce) { .configuration-step > button, .layout-option { transition: none; } .configuration-step > button:hover:not(:disabled), .layout-option:hover { transform: none; } }
+@media (prefers-reduced-motion: reduce) { .configuration-step > button, .layout-option, .history-link { transition: none; } .configuration-step > button:hover:not(:disabled), .layout-option:hover, .history-link:hover { transform: none; } }
 </style>

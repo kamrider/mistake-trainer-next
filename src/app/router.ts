@@ -30,6 +30,12 @@ export function createAppRouter(history: RouterHistory = createWebHashHistory())
         component: () => import('./views/ReportView.vue'),
       },
       {
+        path: '/report/history',
+        name: 'review-history',
+        component: () => import('./views/ReviewHistoryView.vue'),
+        meta: { shellPage: 'report' },
+      },
+      {
         path: '/settings',
         name: 'settings',
         component: () => import('./views/SettingsView.vue'),
