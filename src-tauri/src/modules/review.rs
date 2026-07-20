@@ -16,8 +16,8 @@ use crate::{
 
 const DESIRED_RETENTION: f32 = 0.90;
 const MILLIS_PER_DAY: i64 = 86_400_000;
-const ALGORITHM_VERSION: &str = "fsrs-6.6.1";
-const PARAMETER_VERSION: &str = "default-6.6.1";
+pub(crate) const ALGORITHM_VERSION: &str = "fsrs-6.6.1";
+pub(crate) const PARAMETER_VERSION: &str = "default-6.6.1";
 
 #[derive(Clone, Debug)]
 pub struct ReviewQueueQuery {

@@ -126,21 +126,21 @@ struct ReviewHistoryDetailQuery {
 }
 ```
 
-- [ ] **Step 1: Write failing store tests**
+- [x] **Step 1: Write failing store tests**
 
 Cover deterministic equal-time ordering, two-page traversal without duplicates, each range/rating/subject/search filter, literal wildcard search, archived-problem visibility, cross-account/profile isolation, invalid limit/cursor/search, and available-subject ordering. Detail tests must cover full note, `reviewOrdinal`, `problemReviewCount`, current schedule fields, legacy/current version flags, current/other device booleans, and foreign/missing event rejection.
 
-- [ ] **Step 2: Run the focused test and verify it fails**
+- [x] **Step 2: Run the focused test and verify it fails**
 
 Run: `.\scripts\cargo-msvc.cmd test --manifest-path src-tauri\Cargo.toml --test review_history_store`
 
 Expected: FAIL because the module and types do not exist.
 
-- [ ] **Step 3: Implement bounded filters and opaque cursor helpers**
+- [x] **Step 3: Implement bounded filters and opaque cursor helpers**
 
 Encode only `{ occurred_at_utc_ms, event_id }` using `base64::engine::general_purpose::URL_SAFE_NO_PAD`. Decode only after checking the 512-byte bound. Validate event ID length `1..=128`, page size `1..=50`, subject `1..=40` after trim, and search at most 80 characters. Escape LIKE input using `ESCAPE '\'`.
 
-- [ ] **Step 4: Implement one deterministic list query**
+- [x] **Step 4: Implement one deterministic list query**
 
 Fetch `limit + 1` rows, then truncate and derive `next_cursor` from the final returned item. Apply cursor ordering as:
 
@@ -154,17 +154,17 @@ LIMIT ?limit_plus_one
 
 The count and available-subject queries must use the same account/profile and filter boundaries. Map times and durations to Specta-safe `f64` values.
 
-- [ ] **Step 5: Implement the scoped detail query**
+- [x] **Step 5: Implement the scoped detail query**
 
 Join the selected event to its problem and left-join current schedule state. Compute ordinal and total using the event ordering `(occurred_at_utc_ms, id)`. Compare stored versions with public crate constants from `review.rs`, but label schedule values as current. Return `NotFound` for every foreign/missing event without revealing which boundary failed.
 
-- [ ] **Step 6: Run the focused store tests**
+- [x] **Step 6: Run the focused store tests**
 
 Run: `.\scripts\cargo-msvc.cmd test --manifest-path src-tauri\Cargo.toml --test review_history_store`
 
 Expected: all pagination, isolation, audit, and validation tests PASS.
 
-- [ ] **Step 7: Create a local checkpoint**
+- [x] **Step 7: Create a local checkpoint**
 
 ```powershell
 git add src-tauri/src/modules/review_history.rs src-tauri/src/modules/mod.rs src-tauri/src/modules/review.rs src-tauri/tests/review_history_store.rs

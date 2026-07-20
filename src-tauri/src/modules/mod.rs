@@ -11,3 +11,4 @@ pub mod problems;
 pub mod profiles;
 pub mod review;
 pub mod review_focus;
+pub mod review_history;
