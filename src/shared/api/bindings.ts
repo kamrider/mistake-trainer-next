@@ -26,6 +26,8 @@ export const commands = {
 	reviewExamNavigate: (input: ReviewExamNavigateInput) => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_exam_navigate", { input }),
 	reviewExamBeginGrading: () => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_exam_begin_grading"),
 	reviewSubmit: (input: ReviewSubmitInput) => __TAURI_INVOKE<AppResult<ReviewSubmission>>("review_submit", { input }),
+	reviewFocusSelect: (input: ReviewFocusSelectInput) => __TAURI_INVOKE<AppResult<ReviewFocusState | null>>("review_focus_select", { input }),
+	reviewFocusSkip: () => __TAURI_INVOKE<AppResult<ReviewFocusState | null>>("review_focus_skip"),
 	dashboardOverview: (utcOffsetMinutes: number) => __TAURI_INVOKE<AppResult<DashboardOverview>>("dashboard_overview", { utcOffsetMinutes }),
 	reportSummary: () => __TAURI_INVOKE<AppResult<ReportSummary>>("report_summary"),
 	settingsOverview: () => __TAURI_INVOKE<AppResult<SettingsOverview>>("settings_overview"),
@@ -429,6 +431,19 @@ export type ReviewExamStartInput = {
 
 export type ReviewFocusPolicy = "off" | "session_start" | "every_10";
 
+export type ReviewFocusSelectInput = {
+	number: number,
+	elapsedMs: number,
+};
+
+export type ReviewFocusState = {
+	kind: string,
+	roundIndex: number,
+	numbers: number[],
+	nextNumber: number,
+	elapsedMs: number,
+};
+
 export type ReviewManualStartInput = {
 	problemIds: string[],
 };
@@ -457,6 +472,7 @@ export type ReviewQueueOverview = {
 	examQuestionIndex: number,
 	examCorrectCount: number,
 	examWrongCount: number,
+	focus: ReviewFocusState | null,
 	items: ReviewQueueItem[],
 };
 
@@ -469,6 +485,7 @@ export type ReviewSubmission = {
 	difficulty: number | null,
 	algorithmVersion: string,
 	parameterVersion: string,
+	focus: ReviewFocusState | null,
 };
 
 export type ReviewSubmitInput = {

@@ -1,12 +1,18 @@
-use fsrs::{ItemState, MemoryState, FSRS};
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use fsrs::{FSRS, ItemState, MemoryState};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::Serialize;
 use specta::Type;
 use std::collections::HashSet;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::domain::review::FsrsRating;
+use crate::{
+    domain::review::FsrsRating,
+    modules::review_focus::{
+        ReviewFocusError, ReviewFocusState, active_focus_for_session, focus_policy_for_profile,
+        initialize_session_focus, start_interval_focus_if_due,
+    },
+};
 
 const DESIRED_RETENTION: f32 = 0.90;
 const MILLIS_PER_DAY: i64 = 86_400_000;
@@ -70,6 +76,7 @@ pub struct ReviewQueueState {
     pub exam_question_index: i32,
     pub exam_correct_count: i32,
     pub exam_wrong_count: i32,
+    pub focus: Option<ReviewFocusState>,
     pub items: Vec<ReviewQueueEntry>,
 }
 
@@ -95,6 +102,7 @@ pub struct ReviewSubmission {
     pub difficulty: f32,
     pub algorithm_version: String,
     pub parameter_version: String,
+    pub focus: Option<ReviewFocusState>,
 }
 
 #[derive(Debug, Error)]
@@ -115,6 +123,8 @@ pub enum ReviewUseCaseError {
     InvalidExamSelection,
     #[error("exam session is missing or in the wrong phase")]
     InvalidExamState,
+    #[error("review focus operation failed")]
+    Focus(#[from] ReviewFocusError),
 }
 
 #[derive(Debug)]
@@ -211,6 +221,8 @@ fn active_queue_state(
              current_index = ?2,
              exam_question_index = ?3,
              status = CASE WHEN ?4 = 0 THEN 'completed' ELSE 'active' END,
+             focus_order_json = CASE WHEN ?4 = 0 THEN NULL ELSE focus_order_json END,
+             focus_next_number = CASE WHEN ?4 = 0 THEN 0 ELSE focus_next_number END,
              updated_at_utc_ms = ?5
          WHERE id = ?6",
         params![
@@ -222,6 +234,7 @@ fn active_queue_state(
             active.id,
         ],
     )?;
+    let focus = active_focus_for_session(transaction, &active.id)?;
 
     Ok(Some(ReviewQueueState {
         session_id: Some(active.id),
@@ -241,6 +254,7 @@ fn active_queue_state(
         exam_wrong_count: count_for_ui(
             usize::try_from(active.exam_wrong_count).unwrap_or_default(),
         ),
+        focus,
         items: entries,
     }))
 }
@@ -257,27 +271,34 @@ pub fn list_review_queue(
 
     let entries = query_new_review_entries(&transaction, &query)?;
     let total_count = count_for_ui(entries.len());
-    let session_id = if entries.is_empty() {
-        None
+    let (session_id, focus) = if entries.is_empty() {
+        (None, None)
     } else {
+        let focus_policy =
+            focus_policy_for_profile(&transaction, &query.account_id, &query.profile_id)?;
         let session_id = Uuid::now_v7().to_string();
         let problem_ids = entries
             .iter()
             .map(|entry| entry.problem_id.as_str())
             .collect::<Vec<_>>();
         transaction.execute(
-            "INSERT INTO review_sessions(id, account_id, profile_id, mode, problem_ids_json, current_index, status, created_at_utc_ms, updated_at_utc_ms)
-             VALUES(?1, ?2, ?3, ?4, ?5, 0, 'active', ?6, ?6)",
+            "INSERT INTO review_sessions(
+                 id, account_id, profile_id, mode, problem_ids_json, current_index,
+                 status, created_at_utc_ms, updated_at_utc_ms, focus_policy
+             ) VALUES(?1, ?2, ?3, ?4, ?5, 0, 'active', ?6, ?6, ?7)",
             params![
                 &session_id,
                 query.account_id,
                 query.profile_id,
                 "due",
                 serde_json::to_string(&problem_ids)?,
-                query.now_utc_ms
+                query.now_utc_ms,
+                focus_policy.as_str(),
             ],
         )?;
-        Some(session_id)
+        let focus =
+            initialize_session_focus(&transaction, &session_id, focus_policy, query.now_utc_ms)?;
+        (Some(session_id), focus)
     };
     transaction.commit()?;
     Ok(ReviewQueueState {
@@ -290,6 +311,7 @@ pub fn list_review_queue(
         exam_question_index: 0,
         exam_correct_count: 0,
         exam_wrong_count: 0,
+        focus,
         items: entries,
     })
 }
@@ -323,20 +345,25 @@ pub fn start_manual_review_queue(
          WHERE account_id = ?2 AND profile_id = ?3 AND status = 'active'",
         params![input.now_utc_ms, input.account_id, input.profile_id],
     )?;
+    let focus_policy =
+        focus_policy_for_profile(&transaction, &input.account_id, &input.profile_id)?;
     let session_id = Uuid::now_v7().to_string();
     transaction.execute(
         "INSERT INTO review_sessions(
              id, account_id, profile_id, mode, problem_ids_json, current_index,
-             status, created_at_utc_ms, updated_at_utc_ms
-         ) VALUES(?1, ?2, ?3, 'manual', ?4, 0, 'active', ?5, ?5)",
+             status, created_at_utc_ms, updated_at_utc_ms, focus_policy
+         ) VALUES(?1, ?2, ?3, 'manual', ?4, 0, 'active', ?5, ?5, ?6)",
         params![
             session_id,
             input.account_id,
             input.profile_id,
             serde_json::to_string(&input.problem_ids)?,
             input.now_utc_ms,
+            focus_policy.as_str(),
         ],
     )?;
+    let focus =
+        initialize_session_focus(&transaction, &session_id, focus_policy, input.now_utc_ms)?;
     transaction.commit()?;
 
     Ok(ReviewQueueState {
@@ -349,6 +376,7 @@ pub fn start_manual_review_queue(
         exam_question_index: 0,
         exam_correct_count: 0,
         exam_wrong_count: 0,
+        focus,
         items: entries,
     })
 }
@@ -384,9 +412,9 @@ pub fn start_exam_review_queue(
         "INSERT INTO review_sessions(
              id, account_id, profile_id, mode, problem_ids_json, current_index,
              status, created_at_utc_ms, updated_at_utc_ms, experience, exam_phase,
-             exam_question_index, exam_correct_count, exam_wrong_count
+             exam_question_index, exam_correct_count, exam_wrong_count, focus_policy
          ) VALUES(?1, ?2, ?3, 'manual', ?4, 0, 'active', ?5, ?5,
-                  'exam', 'answering', 0, 0, 0)",
+                  'exam', 'answering', 0, 0, 0, 'off')",
         params![
             session_id,
             input.account_id,
@@ -407,6 +435,7 @@ pub fn start_exam_review_queue(
         exam_question_index: 0,
         exam_correct_count: 0,
         exam_wrong_count: 0,
+        focus: None,
         items: entries,
     })
 }
@@ -580,6 +609,18 @@ pub fn submit_review(
     let rating_label = rating_label(rating);
     let exam_answer_correct = i32::from(matches!(rating, FsrsRating::Good | FsrsRating::Easy));
     let transaction = connection.transaction()?;
+    let session_id = transaction
+        .query_row(
+            "SELECT id FROM review_sessions
+             WHERE account_id = ?1 AND profile_id = ?2 AND status = 'active'
+               AND focus_order_json IS NULL
+               AND (experience != 'exam' OR exam_phase = 'grading')
+               AND json_extract(problem_ids_json, '$[' || current_index || ']') = ?3",
+            params![input.account_id, input.profile_id, input.problem_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .ok_or(ReviewUseCaseError::SessionOutOfSync)?;
     transaction.execute(
         "INSERT INTO review_events(id, account_id, profile_id, problem_id, device_id, rating, duration_ms, occurred_at_utc_ms, algorithm_version, parameter_version) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![event_id, input.account_id, input.profile_id, input.problem_id, input.device_id, rating_label, i64::from(input.duration_ms), input.occurred_at_utc_ms, ALGORITHM_VERSION, PARAMETER_VERSION],
@@ -607,16 +648,6 @@ pub fn submit_review(
         params![input.problem_id, due_at_utc_ms, f64::from(state.stability), f64::from(state.difficulty), input.occurred_at_utc_ms, ALGORITHM_VERSION, PARAMETER_VERSION, input.occurred_at_utc_ms],
     )?;
 
-    let result = ReviewSubmission {
-        event_id: event_id.clone(),
-        problem_id: input.problem_id.clone(),
-        rating: rating_label.to_owned(),
-        due_at_utc_ms: due_at_utc_ms as f64,
-        stability: state.stability,
-        difficulty: state.difficulty,
-        algorithm_version: ALGORITHM_VERSION.to_owned(),
-        parameter_version: PARAMETER_VERSION.to_owned(),
-    };
     let event_payload = serde_json::to_string(&ReviewEventPayload {
         id: &event_id,
         account_id: &input.account_id,
@@ -643,6 +674,7 @@ pub fn submit_review(
                  + CASE WHEN experience = 'exam' AND ?5 = 0 THEN 1 ELSE 0 END,
              updated_at_utc_ms = ?1
          WHERE account_id = ?2 AND profile_id = ?3 AND status = 'active'
+           AND id = ?6 AND focus_order_json IS NULL
            AND (experience != 'exam' OR exam_phase = 'grading')
            AND json_extract(problem_ids_json, '$[' || current_index || ']') = ?4",
         params![
@@ -651,11 +683,24 @@ pub fn submit_review(
             input.profile_id,
             input.problem_id,
             exam_answer_correct,
+            session_id,
         ],
     )?;
     if advanced != 1 {
         return Err(ReviewUseCaseError::SessionOutOfSync);
     }
+    let focus = start_interval_focus_if_due(&transaction, &session_id, input.occurred_at_utc_ms)?;
+    let result = ReviewSubmission {
+        event_id: event_id.clone(),
+        problem_id: input.problem_id.clone(),
+        rating: rating_label.to_owned(),
+        due_at_utc_ms: due_at_utc_ms as f64,
+        stability: state.stability,
+        difficulty: state.difficulty,
+        algorithm_version: ALGORITHM_VERSION.to_owned(),
+        parameter_version: PARAMETER_VERSION.to_owned(),
+        focus,
+    };
     transaction.commit()?;
 
     Ok(result)

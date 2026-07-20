@@ -11,6 +11,8 @@ const api = vi.hoisted(() => ({
   backupRestore: vi.fn(),
   subjectPreferencesGet: vi.fn(),
   subjectPreferencesSave: vi.fn(),
+  reviewPreferencesGet: vi.fn(),
+  reviewPreferencesSave: vi.fn(),
 }))
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => true }))
 vi.mock('../../shared/api/bindings', () => ({ commands: api }))
@@ -23,6 +25,8 @@ describe('SettingsView', () => {
       customSubjects: [],
       captureSoundEnabled: true,
     } })
+    api.reviewPreferencesGet.mockResolvedValue({ ok: true, data: { focusPolicy: 'off' } })
+    api.reviewPreferencesSave.mockResolvedValue({ ok: true, data: { focusPolicy: 'every_10' } })
   })
 
   it('configures builtin and custom subjects plus capture sound', async () => {
@@ -51,6 +55,44 @@ describe('SettingsView', () => {
       captureSoundEnabled: false,
     })
     expect(await screen.findByText('科目配置已保存')).toBeVisible()
+  })
+
+  it('configures a skippable focus rhythm for new ordinary sessions', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    render(SettingsView)
+
+    expect(await screen.findByRole('heading', { name: '训练间的专注插曲' })).toBeVisible()
+    await userEvent.click(screen.getByRole('radio', { name: /每完成 10 题/ }))
+    await userEvent.click(screen.getByRole('button', { name: '保存训练节奏' }))
+
+    expect(api.reviewPreferencesSave).toHaveBeenCalledWith({ focusPolicy: 'every_10' })
+    expect(await screen.findByText('训练节奏已保存，将从下一轮普通训练开始生效。')).toBeVisible()
+    expect(screen.getByText(/模拟考试不会插入专注环节/)).toBeVisible()
+    expect(screen.getByRole('radio', { name: /每轮开始前 · 推荐/ })).toBeInTheDocument()
+  })
+
+  it('keeps the selected focus rhythm visible when persistence fails', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    api.reviewPreferencesSave.mockResolvedValue({ ok: false, error: {
+      code: 'review_preferences_save_failed', userMessage: '训练节奏没有保存。',
+      retryable: true, diagnosticId: 'diag-focus',
+    } })
+    render(SettingsView)
+
+    const everyTen = await screen.findByRole('radio', { name: /每完成 10 题/ })
+    await userEvent.click(everyTen)
+    await userEvent.click(screen.getByRole('button', { name: '保存训练节奏' }))
+
+    expect(await screen.findByText('训练节奏没有保存。')).toBeVisible()
+    expect(everyTen).toBeChecked()
   })
 
   it('shows encrypted local state and honest cloud readiness', async () => {

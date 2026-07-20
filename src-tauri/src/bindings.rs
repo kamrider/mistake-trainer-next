@@ -29,6 +29,8 @@ pub fn builder() -> Builder<tauri::Wry> {
         commands::review::review_exam_navigate,
         commands::review::review_exam_begin_grading,
         commands::review::review_submit,
+        commands::review::review_focus_select,
+        commands::review::review_focus_skip,
         commands::insights::dashboard_overview,
         commands::insights::report_summary,
         commands::insights::settings_overview,

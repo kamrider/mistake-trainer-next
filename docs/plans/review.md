@@ -17,10 +17,13 @@ Implemented vertical slices:
   become available and each right/wrong decision updates FSRS and the persisted result.
 - The current review problem is derived by Rust from the active session rather than accepted
   as a page-provided ID. During the exam answering pass, answer assets never enter the Vue DTO.
+- Each profile can choose no focus interlude, one Schulte warm-up at session start, or a
+  Schulte break after every ten completed cards. The policy is frozen per ordinary session;
+  exams always opt out. Board progress survives restart, correct choices persist before
+  fading, stale clients resynchronize, and every round can be skipped.
 
 Still remaining from the complete review plan:
 
-- Add the optional Schulte-table focus interlude and a user setting for when it appears.
 - Add a review-history detail screen that can audit algorithm and parameter versions.
 - Complete two-device deterministic schedule tests after the sync transport is connected.
 

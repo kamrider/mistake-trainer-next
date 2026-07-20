@@ -1,4 +1,4 @@
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::State;
@@ -9,12 +9,16 @@ use crate::{
     domain::review::FsrsRating,
     infrastructure::runtime::LibraryRuntime,
     modules::{
-        problems::{get_problem_detail, ProblemDetail, ProblemDetailQuery},
+        problems::{ProblemDetail, ProblemDetailQuery, get_problem_detail},
         review::{
-            begin_exam_grading, list_review_queue, navigate_exam, start_exam_review_queue,
-            start_manual_review_queue, submit_review, BeginExamGrading, NavigateExam,
-            ReviewQueueQuery, ReviewQueueState, ReviewSubmission, StartExamReview,
-            StartManualReview, SubmitReview,
+            BeginExamGrading, NavigateExam, ReviewQueueQuery, ReviewQueueState, ReviewSubmission,
+            StartExamReview, StartManualReview, SubmitReview, begin_exam_grading,
+            list_review_queue, navigate_exam, start_exam_review_queue, start_manual_review_queue,
+            submit_review,
+        },
+        review_focus::{
+            FocusNumberSelection, ReviewFocusError, ReviewFocusState, SkipReviewFocus,
+            select_focus_number, skip_focus_round,
         },
     },
 };
@@ -39,6 +43,7 @@ pub struct ReviewQueueOverview {
     pub exam_question_index: i32,
     pub exam_correct_count: i32,
     pub exam_wrong_count: i32,
+    pub focus: Option<ReviewFocusState>,
     pub items: Vec<ReviewQueueItem>,
 }
 
@@ -66,6 +71,13 @@ pub struct ReviewExamStartInput {
 #[serde(rename_all = "camelCase")]
 pub struct ReviewExamNavigateInput {
     pub position: i32,
+}
+
+#[derive(Clone, Debug, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewFocusSelectInput {
+    pub number: i32,
+    pub elapsed_ms: u32,
 }
 
 pub fn review_queue_for(
@@ -109,7 +121,8 @@ pub fn review_current_problem_for(runtime: &LibraryRuntime) -> AppResult<Problem
                     ),
                     CASE WHEN experience = 'exam' AND exam_phase = 'answering' THEN 1 ELSE 0 END
              FROM review_sessions
-             WHERE account_id = ?1 AND profile_id = ?2 AND status = 'active'",
+             WHERE account_id = ?1 AND profile_id = ?2 AND status = 'active'
+               AND focus_order_json IS NULL",
             params![runtime.account_id(), profile.id],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?)),
         )
@@ -271,6 +284,7 @@ fn queue_overview(overview: ReviewQueueState) -> ReviewQueueOverview {
         exam_question_index: overview.exam_question_index,
         exam_correct_count: overview.exam_correct_count,
         exam_wrong_count: overview.exam_wrong_count,
+        focus: overview.focus,
         items,
     }
 }
@@ -299,6 +313,55 @@ pub fn review_submit_for(
     ) {
         Ok(submission) => AppResult::success(submission),
         Err(_) => internal_review_error("review_submit_failed"),
+    }
+}
+
+pub fn review_focus_select_for(
+    runtime: &LibraryRuntime,
+    input: ReviewFocusSelectInput,
+    now_utc_ms: i64,
+) -> AppResult<Option<ReviewFocusState>> {
+    let profile = runtime.active_profile();
+    let mut connection = match runtime.connection.lock() {
+        Ok(connection) => connection,
+        Err(_) => return internal_review_error("library_lock_poisoned"),
+    };
+    match select_focus_number(
+        &mut connection,
+        FocusNumberSelection {
+            account_id: runtime.account_id().to_owned(),
+            profile_id: profile.id,
+            number: input.number,
+            elapsed_ms: input.elapsed_ms,
+            now_utc_ms,
+        },
+    ) {
+        Ok(focus) => AppResult::success(focus),
+        Err(ReviewFocusError::StateChanged) => invalid_focus_state(),
+        Err(_) => internal_review_error("review_focus_select_failed"),
+    }
+}
+
+pub fn review_focus_skip_for(
+    runtime: &LibraryRuntime,
+    now_utc_ms: i64,
+) -> AppResult<Option<ReviewFocusState>> {
+    let profile = runtime.active_profile();
+    let mut connection = match runtime.connection.lock() {
+        Ok(connection) => connection,
+        Err(_) => return internal_review_error("library_lock_poisoned"),
+    };
+    match skip_focus_round(
+        &mut connection,
+        SkipReviewFocus {
+            account_id: runtime.account_id().to_owned(),
+            profile_id: profile.id,
+            now_utc_ms,
+        },
+    ) {
+        Ok(focus) => AppResult::success(focus),
+        Err(ReviewFocusError::StateChanged) => invalid_focus_state(),
+        Err(_) => internal_review_error("review_focus_skip_failed"),
     }
 }
 
@@ -358,6 +421,21 @@ pub fn review_submit(
     review_submit_for(&state, input, current_utc_millis())
 }
 
+#[tauri::command]
+#[specta::specta]
+pub fn review_focus_select(
+    state: State<'_, LibraryRuntime>,
+    input: ReviewFocusSelectInput,
+) -> AppResult<Option<ReviewFocusState>> {
+    review_focus_select_for(&state, input, current_utc_millis())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn review_focus_skip(state: State<'_, LibraryRuntime>) -> AppResult<Option<ReviewFocusState>> {
+    review_focus_skip_for(&state, current_utc_millis())
+}
+
 fn current_utc_millis() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -387,6 +465,15 @@ fn invalid_review_state<T>(code: &str) -> AppResult<T> {
     AppResult::failure(
         code,
         "训练进度已经变化，请重新打开训练室继续。",
+        true,
+        Uuid::now_v7().to_string(),
+    )
+}
+
+fn invalid_focus_state<T>() -> AppResult<T> {
+    AppResult::failure(
+        "review_focus_state_changed",
+        "专注进度已经变化，请重新打开训练室继续。",
         true,
         Uuid::now_v7().to_string(),
     )

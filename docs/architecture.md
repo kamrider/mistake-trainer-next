@@ -116,6 +116,19 @@ conflict. Deletes create tombstones retained for 30 days.
 - Exam grading reuses the normal FSRS transaction. The review event, schedule projection,
   sync outbox operation, session advance, and exam score counter either all commit or all
   roll back.
+- The optional Schulte focus policy is profile scoped but snapshotted into each newly
+  created ordinary session. Existing sessions retain their original policy, and exam
+  sessions explicitly persist `off` so a settings change cannot interrupt an exam.
+- Rust owns every focus-board transition. The deterministic 1–25 board, next number,
+  elapsed time, and round index are stored on the active session. Current-problem reads
+  and ratings fail closed while a board is active; a correct selection or skip commits
+  before Vue changes the visible state.
+- `session_start` inserts one warm-up before the first card. `every_10` inserts a break
+  after cards 10, 20, and so on only when another card remains. The final card can never
+  create a trailing board. A stale client selection reloads the authoritative queue.
+- The board does not visually reveal the next tile. Wrong choices remain local feedback,
+  while keyboard roving, 44 px targets, reduced-motion behavior, and a persistent skip
+  affordance keep the optional exercise accessible and non-blocking.
 
 ## Export boundary
 

@@ -9,6 +9,8 @@ const api = vi.hoisted(() => ({
   reviewQueue: vi.fn(),
   reviewCurrentProblem: vi.fn(),
   reviewSubmit: vi.fn(),
+  reviewFocusSelect: vi.fn(),
+  reviewFocusSkip: vi.fn(),
   reviewExamNavigate: vi.fn(),
   reviewExamBeginGrading: vi.fn(),
 }))
@@ -27,6 +29,7 @@ const queueOverview = {
   examQuestionIndex: 0,
   examCorrectCount: 0,
   examWrongCount: 0,
+  focus: null,
 }
 
 const problemDetail = {
@@ -55,7 +58,10 @@ describe('ReviewView', () => {
     api.reviewSubmit.mockResolvedValue({ ok: true, data: {
       eventId: 'event-1', problemId: 'problem-2', rating: 'good', dueAtUtcMs: 2,
       stability: 1, difficulty: 5, algorithmVersion: 'fsrs-6.6.1', parameterVersion: 'default-6.6.1',
+      focus: null,
     } })
+    api.reviewFocusSelect.mockResolvedValue({ ok: true, data: null })
+    api.reviewFocusSkip.mockResolvedValue({ ok: true, data: null })
   })
 
   it('uses persisted progress and submits a bounded stopped duration exactly once', async () => {
@@ -102,6 +108,110 @@ describe('ReviewView', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('评分没有保存。')
     expect(screen.getByText('2 / 2')).toBeVisible()
     expect(screen.getByRole('button', { name: '记住了' })).toBeEnabled()
+  })
+
+  it('runs a persisted focus round before reading the next problem', async () => {
+    const user = userEvent.setup()
+    api.reviewQueue.mockResolvedValue({
+      ok: true,
+      data: {
+        ...queueOverview,
+        completedCount: 10,
+        totalCount: 11,
+        focus: {
+          kind: 'break',
+          roundIndex: 0,
+          numbers: Array.from({ length: 25 }, (_, index) => index + 1),
+          nextNumber: 1,
+          elapsedMs: 600,
+        },
+      },
+    })
+    api.reviewFocusSelect.mockResolvedValue({
+      ok: true,
+      data: {
+        kind: 'break', roundIndex: 0,
+        numbers: Array.from({ length: 25 }, (_, index) => index + 1),
+        nextNumber: 2, elapsedMs: 900,
+      },
+    })
+    await renderView()
+
+    expect(await screen.findByRole('heading', { name: '让眼睛换一条路' })).toBeVisible()
+    expect(api.reviewCurrentProblem).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: '数字 2' }))
+    expect(api.reviewFocusSelect).not.toHaveBeenCalled()
+    expect(screen.getByText('请先找到 1')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '数字 1' }))
+    await waitFor(() => expect(api.reviewFocusSelect).toHaveBeenCalledOnce())
+    expect(api.reviewFocusSelect.mock.calls[0]![0]).toMatchObject({ number: 1 })
+    expect(api.reviewFocusSelect.mock.calls[0]![0].elapsedMs).toBeGreaterThanOrEqual(600)
+    expect(await screen.findByText('下一位 2')).toBeVisible()
+
+    await user.click(screen.getByRole('button', { name: '跳过，继续训练' }))
+    await waitFor(() => expect(api.reviewFocusSkip).toHaveBeenCalledOnce())
+    expect(await screen.findByText('11 / 11')).toBeVisible()
+    expect(api.reviewCurrentProblem).toHaveBeenCalledOnce()
+  })
+
+  it('shows the transactional focus break after rating without reading the next card early', async () => {
+    const user = userEvent.setup()
+    api.reviewQueue.mockResolvedValue({
+      ok: true,
+      data: {
+        ...queueOverview,
+        completedCount: 9,
+        totalCount: 11,
+        focus: null,
+        items: [
+          { problemId: 'problem-2', dueAtUtcMs: null, reviewCount: 0 },
+          { problemId: 'problem-3', dueAtUtcMs: null, reviewCount: 0 },
+        ],
+      },
+    })
+    api.reviewSubmit.mockResolvedValue({ ok: true, data: {
+      eventId: 'event-10', problemId: 'problem-2', rating: 'good', dueAtUtcMs: 2,
+      stability: 1, difficulty: 5, algorithmVersion: 'fsrs-6.6.1', parameterVersion: 'default-6.6.1',
+      focus: {
+        kind: 'break', roundIndex: 0,
+        numbers: Array.from({ length: 25 }, (_, index) => 25 - index),
+        nextNumber: 1, elapsedMs: 0,
+      },
+    } })
+    await renderView()
+
+    await user.click(await screen.findByRole('button', { name: '显示答案' }))
+    await user.click(screen.getByRole('button', { name: '记住了' }))
+
+    expect(await screen.findByRole('heading', { name: '让眼睛换一条路' })).toBeVisible()
+    expect(api.reviewCurrentProblem).toHaveBeenCalledOnce()
+  })
+
+  it('reloads authoritative focus progress after a stale selection', async () => {
+    const user = userEvent.setup()
+    const initialFocus = {
+      kind: 'break', roundIndex: 0,
+      numbers: Array.from({ length: 25 }, (_, index) => index + 1),
+      nextNumber: 1, elapsedMs: 400,
+    }
+    api.reviewQueue
+      .mockResolvedValueOnce({ ok: true, data: { ...queueOverview, focus: initialFocus } })
+      .mockResolvedValueOnce({ ok: true, data: {
+        ...queueOverview,
+        focus: { ...initialFocus, nextNumber: 2, elapsedMs: 900 },
+      } })
+    api.reviewFocusSelect.mockResolvedValue({ ok: false, error: {
+      code: 'review_focus_state_changed', userMessage: '专注进度已经变化。',
+      retryable: false, diagnosticId: 'diag-stale-focus',
+    } })
+    await renderView()
+
+    await user.click(await screen.findByRole('button', { name: '数字 1' }))
+
+    await waitFor(() => expect(api.reviewQueue).toHaveBeenCalledTimes(2))
+    expect(await screen.findByText('下一位 2')).toBeVisible()
+    expect(screen.getByRole('alert')).toHaveTextContent('已恢复到最新位置')
+    expect(api.reviewCurrentProblem).not.toHaveBeenCalled()
   })
 
   it('uses manual-deck copy through completion and never reads ids from the route', async () => {

@@ -3,9 +3,10 @@ import { isTauri } from '@tauri-apps/api/core'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ReviewRoom from '@/modules/review/components/ReviewRoom.vue'
+import SchulteFocus from '@/modules/review/components/SchulteFocus.vue'
 import { useReviewClock } from '@/modules/review/composables/useReviewClock'
 import { mapSimpleRating, type FsrsRating, type SimpleRating } from '@/modules/review/domain/rating'
-import { commands, type ProblemDetail, type ReviewQueueOverview } from '@/shared/api/bindings'
+import { commands, type ProblemDetail, type ReviewFocusState, type ReviewQueueOverview } from '@/shared/api/bindings'
 import { normalizeAppResult } from '@/shared/api/normalize-result'
 
 const route = useRoute()
@@ -20,6 +21,7 @@ const overview = ref<ReviewQueueOverview>({
   examQuestionIndex: 0,
   examCorrectCount: 0,
   examWrongCount: 0,
+  focus: null,
   items: [],
 })
 const currentIndex = ref(0)
@@ -28,6 +30,8 @@ const loading = ref(true)
 const itemLoading = ref(false)
 const submitting = ref(false)
 const transitioning = ref(false)
+const focusBusy = ref(false)
+const completedFocus = ref<ReviewFocusState>()
 const completed = ref(false)
 const successfulCount = ref(0)
 const examCorrectCount = ref(0)
@@ -89,6 +93,9 @@ function loadDevelopmentPreview() {
     examQuestionIndex: 0,
     examCorrectCount: previewMode === 'exam-complete' ? 4 : 0,
     examWrongCount: previewMode === 'exam-complete' ? 1 : 0,
+    focus: previewMode === 'focus'
+      ? { kind: 'break', roundIndex: 0, numbers: [17, 2, 21, 8, 13, 24, 5, 11, 19, 1, 9, 15, 22, 6, 18, 3, 25, 12, 7, 20, 14, 4, 23, 10, 16], nextNumber: 1, elapsedMs: 0 }
+      : null,
     items: [{ problemId: 'development-preview-problem', dueAtUtcMs: Date.now() - 1_000, reviewCount: 3 }],
   }
   currentProblem.value = {
@@ -127,7 +134,7 @@ async function loadQueue() {
   try {
     if (!isTauri()) {
       // Explicit development-only component gallery; Vite removes it from release builds.
-      if (import.meta.env.DEV && ['review', 'manual-review', 'exam-answering', 'exam-grading', 'exam-complete'].includes(String(route.query.preview)))
+      if (import.meta.env.DEV && ['review', 'manual-review', 'exam-answering', 'exam-grading', 'exam-complete', 'focus'].includes(String(route.query.preview)))
         loadDevelopmentPreview()
       return
     }
@@ -146,7 +153,7 @@ async function loadQueue() {
       overview.value.sessionId
       && overview.value.totalCount === overview.value.completedCount,
     )
-    if (overview.value.items.length > 0)
+    if (overview.value.items.length > 0 && !overview.value.focus)
       await loadCurrentProblem()
   }
   catch {
@@ -158,6 +165,7 @@ async function loadQueue() {
 }
 
 async function loadCurrentProblem() {
+  if (overview.value.focus) return
   const item = currentItem.value
   currentProblem.value = undefined
   clock.reset()
@@ -270,9 +278,12 @@ async function submitRating(rating: SimpleRating | FsrsRating) {
         examWrongCount.value += 1
     }
     currentIndex.value += 1
-    if (currentIndex.value >= queue.value.length)
+    overview.value.focus = result.data.focus
+    if (overview.value.focus)
+      completed.value = false
+    else if (currentIndex.value >= queue.value.length)
       completed.value = true
-    else
+    else if (!overview.value.focus)
       await loadCurrentProblem()
   }
   catch {
@@ -280,6 +291,64 @@ async function submitRating(rating: SimpleRating | FsrsRating) {
   }
   finally {
     submitting.value = false
+  }
+}
+
+async function selectFocusNumber(number: number, elapsedMs: number) {
+  if (!overview.value.focus || focusBusy.value) return
+  const activeFocus = overview.value.focus
+  focusBusy.value = true
+  errorMessage.value = ''
+  try {
+    const result = normalizeAppResult(await commands.reviewFocusSelect({ number, elapsedMs }))
+    if (!result.ok) {
+      if (result.error.code === 'review_focus_state_changed') {
+        const staleMessage = result.error.userMessage
+        await loadQueue()
+        if (!errorMessage.value)
+          errorMessage.value = '专注进度已更新，已恢复到最新位置。'
+        else if (overview.value.focus)
+          errorMessage.value = staleMessage
+        return
+      }
+      errorMessage.value = result.error.userMessage
+      return
+    }
+    overview.value.focus = result.data
+    if (!result.data) {
+      completedFocus.value = { ...activeFocus, nextNumber: 26, elapsedMs }
+      const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+      await new Promise(resolve => window.setTimeout(resolve, reduceMotion ? 0 : 420))
+      completedFocus.value = undefined
+      await loadCurrentProblem()
+    }
+  }
+  catch {
+    errorMessage.value = '这一步专注进度没有保存，请保持页面打开并重试。'
+  }
+  finally {
+    focusBusy.value = false
+  }
+}
+
+async function skipFocus() {
+  if (!overview.value.focus || focusBusy.value) return
+  focusBusy.value = true
+  errorMessage.value = ''
+  try {
+    const result = normalizeAppResult(await commands.reviewFocusSkip())
+    if (!result.ok) {
+      errorMessage.value = result.error.userMessage
+      return
+    }
+    overview.value.focus = result.data
+    if (!result.data) await loadCurrentProblem()
+  }
+  catch {
+    errorMessage.value = '暂时无法跳过这一轮，请保持页面打开并重试。'
+  }
+  finally {
+    focusBusy.value = false
   }
 }
 
@@ -328,6 +397,25 @@ onMounted(loadQueue)
       </button>
     </div>
   </main>
+
+  <template v-else-if="overview.focus || completedFocus">
+    <p
+      v-if="errorMessage"
+      class="floating-error"
+      role="alert"
+    >
+      {{ errorMessage }}
+    </p>
+    <SchulteFocus
+      :focus="overview.focus ?? completedFocus!"
+      :busy="focusBusy"
+      :completed="Boolean(completedFocus)"
+      :resumed="overview.resumed"
+      @select="selectFocusNumber"
+      @skip="skipFocus"
+      @exit="router.push({ name: 'dashboard' })"
+    />
+  </template>
 
   <main
     v-else-if="errorMessage && !currentProblem"

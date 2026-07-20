@@ -2,15 +2,20 @@ use mistake_trainer_next_lib::{
     domain::review::SimpleRating,
     infrastructure::database::{open_encrypted_database, run_migrations},
     modules::{
+        preferences::{ReviewFocusPolicy, SaveReviewPreferences, save_review_preferences},
         problems::{
-            change_problem_status, create_problem, AssetRole, CaptureAsset, ChangeProblemStatus,
-            CreateProblem, ProblemStatusFilter,
+            AssetRole, CaptureAsset, ChangeProblemStatus, CreateProblem, ProblemStatusFilter,
+            change_problem_status, create_problem,
         },
-        profiles::{create_profile, CreateProfile},
+        profiles::{CreateProfile, create_profile},
         review::{
-            begin_exam_grading, list_review_queue, navigate_exam, start_exam_review_queue,
-            start_manual_review_queue, submit_review, BeginExamGrading, NavigateExam,
-            ReviewQueueQuery, ReviewUseCaseError, StartExamReview, StartManualReview, SubmitReview,
+            BeginExamGrading, NavigateExam, ReviewQueueQuery, ReviewUseCaseError, StartExamReview,
+            StartManualReview, SubmitReview, begin_exam_grading, list_review_queue, navigate_exam,
+            start_exam_review_queue, start_manual_review_queue, submit_review,
+        },
+        review_focus::{
+            FocusNumberSelection, ReviewFocusError, SkipReviewFocus, select_focus_number,
+            skip_focus_round,
         },
     },
 };
@@ -915,4 +920,370 @@ fn invalid_manual_decks_leave_the_existing_session_unchanged() {
             .unwrap();
         assert_eq!(after, before);
     }
+}
+
+#[test]
+fn session_start_focus_board_is_stable_restart_safe_and_fail_closed() {
+    let (_directory, mut connection, profile_id, problem_id) = create_fixture();
+    save_review_preferences(
+        &connection,
+        "account-1",
+        &profile_id,
+        SaveReviewPreferences {
+            focus_policy: ReviewFocusPolicy::SessionStart,
+        },
+        300,
+    )
+    .unwrap();
+    let now = 1_700_300_000_000_i64;
+
+    let started = list_review_queue(
+        &mut connection,
+        ReviewQueueQuery {
+            account_id: "account-1".to_owned(),
+            profile_id: profile_id.clone(),
+            now_utc_ms: now,
+        },
+    )
+    .expect("start focus-enabled session");
+    let focus = started.focus.expect("session start focus");
+    assert_eq!(focus.kind, "warmup");
+    assert_eq!(focus.round_index, 0);
+    assert_eq!(focus.next_number, 1);
+    assert_eq!(focus.elapsed_ms, 0);
+    let mut sorted = focus.numbers.clone();
+    sorted.sort_unstable();
+    assert_eq!(sorted, (1..=25).collect::<Vec<_>>());
+
+    let resumed = list_review_queue(
+        &mut connection,
+        ReviewQueueQuery {
+            account_id: "account-1".to_owned(),
+            profile_id: profile_id.clone(),
+            now_utc_ms: now + 1,
+        },
+    )
+    .expect("resume same focus board");
+    assert_eq!(resumed.focus.as_ref().unwrap().numbers, focus.numbers);
+    assert_eq!(resumed.focus.as_ref().unwrap().next_number, 1);
+
+    let before_wrong: (String, i64, i64) = connection
+        .query_row(
+            "SELECT focus_order_json, focus_next_number, focus_elapsed_ms
+             FROM review_sessions WHERE status = 'active'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert!(matches!(
+        select_focus_number(
+            &mut connection,
+            FocusNumberSelection {
+                account_id: "account-1".to_owned(),
+                profile_id: profile_id.clone(),
+                number: 2,
+                elapsed_ms: 50,
+                now_utc_ms: now + 2,
+            }
+        ),
+        Err(ReviewFocusError::StateChanged)
+    ));
+    let after_wrong: (String, i64, i64) = connection
+        .query_row(
+            "SELECT focus_order_json, focus_next_number, focus_elapsed_ms
+             FROM review_sessions WHERE status = 'active'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(after_wrong, before_wrong);
+
+    let progressed = select_focus_number(
+        &mut connection,
+        FocusNumberSelection {
+            account_id: "account-1".to_owned(),
+            profile_id: profile_id.clone(),
+            number: 1,
+            elapsed_ms: 1_234,
+            now_utc_ms: now + 3,
+        },
+    )
+    .expect("persist the expected number")
+    .expect("focus remains active");
+    assert_eq!(progressed.next_number, 2);
+    assert_eq!(progressed.elapsed_ms, 1_234);
+
+    let blocked = submit_review(
+        &mut connection,
+        SubmitReview {
+            account_id: "account-1".to_owned(),
+            profile_id: profile_id.clone(),
+            problem_id,
+            device_id: "device-1".to_owned(),
+            rating: SimpleRating::Remembered.into_fsrs(),
+            duration_ms: 100,
+            occurred_at_utc_ms: now + 4,
+        },
+    );
+    assert!(matches!(blocked, Err(ReviewUseCaseError::SessionOutOfSync)));
+    assert_eq!(
+        connection
+            .query_row("SELECT count(*) FROM review_events", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+
+    let skipped = skip_focus_round(
+        &mut connection,
+        SkipReviewFocus {
+            account_id: "account-1".to_owned(),
+            profile_id: profile_id.clone(),
+            now_utc_ms: now + 5,
+        },
+    )
+    .expect("skip focus round");
+    assert!(skipped.is_none());
+    let persisted: (i64, Option<String>, i64) = connection
+        .query_row(
+            "SELECT focus_round, focus_order_json, focus_next_number
+             FROM review_sessions WHERE status = 'active'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(persisted, (1, None, 0));
+}
+
+#[test]
+fn focus_completion_clamps_elapsed_and_rejects_foreign_profile() {
+    let (_directory, mut connection, profile_id, _problem_id) = create_fixture();
+    save_review_preferences(
+        &connection,
+        "account-1",
+        &profile_id,
+        SaveReviewPreferences {
+            focus_policy: ReviewFocusPolicy::SessionStart,
+        },
+        350,
+    )
+    .unwrap();
+    let now = 1_700_350_000_000_i64;
+    list_review_queue(
+        &mut connection,
+        ReviewQueueQuery {
+            account_id: "account-1".to_owned(),
+            profile_id: profile_id.clone(),
+            now_utc_ms: now,
+        },
+    )
+    .expect("start focus-enabled session");
+
+    let foreign = select_focus_number(
+        &mut connection,
+        FocusNumberSelection {
+            account_id: "account-1".to_owned(),
+            profile_id: "foreign-profile".to_owned(),
+            number: 1,
+            elapsed_ms: 10,
+            now_utc_ms: now + 1,
+        },
+    );
+    assert!(matches!(foreign, Err(ReviewFocusError::StateChanged)));
+
+    for number in 1..=25 {
+        let result = select_focus_number(
+            &mut connection,
+            FocusNumberSelection {
+                account_id: "account-1".to_owned(),
+                profile_id: profile_id.clone(),
+                number,
+                elapsed_ms: u32::MAX,
+                now_utc_ms: now + i64::from(number) + 1,
+            },
+        )
+        .expect("persist focus number");
+        if number < 25 {
+            let state = result.expect("round remains active");
+            assert_eq!(state.next_number, number + 1);
+            assert_eq!(state.elapsed_ms, 3_600_000);
+        } else {
+            assert!(result.is_none());
+        }
+    }
+
+    let persisted: (i64, Option<String>, i64, i64) = connection
+        .query_row(
+            "SELECT focus_round, focus_order_json, focus_next_number, focus_elapsed_ms
+             FROM review_sessions WHERE status = 'active'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(persisted, (1, None, 0, 3_600_000));
+}
+
+#[test]
+fn every_ten_focus_is_created_transactionally_and_never_trails_completion() {
+    let (directory, mut connection, profile_id, first_problem_id) = create_fixture();
+    let mut problem_ids = vec![first_problem_id];
+    for index in 1..11 {
+        let problem = create_problem(
+            &mut connection,
+            &directory.path().join("assets"),
+            &[47_u8; 32],
+            CreateProblem {
+                account_id: "account-1".to_owned(),
+                profile_id: profile_id.clone(),
+                subject: format!("科目{index}"),
+                note: String::new(),
+                assets: vec![CaptureAsset {
+                    role: AssetRole::Question,
+                    media_type: "image/png".to_owned(),
+                    bytes: format!("focus-question-{index}").into_bytes(),
+                }],
+                now_utc_ms: 200 + index,
+            },
+        )
+        .unwrap();
+        problem_ids.push(problem.id);
+    }
+    save_review_preferences(
+        &connection,
+        "account-1",
+        &profile_id,
+        SaveReviewPreferences {
+            focus_policy: ReviewFocusPolicy::EveryTen,
+        },
+        400,
+    )
+    .unwrap();
+    let now = 1_700_400_000_000_i64;
+    let started = start_manual_review_queue(
+        &mut connection,
+        StartManualReview {
+            account_id: "account-1".to_owned(),
+            profile_id: profile_id.clone(),
+            problem_ids: problem_ids.clone(),
+            now_utc_ms: now,
+        },
+    )
+    .unwrap();
+    assert!(started.focus.is_none());
+
+    for (index, problem_id) in problem_ids.iter().take(10).enumerate() {
+        let result = submit_review(
+            &mut connection,
+            SubmitReview {
+                account_id: "account-1".to_owned(),
+                profile_id: profile_id.clone(),
+                problem_id: problem_id.clone(),
+                device_id: "device-1".to_owned(),
+                rating: SimpleRating::Remembered.into_fsrs(),
+                duration_ms: 100,
+                occurred_at_utc_ms: now + index as i64 + 1,
+            },
+        )
+        .unwrap();
+        if index < 9 {
+            assert!(result.focus.is_none());
+        } else {
+            let focus = result.focus.expect("focus follows card ten");
+            assert_eq!(focus.kind, "break");
+            assert_eq!(focus.next_number, 1);
+        }
+    }
+    let session: (i64, String, i64) = connection
+        .query_row(
+            "SELECT current_index, status, focus_round FROM review_sessions WHERE status='active'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(session, (10, "active".to_owned(), 0));
+
+    let blocked = submit_review(
+        &mut connection,
+        SubmitReview {
+            account_id: "account-1".to_owned(),
+            profile_id: profile_id.clone(),
+            problem_id: problem_ids[10].clone(),
+            device_id: "device-1".to_owned(),
+            rating: SimpleRating::Remembered.into_fsrs(),
+            duration_ms: 100,
+            occurred_at_utc_ms: now + 20,
+        },
+    );
+    assert!(matches!(blocked, Err(ReviewUseCaseError::SessionOutOfSync)));
+
+    skip_focus_round(
+        &mut connection,
+        SkipReviewFocus {
+            account_id: "account-1".to_owned(),
+            profile_id: profile_id.clone(),
+            now_utc_ms: now + 21,
+        },
+    )
+    .unwrap();
+    let completed = submit_review(
+        &mut connection,
+        SubmitReview {
+            account_id: "account-1".to_owned(),
+            profile_id: profile_id.clone(),
+            problem_id: problem_ids[10].clone(),
+            device_id: "device-1".to_owned(),
+            rating: SimpleRating::Remembered.into_fsrs(),
+            duration_ms: 100,
+            occurred_at_utc_ms: now + 22,
+        },
+    )
+    .unwrap();
+    assert!(
+        completed.focus.is_none(),
+        "a completed session has no trailing focus round"
+    );
+    let completed_row: (String, Option<String>) = connection
+        .query_row(
+            "SELECT status, focus_order_json FROM review_sessions ORDER BY created_at_utc_ms DESC LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(completed_row, ("completed".to_owned(), None));
+}
+
+#[test]
+fn exam_sessions_explicitly_ignore_focus_preferences() {
+    let (_directory, mut connection, profile_id, problem_id) = create_fixture();
+    save_review_preferences(
+        &connection,
+        "account-1",
+        &profile_id,
+        SaveReviewPreferences {
+            focus_policy: ReviewFocusPolicy::SessionStart,
+        },
+        500,
+    )
+    .unwrap();
+
+    let exam = start_exam_review_queue(
+        &mut connection,
+        StartExamReview {
+            account_id: "account-1".to_owned(),
+            profile_id,
+            problem_ids: vec![problem_id],
+            now_utc_ms: 1_700_500_000_000,
+        },
+    )
+    .unwrap();
+
+    assert!(exam.focus.is_none());
+    let policy: String = connection
+        .query_row(
+            "SELECT focus_policy FROM review_sessions WHERE status='active'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(policy, "off");
 }
