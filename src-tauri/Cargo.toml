@@ -33,6 +33,7 @@ sha2 = "0.10"
 tauri = { version = "2.11", features = [] }
 tauri-specta = { version = "=2.0.0-rc.25", features = ["typescript"] }
 thiserror = "2"
+time = { version = "=0.3.53", default-features = false, features = ["parsing"] }
 tokio = { version = "=1.52.3", features = ["fs", "io-util", "net", "rt-multi-thread", "sync", "time"] }
 uuid = { version = "1", features = ["v7", "serde"] }
 

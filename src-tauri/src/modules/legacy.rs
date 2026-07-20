@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use specta::Type;
 use thiserror::Error;
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 const MAX_MEMBERS: usize = 512;
 const MAX_DIRECTORY_ENTRIES: usize = 2_048;
@@ -18,6 +19,68 @@ const MAX_ISSUES: usize = 10_000;
 const MAX_ASSET_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_TOTAL_ASSET_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const MAX_LABEL_CHARS: usize = 160;
+const MAX_TAGS: usize = 32;
+const MAX_TAG_CHARS: usize = 40;
+const MAX_NOTE_CHARS: usize = 20_000;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LegacyRating {
+    Good,
+    Again,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LegacyReviewPlan {
+    pub occurred_at_utc_ms: i64,
+    pub rating: LegacyRating,
+    pub duration_ms: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LegacyAssetPlan {
+    pub source_record_id: String,
+    pub source_path: PathBuf,
+    pub media_type: String,
+    pub plaintext_sha256: String,
+    pub byte_length: u64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LegacyProblemPlan {
+    pub source_problem_key: String,
+    pub subject: String,
+    pub tags: Vec<String>,
+    pub note: String,
+    pub time_limit_seconds: Option<i32>,
+    pub question_assets: Vec<LegacyAssetPlan>,
+    pub answer_assets: Vec<LegacyAssetPlan>,
+    pub reviews: Vec<LegacyReviewPlan>,
+    pub due_at_utc_ms: Option<i64>,
+    pub stability_days: f64,
+    pub difficulty: f64,
+    pub frozen: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LegacyMemberPlan {
+    pub source_member_key: String,
+    pub name: String,
+    pub problems: Vec<LegacyProblemPlan>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LegacyImportPlan {
+    pub source_root: PathBuf,
+    pub source_fingerprint: String,
+    pub report: LegacyScanReport,
+    pub members: Vec<LegacyMemberPlan>,
+}
+
+impl LegacyImportPlan {
+    pub fn public_report(&self) -> LegacyScanReport {
+        self.report.clone()
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum LegacyScanError {
@@ -49,7 +112,7 @@ pub struct LegacyScanReport {
     pub issues: Vec<LegacyIssue>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 struct LegacyStore {
     #[allow(dead_code)]
     version: Option<String>,
@@ -57,17 +120,412 @@ struct LegacyStore {
     files: BTreeMap<String, LegacyFile>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LegacyFile {
     id: Option<String>,
     relative_path: Option<String>,
     hash: Option<String>,
     pair_id: Option<String>,
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    proficiency: Option<f64>,
+    training_interval: Option<f64>,
+    next_training_date: Option<String>,
+    #[serde(default)]
+    subject: String,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    notes: String,
+    answer_time_limit: Option<i64>,
     #[serde(default)]
     training_records: Vec<serde_json::Value>,
     #[serde(default)]
     is_frozen: bool,
+}
+
+pub fn build_legacy_import_plan(root: &Path) -> Result<LegacyImportPlan, LegacyScanError> {
+    if !root.is_dir() {
+        return Err(LegacyScanError::InvalidRoot);
+    }
+    let canonical_root = root.canonicalize()?;
+    if !canonical_root.is_dir() {
+        return Err(LegacyScanError::InvalidRoot);
+    }
+
+    let mut report = scan_legacy_storage(&canonical_root)?;
+    let sources = discover_member_sources(&canonical_root, &mut report)?;
+    let mut members = Vec::with_capacity(sources.len());
+
+    for source in sources {
+        if let Some(member) = build_member_plan(&source, &canonical_root, &mut report) {
+            members.push(member);
+        }
+    }
+
+    Ok(LegacyImportPlan {
+        source_fingerprint: legacy_tree_fingerprint(&canonical_root)?,
+        source_root: canonical_root,
+        report,
+        members,
+    })
+}
+
+pub fn legacy_tree_fingerprint(root: &Path) -> Result<String, LegacyScanError> {
+    if !root.is_dir() {
+        return Err(LegacyScanError::InvalidRoot);
+    }
+    let canonical_root = root.canonicalize()?;
+    if !canonical_root.is_dir() {
+        return Err(LegacyScanError::InvalidRoot);
+    }
+
+    let mut files = Vec::new();
+    collect_fingerprint_files(&canonical_root, &canonical_root, &mut files)?;
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    if files.len() > MAX_RECORDS.saturating_add(MAX_DIRECTORY_ENTRIES) {
+        return Err(LegacyScanError::Io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "legacy tree contains too many files",
+        )));
+    }
+
+    let mut digest = Sha256::new();
+    let mut total_bytes = 0_u64;
+    for (relative, path) in files {
+        let metadata = path.metadata()?;
+        total_bytes = total_bytes.checked_add(metadata.len()).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "legacy tree is too large")
+        })?;
+        if total_bytes > MAX_TOTAL_ASSET_BYTES.saturating_add(MAX_METADATA_BYTES) {
+            return Err(LegacyScanError::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "legacy tree is too large",
+            )));
+        }
+        digest.update(relative.as_bytes());
+        digest.update([0]);
+        digest.update(metadata.len().to_le_bytes());
+        let mut file = fs::File::open(path)?;
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let read = file.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            digest.update(&buffer[..read]);
+        }
+        digest.update([0xff]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+fn collect_fingerprint_files(
+    root: &Path,
+    directory: &Path,
+    files: &mut Vec<(String, PathBuf)>,
+) -> Result<(), LegacyScanError> {
+    let mut entries = fs::read_dir(directory)?.collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by_key(fs::DirEntry::file_name);
+    for entry in entries {
+        let path = entry.path();
+        let canonical = path.canonicalize()?;
+        if !canonical.starts_with(root) {
+            return Err(LegacyScanError::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "legacy path resolves outside the selected directory",
+            )));
+        }
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            return Err(LegacyScanError::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "legacy tree contains a symbolic link",
+            )));
+        }
+        if canonical.is_dir() {
+            collect_fingerprint_files(root, &canonical, files)?;
+        } else if canonical.is_file() {
+            let relative = canonical
+                .strip_prefix(root)
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid legacy path"))?
+                .to_string_lossy()
+                .replace('\\', "/");
+            files.push((relative, canonical));
+        }
+    }
+    Ok(())
+}
+
+fn build_member_plan(
+    source: &MemberSource,
+    selected_root: &Path,
+    report: &mut LegacyScanReport,
+) -> Option<LegacyMemberPlan> {
+    let metadata_path = source.metadata_path.canonicalize().ok()?;
+    if !metadata_path.starts_with(selected_root) || !metadata_path.starts_with(&source.member_root)
+    {
+        return None;
+    }
+    let metadata = read_bounded(&metadata_path, MAX_METADATA_BYTES).ok()?;
+    let store: LegacyStore = serde_json::from_slice(&metadata).ok()?;
+    let files_root = source.files_root.canonicalize().ok()?;
+    if !files_root.starts_with(selected_root) || !files_root.starts_with(&source.member_root) {
+        return None;
+    }
+
+    let mut groups: BTreeMap<String, Vec<(String, LegacyFile)>> = BTreeMap::new();
+    for (map_id, record) in store.files.into_iter().take(MAX_RECORDS) {
+        let record_id = safe_label(record.id.as_deref().unwrap_or(&map_id));
+        let is_answer = record.kind.as_deref() == Some("answer");
+        match (record.pair_id.as_deref(), is_answer) {
+            (Some(pair_id), _) if !pair_id.trim().is_empty() => groups
+                .entry(safe_label(pair_id))
+                .or_default()
+                .push((record_id, record)),
+            (None, false) | (Some(""), false) => {
+                groups.insert(record_id.clone(), vec![(record_id, record)]);
+            }
+            _ => push_source_issue(
+                report,
+                "orphan_answer",
+                source,
+                Some(record_id),
+                "answer image is not paired with a question",
+            ),
+        }
+    }
+
+    let mut problems = Vec::new();
+    for (group_key, mut records) in groups {
+        records.sort_by(|left, right| left.0.cmp(&right.0));
+        let question_indices = records
+            .iter()
+            .enumerate()
+            .filter_map(|(index, (_, record))| {
+                (record.kind.as_deref() != Some("answer")).then_some(index)
+            })
+            .collect::<Vec<_>>();
+        if question_indices.is_empty() {
+            for (record_id, _) in records {
+                push_source_issue(
+                    report,
+                    "orphan_answer",
+                    source,
+                    Some(record_id),
+                    "answer image has no question in its pair",
+                );
+            }
+            continue;
+        }
+
+        let metadata_record = &records[question_indices[0]].1;
+        let mut question_assets = Vec::new();
+        let mut answer_assets = Vec::new();
+        for (record_id, record) in &records {
+            let Some(asset) = build_asset_plan(source, &files_root, record_id, record, report)
+            else {
+                continue;
+            };
+            if record.kind.as_deref() == Some("answer") {
+                answer_assets.push(asset);
+            } else {
+                question_assets.push(asset);
+            }
+        }
+        if question_assets.is_empty() {
+            push_source_issue(
+                report,
+                "missing_question_asset",
+                source,
+                Some(group_key),
+                "problem has no readable question image",
+            );
+            continue;
+        }
+
+        let mut reviews = Vec::new();
+        for index in question_indices {
+            let (record_id, record) = &records[index];
+            for value in &record.training_records {
+                if let Some(review) = parse_review(value, source, record_id, report) {
+                    reviews.push(review);
+                }
+            }
+        }
+        reviews.sort_by_key(|review| review.occurred_at_utc_ms);
+
+        let due_at_utc_ms = metadata_record
+            .next_training_date
+            .as_deref()
+            .and_then(|value| {
+                parse_utc_ms(value).or_else(|| {
+                    push_source_issue(
+                        report,
+                        "invalid_due_date",
+                        source,
+                        Some(group_key.clone()),
+                        "next training date is not valid RFC 3339",
+                    );
+                    None
+                })
+            });
+        let stability_days = finite_or(metadata_record.training_interval, 1.0).clamp(0.1, 36_500.0);
+        let proficiency = finite_or(metadata_record.proficiency, 0.0).clamp(0.0, 100.0);
+        let difficulty = (10.0 - proficiency * 0.09).clamp(1.0, 10.0);
+
+        problems.push(LegacyProblemPlan {
+            source_problem_key: group_key,
+            subject: normalized_subject(&metadata_record.subject),
+            tags: normalized_tags(&metadata_record.tags),
+            note: take_chars(metadata_record.notes.trim(), MAX_NOTE_CHARS),
+            time_limit_seconds: metadata_record
+                .answer_time_limit
+                .filter(|seconds| (1..=86_400).contains(seconds))
+                .and_then(|seconds| i32::try_from(seconds).ok()),
+            question_assets,
+            answer_assets,
+            reviews,
+            due_at_utc_ms,
+            stability_days,
+            difficulty,
+            frozen: records.iter().any(|(_, record)| record.is_frozen),
+        });
+    }
+
+    Some(LegacyMemberPlan {
+        source_member_key: source.name.clone(),
+        name: source.name.clone(),
+        problems,
+    })
+}
+
+fn build_asset_plan(
+    source: &MemberSource,
+    files_root: &Path,
+    record_id: &str,
+    record: &LegacyFile,
+    report: &mut LegacyScanReport,
+) -> Option<LegacyAssetPlan> {
+    let relative = record.relative_path.as_deref().map(Path::new)?;
+    if !is_safe_relative_path(relative) {
+        return None;
+    }
+    let source_path = files_root.join(relative).canonicalize().ok()?;
+    if !source_path.starts_with(files_root) || !source_path.is_file() {
+        return None;
+    }
+    let media_type = match source_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("png") => "image/png",
+        Some("webp") => "image/webp",
+        _ => {
+            push_source_issue(
+                report,
+                "unsupported_asset",
+                source,
+                Some(record_id.to_owned()),
+                "image format is not supported by the new app",
+            );
+            return None;
+        }
+    };
+    match sha256_file(&source_path, MAX_ASSET_BYTES) {
+        Ok((plaintext_sha256, byte_length)) => Some(LegacyAssetPlan {
+            source_record_id: record_id.to_owned(),
+            source_path,
+            media_type: media_type.to_owned(),
+            plaintext_sha256,
+            byte_length,
+        }),
+        Err(_) => None,
+    }
+}
+
+fn parse_review(
+    value: &serde_json::Value,
+    source: &MemberSource,
+    record_id: &str,
+    report: &mut LegacyScanReport,
+) -> Option<LegacyReviewPlan> {
+    let date = value.get("date").and_then(serde_json::Value::as_str)?;
+    let Some(occurred_at_utc_ms) = parse_utc_ms(date) else {
+        push_source_issue(
+            report,
+            "invalid_training_date",
+            source,
+            Some(record_id.to_owned()),
+            "training date is not valid RFC 3339",
+        );
+        return None;
+    };
+    let rating = match value.get("result").and_then(serde_json::Value::as_str) {
+        Some("success") => LegacyRating::Good,
+        Some("fail") => LegacyRating::Again,
+        _ => {
+            push_source_issue(
+                report,
+                "invalid_training_result",
+                source,
+                Some(record_id.to_owned()),
+                "training result is neither success nor fail",
+            );
+            return None;
+        }
+    };
+    let duration_ms = value
+        .get("answerTime")
+        .and_then(serde_json::Value::as_f64)
+        .filter(|duration| duration.is_finite() && *duration >= 0.0)
+        .map(|duration| duration.min(i64::MAX as f64) as i64)
+        .unwrap_or(0);
+    Some(LegacyReviewPlan {
+        occurred_at_utc_ms,
+        rating,
+        duration_ms,
+    })
+}
+
+fn parse_utc_ms(value: &str) -> Option<i64> {
+    let parsed = OffsetDateTime::parse(value, &Rfc3339).ok()?;
+    i64::try_from(parsed.unix_timestamp_nanos() / 1_000_000).ok()
+}
+
+fn finite_or(value: Option<f64>, fallback: f64) -> f64 {
+    value.filter(|value| value.is_finite()).unwrap_or(fallback)
+}
+
+fn normalized_subject(value: &str) -> String {
+    let value = take_chars(value.trim(), MAX_LABEL_CHARS);
+    if value.is_empty() {
+        "未分类".to_owned()
+    } else {
+        value
+    }
+}
+
+fn normalized_tags(values: &[String]) -> Vec<String> {
+    let mut tags = Vec::new();
+    for value in values {
+        let tag = take_chars(value.trim(), MAX_TAG_CHARS);
+        if !tag.is_empty() && !tags.contains(&tag) {
+            tags.push(tag);
+        }
+        if tags.len() == MAX_TAGS {
+            break;
+        }
+    }
+    tags
+}
+
+fn take_chars(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
 }
 
 pub fn scan_legacy_storage(root: &Path) -> Result<LegacyScanReport, LegacyScanError> {
@@ -280,12 +738,22 @@ fn scan_member(
     if store.files.len() > remaining_records {
         mark_truncated(report, "元数据记录数量超过安全扫描上限，报告已截断");
     }
-    let record_ids = store
-        .files
-        .keys()
-        .take(records_to_scan)
-        .cloned()
-        .collect::<std::collections::HashSet<_>>();
+    let mut pair_roles: HashMap<String, (bool, bool)> = HashMap::new();
+    for record in store.files.values().take(records_to_scan) {
+        let Some(pair_id) = record
+            .pair_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            continue;
+        };
+        let roles = pair_roles.entry(pair_id.to_owned()).or_default();
+        if record.kind.as_deref() == Some("answer") {
+            roles.1 = true;
+        } else {
+            roles.0 = true;
+        }
+    }
 
     let canonical_files_root = if source.files_root.exists() {
         match source.files_root.canonicalize() {
@@ -320,7 +788,7 @@ fn scan_member(
             .saturating_add(i32::from(record.is_frozen));
 
         if let Some(pair_id) = record.pair_id.as_deref()
-            && !record_ids.contains(pair_id)
+            && !matches!(pair_roles.get(pair_id), Some((true, true)))
         {
             push_source_issue(
                 report,
