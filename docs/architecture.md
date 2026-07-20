@@ -201,6 +201,35 @@ conflict. Deletes create tombstones retained for 30 days.
   rejects SQLite journal/WAL sidecars and checks a private temporary copy of `library.db`,
   so SQL reads are bound to the same bytes whose ciphertext hash was accepted.
 
+## Legacy migration boundary
+
+- The native folder picker is the only source of a legacy path. Rust keeps that path in a
+  single in-memory candidate behind an opaque UUIDv7 token; a new scan replaces the old
+  candidate, and every candidate expires after 30 minutes. Vue receives counts, bounded
+  issue descriptions, and opaque IDs only.
+- Candidate construction rejects truncated input, escaping paths, symbolic links, Windows
+  junctions/reparse points, oversized metadata, oversized images, and trees above the
+  documented limits. Import reparses the source, compares a complete SHA-256 tree
+  fingerprint, then compares the fingerprint again immediately before commit.
+- Records sharing a legacy `pairId` form one ordered problem with every mistake image as a
+  question asset and every answer image as an answer asset. A question without an answer is
+  retained as an incomplete question-only problem; an orphan answer is reported and skipped.
+- Legacy `success`/`fail` records become append-only `good`/`again` events under
+  `legacy-proficiency-v1` and `legacy-import-v1`. `nextTrainingDate` seeds the first due time;
+  frozen questions become members of a per-profile `旧版冻结批次` export snapshot.
+- New image plaintext is decoded, hashed, AES-GCM encrypted into a private staging area, and
+  moved to its final shard only inside the compensated import transaction. Existing
+  account-owned plaintext hashes are reused. Any parsing, encryption, file, fingerprint, or
+  SQL failure removes new blobs and leaves both databases unchanged.
+- The v10 ownership ledger distinguishes entities created by an import from reused assets.
+  Rollback deletes only unchanged import-owned entities. A problem changed or reviewed after
+  import is preserved with its coherent imported/new review history; referenced assets and
+  profiles are preserved with it. Every actual deletion writes a 30-day tombstone and an
+  idempotent delete outbox operation so an already-synced entity cannot reappear remotely.
+- Import and rollback hold the profile-transition lock before the database lock. Public error
+  messages are fixed and diagnostic-ID based; source paths, SQL text, encryption keys, account
+  identity, and image filenames never enter page state or serialized errors.
+
 ## Performance budgets
 
 - Initial JavaScript: at most 300 KB gzip.

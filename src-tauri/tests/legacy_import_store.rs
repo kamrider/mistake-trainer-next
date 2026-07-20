@@ -209,12 +209,106 @@ fn import_is_atomic_encrypted_deduplicated_auditable_and_reversible() {
         fixture
             .connection
             .query_row(
+                "SELECT COUNT(*) FROM sync_operations WHERE operation = 'delete'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        7,
+        "every removed cloud-visible entity receives an idempotent delete"
+    );
+    assert_eq!(
+        count(&fixture.connection, "tombstones"),
+        7,
+        "rollback deletions remain protected from stale remote upserts for 30 days"
+    );
+    assert_eq!(
+        fixture
+            .connection
+            .query_row(
                 "SELECT status FROM legacy_imports WHERE id = ?1",
                 [&receipt.import_id],
                 |row| row.get::<_, String>(0),
             )
             .unwrap(),
         "rolled_back"
+    );
+}
+
+#[test]
+fn rollback_preserves_a_changed_problem_with_its_imported_and_new_review_history() {
+    let mut fixture = fixture();
+    let receipt = import_legacy_plan(
+        &mut fixture.connection,
+        &fixture.blob_root,
+        &KEY,
+        ACCOUNT,
+        "candidate-preserve",
+        build_legacy_import_plan(fixture.source.path()).unwrap(),
+        1_800_000_000_000,
+        |_| {},
+    )
+    .unwrap();
+    let (problem_id, profile_id): (String, String) = fixture
+        .connection
+        .query_row(
+            "SELECT id, profile_id FROM problems WHERE subject = '数学'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    fixture
+        .connection
+        .execute(
+            "UPDATE problems SET note = '迁移后补充', revision = 2 WHERE id = ?1",
+            [&problem_id],
+        )
+        .unwrap();
+    fixture
+        .connection
+        .execute(
+            "INSERT INTO review_events(
+               id, account_id, profile_id, problem_id, device_id, rating, duration_ms,
+               occurred_at_utc_ms, algorithm_version, parameter_version
+             ) VALUES('new-review', ?1, ?2, ?3, 'device-local', 'good', 12000,
+                      1800000050000, 'fsrs-5', 'default-0.90')",
+            params![ACCOUNT, profile_id, problem_id],
+        )
+        .unwrap();
+
+    let rollback = rollback_legacy_import(
+        &mut fixture.connection,
+        &fixture.blob_root,
+        ACCOUNT,
+        &receipt.import_id,
+        1_800_000_100_000,
+    )
+    .unwrap();
+
+    assert_eq!(rollback.removed_problem_count, 1);
+    assert!(rollback.preserved_entity_count >= 4);
+    assert_eq!(
+        fixture
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM review_events WHERE problem_id = ?1",
+                [&problem_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        2,
+        "preserving a changed problem also preserves its coherent review history"
+    );
+    assert_eq!(
+        fixture
+            .connection
+            .query_row(
+                "SELECT note FROM problems WHERE id = ?1",
+                [&problem_id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "迁移后补充"
     );
 }
 
@@ -237,6 +331,37 @@ fn failed_final_blob_move_leaves_no_database_rows_or_temporary_assets() {
     );
 
     assert!(result.is_err());
+    assert_eq!(count(&fixture.connection, "problems"), 0);
+    assert_eq!(count(&fixture.connection, "review_events"), 0);
+    assert_eq!(count(&fixture.connection, "legacy_imports"), 0);
+    assert!(!fixture.blob_root.join(".legacy-import").exists());
+}
+
+#[test]
+fn corrupt_image_aborts_without_importing_rows_or_leaving_staging_files() {
+    let mut fixture = fixture();
+    fs::write(
+        fixture
+            .source
+            .path()
+            .join("members/alice/files/answer.png"),
+        b"not a decodable png",
+    )
+    .unwrap();
+    let plan = build_legacy_import_plan(fixture.source.path()).unwrap();
+
+    let result = import_legacy_plan(
+        &mut fixture.connection,
+        &fixture.blob_root,
+        &KEY,
+        ACCOUNT,
+        "candidate-corrupt-image",
+        plan,
+        1_800_000_000_000,
+        |_| {},
+    );
+
+    assert!(matches!(result, Err(LegacyImportError::InvalidImage)));
     assert_eq!(count(&fixture.connection, "problems"), 0);
     assert_eq!(count(&fixture.connection, "review_events"), 0);
     assert_eq!(count(&fixture.connection, "legacy_imports"), 0);

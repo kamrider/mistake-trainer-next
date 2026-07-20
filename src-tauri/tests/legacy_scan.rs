@@ -1,6 +1,6 @@
 use std::fs;
 
-use mistake_trainer_next_lib::modules::legacy::scan_legacy_storage;
+use mistake_trainer_next_lib::modules::legacy::{build_legacy_import_plan, scan_legacy_storage};
 use tempfile::tempdir;
 
 #[test]
@@ -192,6 +192,28 @@ fn scan_rejects_a_member_junction_that_resolves_outside_the_selected_root() {
             .iter()
             .any(|issue| issue.code == "unsafe_member_path")
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn candidate_build_rejects_an_internal_windows_junction_before_recursing() {
+    use std::process::Command;
+
+    let directory = tempdir().unwrap();
+    let target = directory.path().join("real-member");
+    fs::create_dir_all(target.join("files")).unwrap();
+    fs::write(target.join(".metadata.json"), r#"{"files":{}}"#).unwrap();
+    let junction = directory.path().join("members").join("linked-member");
+    fs::create_dir_all(junction.parent().unwrap()).unwrap();
+    let status = Command::new("cmd")
+        .args(["/c", "mklink", "/J"])
+        .arg(&junction)
+        .arg(&target)
+        .status()
+        .expect("create internal junction fixture");
+    assert!(status.success(), "junction fixture must be created");
+
+    assert!(build_legacy_import_plan(directory.path()).is_err());
 }
 
 fn tree_fingerprint(root: &std::path::Path) -> Vec<(String, Vec<u8>)> {

@@ -10,6 +10,9 @@
    trusted-private-network selection, expiration, deletion, and finish-to-organize.
 4. Mobile continuous camera and album selection, metadata-stripping normalization,
    two-file concurrency, retry/backoff, and lazily loaded HEIC/HEIF conversion.
+5. Guided legacy migration with bounded read-only preflight, 30-minute opaque candidates,
+   pair-aware parsing, atomic encrypted import, progress events, import history, and
+   ownership-safe rollback with sync deletion compensation.
 
 ## Remaining release acceptance
 
