@@ -31,6 +31,8 @@ export const commands = {
 	settingsOverview: () => __TAURI_INVOKE<AppResult<SettingsOverview>>("settings_overview"),
 	subjectPreferencesGet: () => __TAURI_INVOKE<AppResult<SubjectPreferences>>("subject_preferences_get"),
 	subjectPreferencesSave: (input: SubjectPreferencesInput) => __TAURI_INVOKE<AppResult<SubjectPreferences>>("subject_preferences_save", { input }),
+	reviewPreferencesGet: () => __TAURI_INVOKE<AppResult<ReviewPreferences>>("review_preferences_get"),
+	reviewPreferencesSave: (input: ReviewPreferencesInput) => __TAURI_INVOKE<AppResult<ReviewPreferences>>("review_preferences_save", { input }),
 	exportCandidates: (source: ExportCandidateSource) => __TAURI_INVOKE<AppResult<ExportCandidate[]>>("export_candidates", { source }),
 	exportList: () => __TAURI_INVOKE<AppResult<ExportSnapshotSummary[]>>("export_list"),
 	exportTrashList: () => __TAURI_INVOKE<AppResult<DeletedExportSnapshotSummary[]>>("export_trash_list"),
@@ -425,8 +427,18 @@ export type ReviewExamStartInput = {
 	problemIds: string[],
 };
 
+export type ReviewFocusPolicy = "off" | "session_start" | "every_10";
+
 export type ReviewManualStartInput = {
 	problemIds: string[],
+};
+
+export type ReviewPreferences = {
+	focusPolicy: ReviewFocusPolicy,
+};
+
+export type ReviewPreferencesInput = {
+	focusPolicy: ReviewFocusPolicy,
 };
 
 export type ReviewQueueItem = {

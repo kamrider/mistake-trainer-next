@@ -34,3 +34,22 @@ fn command_errors_never_serialize_internal_diagnostics_as_user_messages() {
     assert_eq!(value["error"]["diagnosticId"], "diag-019f4b87");
     assert!(value.get("internalError").is_none());
 }
+
+#[test]
+fn review_focus_preferences_use_the_stable_public_values() {
+    use mistake_trainer_next_lib::modules::preferences::{
+        ReviewFocusPolicy, ReviewPreferences,
+    };
+
+    for (policy, expected) in [
+        (ReviewFocusPolicy::Off, "off"),
+        (ReviewFocusPolicy::SessionStart, "session_start"),
+        (ReviewFocusPolicy::EveryTen, "every_10"),
+    ] {
+        let value = serde_json::to_value(ReviewPreferences {
+            focus_policy: policy,
+        })
+        .expect("serialize review preference");
+        assert_eq!(value, json!({ "focusPolicy": expected }));
+    }
+}

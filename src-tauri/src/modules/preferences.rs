@@ -26,6 +26,45 @@ pub struct SaveSubjectPreferences {
     pub capture_sound_enabled: bool,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewFocusPolicy {
+    Off,
+    SessionStart,
+    #[serde(rename = "every_10")]
+    EveryTen,
+}
+
+impl ReviewFocusPolicy {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::SessionStart => "session_start",
+            Self::EveryTen => "every_10",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self, PreferencesError> {
+        match value {
+            "off" => Ok(Self::Off),
+            "session_start" => Ok(Self::SessionStart),
+            "every_10" => Ok(Self::EveryTen),
+            _ => Err(PreferencesError::InvalidInput),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewPreferences {
+    pub focus_policy: ReviewFocusPolicy,
+}
+
+#[derive(Clone, Debug)]
+pub struct SaveReviewPreferences {
+    pub focus_policy: ReviewFocusPolicy,
+}
+
 #[derive(Debug, Error)]
 pub enum PreferencesError {
     #[error("preference input is invalid")]
@@ -99,6 +138,57 @@ pub fn save_subject_preferences(
         ],
     )?;
     Ok(normalized)
+}
+
+pub fn load_review_preferences(
+    connection: &Connection,
+    account_id: &str,
+    profile_id: &str,
+) -> Result<ReviewPreferences, PreferencesError> {
+    ensure_profile(connection, account_id, profile_id)?;
+    let stored = connection
+        .query_row(
+            "SELECT review_focus_policy
+             FROM profile_preferences WHERE account_id = ?1 AND profile_id = ?2",
+            params![account_id, profile_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    Ok(ReviewPreferences {
+        focus_policy: match stored {
+            Some(value) => ReviewFocusPolicy::parse(&value)?,
+            None => ReviewFocusPolicy::Off,
+        },
+    })
+}
+
+pub fn save_review_preferences(
+    connection: &Connection,
+    account_id: &str,
+    profile_id: &str,
+    input: SaveReviewPreferences,
+    now_utc_ms: i64,
+) -> Result<ReviewPreferences, PreferencesError> {
+    ensure_profile(connection, account_id, profile_id)?;
+    connection.execute(
+        "INSERT INTO profile_preferences(
+             account_id, profile_id, enabled_subjects_json, custom_subjects_json,
+             capture_sound_enabled, updated_at_utc_ms, review_focus_policy
+         ) VALUES(?1, ?2, ?3, '[]', 1, ?4, ?5)
+         ON CONFLICT(account_id, profile_id) DO UPDATE SET
+             review_focus_policy = excluded.review_focus_policy,
+             updated_at_utc_ms = excluded.updated_at_utc_ms",
+        params![
+            account_id,
+            profile_id,
+            serde_json::to_string(&DEFAULT_SUBJECTS)?,
+            now_utc_ms,
+            input.focus_policy.as_str(),
+        ],
+    )?;
+    Ok(ReviewPreferences {
+        focus_policy: input.focus_policy,
+    })
 }
 
 fn default_subject_preferences() -> SubjectPreferences {
