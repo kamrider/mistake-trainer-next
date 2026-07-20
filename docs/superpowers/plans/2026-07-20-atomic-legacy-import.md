@@ -162,7 +162,7 @@ git commit -m "feat: track reversible legacy imports"
 - Produces: `rollback_legacy_import(connection, blob_root, account_id, import_id, now) -> LegacyRollbackReceipt`.
 - Consumes: v10 ledger, existing AES-GCM asset format, problem/review/export tables, and outbox schema.
 
-- [ ] **Step 1: Write failure-first store tests**
+- [x] **Step 1: Write failure-first store tests**
 
 Cover normal multi-member import, multi-image pairs, question-only cards, plaintext SHA-256 deduplication, duplicate profile-name suffixes, metadata/tags/time limits, success/fail history mapping, old due dates, frozen snapshot membership, outbox creation, deterministic counts, source fingerprint before/after, second-use rejection, rollback, and injected failure after blob staging/move.
 
@@ -174,13 +174,13 @@ assert_eq!(receipt.problem_count, 2);
 assert_eq!(db.query_row("SELECT COUNT(*) FROM review_events", [], |r| r.get::<_, i64>(0)).unwrap(), 2);
 ```
 
-- [ ] **Step 2: Run the store test and verify failure**
+- [x] **Step 2: Run the store test and verify failure**
 
 Run: `./scripts/cargo-msvc.cmd test --manifest-path src-tauri/Cargo.toml --test legacy_import_store`
 
 Expected: FAIL because import/rollback services are absent.
 
-- [ ] **Step 3: Implement staged assets and one SQL transaction**
+- [x] **Step 3: Implement staged assets and one SQL transaction**
 
 Encrypt new plaintext into `<blob_root>/.legacy-import/<import-id>/`, validate image decoding and media type, insert/reuse account assets, create profiles/problems/problem-assets/review-events/schedules/frozen snapshots/outbox/ledger rows in one transaction, move staged blobs to final shard paths, verify the source fingerprint again, then commit. On any error, rollback SQL and remove every staging/final path created by this import.
 
@@ -202,7 +202,7 @@ pub fn import_legacy_plan(
 }
 ```
 
-- [ ] **Step 4: Implement ownership-safe rollback**
+- [x] **Step 4: Implement ownership-safe rollback**
 
 Refuse foreign/already-rolled-back imports. Delete only entities with `created_by_import = 1`; preserve reused assets and any imported entity that gained non-import references, returning it in `preserved_entity_count`. Remove only blob paths whose asset row was safely deleted, mark the receipt `rolled_back`, and write tombstone/outbox operations only when necessary for entities that could already have synced.
 
@@ -217,13 +217,13 @@ pub struct LegacyRollbackReceipt {
 }
 ```
 
-- [ ] **Step 5: Run import store tests**
+- [x] **Step 5: Run import store tests**
 
 Run: `./scripts/cargo-msvc.cmd test --manifest-path src-tauri/Cargo.toml --test legacy_import_store`
 
 Expected: PASS with zero surviving rows/blobs after injected failures.
 
-- [ ] **Step 6: Create a local checkpoint**
+- [x] **Step 6: Create a local checkpoint**
 
 ```bash
 git add src-tauri/src/modules/legacy.rs src-tauri/tests/legacy_import_store.rs
