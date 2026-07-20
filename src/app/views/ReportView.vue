@@ -543,4 +543,5 @@ fieldset label { display: flex; gap: 7px; align-items: flex-start; }
 @media (max-width: 760px) { fieldset { grid-template-columns: 1fr; } .page-heading { flex-direction: column; } .heading-actions { width: 100%; flex-wrap: wrap; } }
 @media (max-width: 620px) { .report-page { padding: 24px 16px 92px; } .metric-grid { grid-template-columns: 1fr; } .bar-chart { gap: 3px; overflow: hidden; } .bar-column small { writing-mode: vertical-rl; } }
 @media (prefers-reduced-motion: reduce) { .configuration-step > button, .layout-option, .history-link { transition: none; } .configuration-step > button:hover:not(:disabled), .layout-option:hover, .history-link:hover { transform: none; } }
+.history-link{transition:transform var(--motion-feedback) var(--ease-standard)}
 </style>

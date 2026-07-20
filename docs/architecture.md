@@ -149,6 +149,29 @@ conflict. Deletes create tombstones retained for 30 days.
   Diagnostic details may be logged under a diagnostic ID but must not expose asset paths or
   database internals to the page.
 
+## Review history boundary
+
+- Review history is a profile-scoped read model over append-only `review_events`. Every list,
+  count, subject, and detail query receives the account and active profile from
+  `LibraryRuntime`; neither identity can be supplied by Vue. Joins back to `problems` also
+  require the event and problem account/profile pair to match, so corrupt cross-profile links
+  fail closed instead of exposing problem metadata.
+- Ordering is deterministic on `(occurred_at_utc_ms DESC, id DESC)`. Pagination uses a
+  bounded URL-safe base64 cursor containing only that pair, so equal-time events are neither
+  skipped nor duplicated. Malformed or oversized cursors fail closed.
+- Search accepts at most 80 characters and escapes SQLite `LIKE` wildcards. List DTOs contain
+  an opaque event ID for detail selection, but never contain a problem ID, raw device ID,
+  filesystem path, database handle, or image bytes.
+- Event algorithm and parameter versions are immutable audit facts. The detail command emits
+  only `isCurrentDevice`; raw device identity stays in Rust. Missing and foreign events share
+  the same not-found response.
+- Schedule values in a detail response are the current derived projection, not a historical
+  snapshot. The UI labels this boundary explicitly and shows current/history badges against
+  the running FSRS and parameter versions.
+- Event IDs stay out of routes and browser history. The lazy master-detail page uses explicit
+  pagination, preserves already visible rows after a failed read, rejects stale async detail
+  responses, restores focus after the mobile sheet closes, and respects reduced motion.
+
 ## Backup boundary
 
 - A backup is a new directory containing one consistent SQLCipher snapshot, immutable

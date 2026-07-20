@@ -1,30 +1,85 @@
 <script setup lang="ts">
 import { CalendarClock, Cpu, History, Monitor, RotateCcw, X } from '@lucide/vue'
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { ReviewHistoryDetail } from '@/shared/api/bindings'
 
 const props = defineProps<{ detail: ReviewHistoryDetail | undefined; loading: boolean; error: string }>()
 const emit = defineEmits<{ close: []; retry: [] }>()
 const closeButton = ref<HTMLButtonElement>()
+const detailLayer = ref<HTMLElement>()
+const mobile = ref(false)
+const inertBackground = new Map<HTMLElement, boolean>()
 const ratingCopy = { again: '忘记', hard: '困难', good: '记住', easy: '轻松' } as const
 function dateTime(value: number | null) { return value == null ? '—' : new Date(value).toLocaleString('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }) }
 function duration(value: number | null) { return value == null ? '—' : value < 60_000 ? `${Math.max(1, Math.round(value / 1000))} 秒` : `${Math.round(value / 60_000)} 分钟` }
 function metric(value: number | null) { return value == null ? '—' : value.toFixed(2) }
-function keydown(event: KeyboardEvent) { if (event.key === 'Escape') emit('close') }
+function setBackgroundInert() {
+  const layer = detailLayer.value
+  const page = layer?.closest('.history-page')
+  const workspace = layer?.parentElement
+  if (!layer || !page || !workspace) return
+  const background = [
+    ...Array.from(page.children).filter(child => child !== workspace),
+    ...Array.from(workspace.children).filter(child => child !== layer),
+  ].filter((element): element is HTMLElement => element instanceof HTMLElement)
+  for (const element of background) {
+    inertBackground.set(element, element.hasAttribute('inert'))
+    element.setAttribute('inert', '')
+  }
+}
+function restoreBackground() {
+  for (const [element, wasInert] of inertBackground) {
+    if (!wasInert) element.removeAttribute('inert')
+  }
+  inertBackground.clear()
+}
+function focusableElements() {
+  return Array.from(detailLayer.value?.querySelectorAll<HTMLElement>('button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])') ?? [])
+}
+function keydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    emit('close')
+    return
+  }
+  if (!mobile.value || event.key !== 'Tab') return
+  const focusable = focusableElements()
+  if (!focusable.length) return
+  const first = focusable[0]!
+  const last = focusable.at(-1)!
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last.focus()
+  }
+  else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
+  }
+}
 onMounted(() => {
   window.addEventListener('keydown', keydown)
-  if (window.matchMedia?.('(max-width: 760px)').matches) closeButton.value?.focus()
+  mobile.value = window.matchMedia?.('(max-width: 760px)').matches ?? false
+  if (mobile.value) {
+    setBackgroundInert()
+    void nextTick(() => closeButton.value?.focus())
+  }
 })
-onBeforeUnmount(() => window.removeEventListener('keydown', keydown))
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', keydown)
+  restoreBackground()
+})
 </script>
 
 <template>
   <div
+    ref="detailLayer"
     class="detail-layer"
     @click.self="emit('close')"
   >
     <aside
       class="history-detail"
+      :role="mobile ? 'dialog' : undefined"
+      :aria-modal="mobile ? 'true' : undefined"
       aria-label="复习记录审计详情"
       :aria-busy="loading"
     >

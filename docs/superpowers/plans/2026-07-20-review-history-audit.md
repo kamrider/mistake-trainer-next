@@ -298,11 +298,11 @@ git commit -m "feat: add review history workspace"
 **Interfaces:**
 - Documents cursor isolation, immutable event audit facts, current schedule disclaimer, and Windows manual acceptance.
 
-- [ ] **Step 1: Document architecture and Windows acceptance**
+- [x] **Step 1: Document architecture and Windows acceptance**
 
 Acceptance covers empty/large histories, all filters, literal wildcard search, equal-time pagination, archived problems, current/legacy versions, current/other device labels, detail race handling, offline restart, 1280×900, 760×900, 390×844, keyboard operation, high contrast, and reduced motion.
 
-- [ ] **Step 2: Run all quality gates**
+- [x] **Step 2: Run all quality gates**
 
 ```powershell
 pnpm lint
@@ -315,14 +315,14 @@ pnpm tauri build
 
 After committing generated bindings, run `pnpm bindings:check` and require a clean worktree.
 
-- [ ] **Step 3: Perform browser and real-Tauri QA**
+- [x] **Step 3: Perform browser and real-Tauri QA**
 
 Inspect overview, filters, list append, empty/error state, detail open/close, legacy badge, and focus restoration. At 390×844 assert `scrollWidth === clientWidth`, no clipped rating seal or sheet action, and no console error. Reset viewport overrides afterward.
 
-- [ ] **Step 4: Request independent code review and fix findings**
+- [x] **Step 4: Request independent code review and fix findings**
 
 Review the complete range for cursor correctness, account/profile isolation, LIKE escaping, device-ID leakage, time conversion, stale request races, focus management, motion constraints, binding drift, and unrelated files. Fix every Critical/Important issue and rerun affected focused plus full gates.
 
-- [ ] **Step 5: Mark the plan and create the final local checkpoint**
+- [x] **Step 5: Mark the plan and create the final local checkpoint**
 
 Keep all commits local. Report every new SHA and explicitly state that none was pushed.

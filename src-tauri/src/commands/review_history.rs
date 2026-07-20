@@ -29,6 +29,7 @@ pub fn review_history_list_for(
     input: ReviewHistoryInput,
     now_utc_ms: i64,
 ) -> AppResult<ReviewHistoryPage> {
+    let _transition = runtime.lock_profile_transition();
     let profile = runtime.active_profile();
     let connection = match runtime.connection.lock() {
         Ok(connection) => connection,
@@ -57,6 +58,7 @@ pub fn review_history_detail_for(
     runtime: &LibraryRuntime,
     event_id: String,
 ) -> AppResult<ReviewHistoryDetail> {
+    let _transition = runtime.lock_profile_transition();
     let profile = runtime.active_profile();
     let connection = match runtime.connection.lock() {
         Ok(connection) => connection,

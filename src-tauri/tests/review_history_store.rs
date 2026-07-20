@@ -330,6 +330,15 @@ fn list_rejects_unbounded_or_malformed_inputs() {
         ),
         Err(ReviewHistoryError::InvalidCursor)
     ));
+
+    let padded_search = list_review_history(
+        &connection,
+        ReviewHistoryQuery {
+            search: format!(" {} ", "x".repeat(80)),
+            ..query()
+        },
+    );
+    assert!(padded_search.is_ok(), "search length is bounded after trimming");
 }
 
 #[test]
@@ -459,5 +468,56 @@ fn detail_is_scoped_and_exposes_audit_facts_without_raw_device_id() {
             }
         ),
         Err(ReviewHistoryError::InvalidQuery)
+    ));
+}
+
+#[test]
+fn corrupt_cross_profile_problem_links_are_never_exposed() {
+    let (_directory, connection) = fixture();
+    problem(
+        &connection,
+        "p-foreign",
+        "account-x",
+        "profile-x",
+        "private subject",
+        "private note",
+        "active",
+    );
+    event(
+        &connection,
+        "event-cross-link",
+        ACCOUNT,
+        PROFILE,
+        "p-foreign",
+        "device-current",
+        "good",
+        NOW,
+        "fsrs-6.6.1",
+        "default-6.6.1",
+    );
+
+    let page = list_review_history(
+        &connection,
+        ReviewHistoryQuery {
+            limit: 20,
+            ..query()
+        },
+    )
+    .unwrap();
+    assert!(page.items.is_empty());
+    assert_eq!(page.total_count, 0);
+    assert!(page.available_subjects.is_empty());
+
+    assert!(matches!(
+        get_review_history_detail(
+            &connection,
+            ReviewHistoryDetailQuery {
+                account_id: ACCOUNT.to_owned(),
+                profile_id: PROFILE.to_owned(),
+                event_id: "event-cross-link".to_owned(),
+                current_device_id: "device-current".to_owned(),
+            }
+        ),
+        Err(ReviewHistoryError::NotFound)
     ));
 }

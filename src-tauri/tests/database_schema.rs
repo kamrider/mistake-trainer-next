@@ -267,22 +267,26 @@ fn version_seven_library_adds_focus_state_without_changing_existing_preferences_
          VALUES('profile', 'account', '小树', 1, 1, 1)",
         [],
     ).unwrap();
-    connection.execute(
-        "INSERT INTO profile_preferences(
+    connection
+        .execute(
+            "INSERT INTO profile_preferences(
              account_id, profile_id, enabled_subjects_json, custom_subjects_json,
              capture_sound_enabled, updated_at_utc_ms
          ) VALUES('account', 'profile', '[\"数学\"]', '[\"编程\"]', 0, 2)",
-        [],
-    ).unwrap();
-    connection.execute(
-        "INSERT INTO review_sessions(
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO review_sessions(
              id, account_id, profile_id, mode, problem_ids_json, current_index,
              status, created_at_utc_ms, updated_at_utc_ms, experience, exam_phase,
              exam_question_index, exam_correct_count, exam_wrong_count
          ) VALUES('session', 'account', 'profile', 'manual', '[\"problem-a\",\"problem-b\"]',
                   1, 'active', 3, 4, 'review', NULL, 0, 0, 0)",
-        [],
-    ).unwrap();
+            [],
+        )
+        .unwrap();
 
     run_migrations(&mut connection).expect("upgrade schema v7 to v8");
 
@@ -388,50 +392,81 @@ fn version_eight_library_adds_review_history_index_without_changing_existing_row
          VALUES('problem', 'account', 'profile', '数学', '保留历史', 'active', 2, 2, 1)",
         [],
     ).unwrap();
-    connection.execute(
-        "INSERT INTO review_events(
+    connection
+        .execute(
+            "INSERT INTO review_events(
              id, account_id, profile_id, problem_id, device_id, rating, duration_ms,
              occurred_at_utc_ms, algorithm_version, parameter_version
          ) VALUES('event', 'account', 'profile', 'problem', 'device', 'good', 1234,
                   10, 'fsrs-6.6.1', 'default-6.6.1')",
-        [],
-    ).unwrap();
-    connection.execute(
-        "INSERT INTO schedule_states(
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO schedule_states(
              problem_id, due_at_utc_ms, stability, difficulty, last_reviewed_at_utc_ms,
              algorithm_version, parameter_version, rebuilt_at_utc_ms
          ) VALUES('problem', 20, 2.5, 4.0, 10, 'fsrs-6.6.1', 'default-6.6.1', 11)",
-        [],
-    ).unwrap();
+            [],
+        )
+        .unwrap();
 
-    let before: (String, String, i64, i64, f64, f64) = connection.query_row(
-        "SELECT e.rating, e.algorithm_version, e.duration_ms, s.due_at_utc_ms,
+    let before: (String, String, i64, i64, f64, f64) = connection
+        .query_row(
+            "SELECT e.rating, e.algorithm_version, e.duration_ms, s.due_at_utc_ms,
                 s.stability, s.difficulty
          FROM review_events e JOIN schedule_states s ON s.problem_id = e.problem_id
          WHERE e.id = 'event'",
-        [],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
-    ).unwrap();
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .unwrap();
 
     run_migrations(&mut connection).expect("upgrade schema v8 to v9");
 
-    let after: (String, String, i64, i64, f64, f64) = connection.query_row(
-        "SELECT e.rating, e.algorithm_version, e.duration_ms, s.due_at_utc_ms,
+    let after: (String, String, i64, i64, f64, f64) = connection
+        .query_row(
+            "SELECT e.rating, e.algorithm_version, e.duration_ms, s.due_at_utc_ms,
                 s.stability, s.difficulty
          FROM review_events e JOIN schedule_states s ON s.problem_id = e.problem_id
          WHERE e.id = 'event'",
-        [],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
-    ).unwrap();
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .unwrap();
     assert_eq!(after, before);
     let index_columns = connection
-        .prepare("SELECT name FROM pragma_index_info('review_events_profile_time_idx') ORDER BY seqno")
+        .prepare(
+            "SELECT name FROM pragma_index_info('review_events_profile_time_idx') ORDER BY seqno",
+        )
         .unwrap()
         .query_map([], |row| row.get::<_, String>(0))
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
-    assert_eq!(index_columns, ["account_id", "profile_id", "occurred_at_utc_ms", "id"]);
+    assert_eq!(
+        index_columns,
+        ["account_id", "profile_id", "occurred_at_utc_ms", "id"]
+    );
     assert_eq!(
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))

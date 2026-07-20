@@ -21,10 +21,14 @@ Implemented vertical slices:
   Schulte break after every ten completed cards. The policy is frozen per ordinary session;
   exams always opt out. Board progress survives restart, correct choices persist before
   fading, stale clients resynchronize, and every round can be skipped.
+- The report links to a lazy, date-grouped review-history workspace. It supports bounded
+  range/rating/subject/note filters, opaque cursor pagination, archived-problem history, and
+  a desktop panel/mobile sheet that audits immutable event versions separately from the
+  current schedule projection. Runtime identity scopes every Rust query, raw device IDs never
+  cross into Vue, and event IDs never enter the route.
 
 Still remaining from the complete review plan:
 
-- Add a review-history detail screen that can audit algorithm and parameter versions.
 - Complete two-device deterministic schedule tests after the sync transport is connected.
 
 Exit: two devices derive the same due date from the same event set.

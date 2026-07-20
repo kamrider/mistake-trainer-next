@@ -165,6 +165,8 @@ pub fn list_review_history(
                 e.occurred_at_utc_ms, e.algorithm_version, e.parameter_version
          FROM review_events e
          INNER JOIN problems p ON p.id = e.problem_id
+            AND p.account_id = e.account_id
+            AND p.profile_id = e.profile_id
          WHERE {FILTER_SQL}
            AND (:cursor_time IS NULL
              OR e.occurred_at_utc_ms < :cursor_time
@@ -248,7 +250,10 @@ pub fn list_review_history(
 
     let count_sql = format!(
         "SELECT COUNT(*)
-         FROM review_events e INNER JOIN problems p ON p.id = e.problem_id
+         FROM review_events e
+         INNER JOIN problems p ON p.id = e.problem_id
+            AND p.account_id = e.account_id
+            AND p.profile_id = e.profile_id
          WHERE {FILTER_SQL}"
     );
     let total_count = connection.query_row(
@@ -265,7 +270,10 @@ pub fn list_review_history(
     )?;
     let subjects_sql = format!(
         "SELECT DISTINCT p.subject
-         FROM review_events e INNER JOIN problems p ON p.id = e.problem_id
+         FROM review_events e
+         INNER JOIN problems p ON p.id = e.problem_id
+            AND p.account_id = e.account_id
+            AND p.profile_id = e.profile_id
          WHERE {FILTER_SQL} AND trim(p.subject) != ''
          ORDER BY p.subject COLLATE NOCASE, p.subject"
     );
@@ -335,6 +343,8 @@ pub fn get_review_history_detail(
                     s.algorithm_version, s.parameter_version
              FROM review_events e
              INNER JOIN problems p ON p.id = e.problem_id
+                AND p.account_id = e.account_id
+                AND p.profile_id = e.profile_id
              LEFT JOIN schedule_states s ON s.problem_id = e.problem_id
              WHERE e.account_id = ?1 AND e.profile_id = ?2 AND e.id = ?3",
             (&query.account_id, &query.profile_id, &query.event_id),
@@ -397,7 +407,8 @@ pub fn get_review_history_detail(
 }
 
 fn validate_query(query: &ReviewHistoryQuery) -> Result<ValidatedQuery, ReviewHistoryError> {
-    if !(1..=50).contains(&query.limit) || query.search.chars().count() > MAX_SEARCH_CHARS {
+    let search = query.search.trim();
+    if !(1..=50).contains(&query.limit) || search.chars().count() > MAX_SEARCH_CHARS {
         return Err(ReviewHistoryError::InvalidQuery);
     }
     let subject = query
@@ -410,7 +421,6 @@ fn validate_query(query: &ReviewHistoryQuery) -> Result<ValidatedQuery, ReviewHi
     {
         return Err(ReviewHistoryError::InvalidQuery);
     }
-    let search = query.search.trim();
     let search_pattern = if search.is_empty() {
         String::new()
     } else {
