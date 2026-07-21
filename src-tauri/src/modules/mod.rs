@@ -1,3 +1,4 @@
+pub mod auth_sync;
 pub mod backup;
 pub mod capture;
 pub mod capture_firewall;

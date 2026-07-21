@@ -134,7 +134,7 @@ git commit -m "feat: define idempotent cloud sync contract"
 - Consumes: build-time `MISTAKE_TRAINER_SUPABASE_URL` and `MISTAKE_TRAINER_SUPABASE_PUBLISHABLE_KEY`, existing `SecretStore`, and local account/device IDs.
 - Produces: `SupabaseClient`, `AuthSessionStore`, `CloudBinding`, `AuthStatus`, `sign_up`, `sign_in`, `refresh`, and `disconnect` use cases.
 
-- [ ] **Step 1: Write failing HTTP and credential tests**
+- [x] **Step 1: Write failing HTTP and credential tests**
 
 Use an in-process Axum server and an in-memory `SecretStore`. Assert exact Auth paths/headers/bodies, generic invalid-credential messages, no password/token in `Debug` or public error strings, 2 MiB response cap, 10 s connect/30 s request timeout, no redirects, refresh rotation, email-verification/no-session signup, and network/429/5xx retry classification.
 
@@ -147,7 +147,7 @@ assert!(!format!("{session:?}").contains("refresh-secret"));
 
 Binding tests must prove first login stores `remote-user-id`, later login by the same user succeeds, a different user returns `LibraryBoundToAnotherAccount`, and every failure leaves both keyring values and the encrypted database unchanged.
 
-- [ ] **Step 2: Add the pinned HTTP dependency and verify failure**
+- [x] **Step 2: Add the pinned HTTP dependency and verify failure**
 
 ```toml
 reqwest = { version = "=0.13.4", default-features = false, features = ["json", "rustls", "stream", "system-proxy"] }
@@ -157,7 +157,7 @@ Run: `.\scripts\cargo-msvc.cmd test --manifest-path src-tauri\Cargo.toml --test 
 
 Expected: fails because the new modules/types do not exist.
 
-- [ ] **Step 3: Implement hardened public configuration and HTTP transport**
+- [x] **Step 3: Implement hardened public configuration and HTTP transport**
 
 ```rust
 pub struct SupabaseConfig {
@@ -175,7 +175,7 @@ pub trait SupabaseTransport: Send + Sync {
 
 Validate the URL once at startup: HTTPS, no username/password/query/fragment, path `/`, and hostname suffix `.supabase.co`. Derive the direct Storage host only by inserting `.storage` before that validated suffix; never accept a second user-controlled URL. Construct one reqwest client with redirect policy `none`, user agent, bounded timeouts, and rustls. Read response bytes through a capped stream before deserializing.
 
-- [ ] **Step 4: Implement session storage and permanent library binding**
+- [x] **Step 4: Implement session storage and permanent library binding**
 
 Use keyring names `cloud-refresh-token` and `cloud-user-id`. The local `account-id` remains unchanged. On first successful session, write the remote ID only after the refresh token write succeeds; compensate the refresh token if binding persistence fails. On startup, refresh into an in-memory access token. No token enters SQLite.
 
@@ -188,13 +188,13 @@ pub struct CloudBinding {
 pub enum AuthStatusKind { Unconfigured, SignedOut, VerificationRequired, Connected, Offline }
 ```
 
-- [ ] **Step 5: Run focused auth tests and inspect dependency features**
+- [x] **Step 5: Run focused auth tests and inspect dependency features**
 
 Run: `.\scripts\cargo-msvc.cmd test --manifest-path src-tauri\Cargo.toml --test supabase_client --test auth_sync`
 
 Expected: all tests pass and `cargo tree -e features -i reqwest` contains rustls but no native-tls.
 
-- [ ] **Step 6: Commit the Auth core checkpoint**
+- [x] **Step 6: Commit the Auth core checkpoint**
 
 ```powershell
 git add src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/src/infrastructure src-tauri/src/modules src-tauri/tests/auth_sync.rs src-tauri/tests/supabase_client.rs

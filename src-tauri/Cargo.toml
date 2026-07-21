@@ -23,6 +23,7 @@ fsrs = "=6.6.1"
 futures-util = { version = "=0.3.32", default-features = false, features = ["std"] }
 if-addrs = "=0.15.0"
 qrcode = { version = "=0.14.1", default-features = false, features = ["svg"] }
+reqwest = { version = "=0.13.4", default-features = false, features = ["json", "rustls", "stream", "system-proxy"] }
 rusqlite = { version = "0.38", features = ["backup", "bundled-sqlcipher-vendored-openssl", "uuid"] }
 rfd = { version = "=0.17.2", default-features = false, features = ["common-controls-v6"] }
 serde = { version = "1", features = ["derive"] }
