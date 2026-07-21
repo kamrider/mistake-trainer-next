@@ -65,6 +65,29 @@ describe('CaptureDraftCard', () => {
     expect(view.emitted('returnItem')).toEqual([['q-1']])
   })
 
+  it('supports keyboard navigation and role shortcuts on the focused thumbnail', async () => {
+    const user = userEvent.setup()
+    const view = renderCard()
+    const firstQuestion = screen.getByLabelText('题目上半部分.png')
+
+    firstQuestion.focus()
+    await user.keyboard('{ArrowRight}')
+    expect(view.emitted('preview')).toContainEqual(['q-2'])
+
+    await user.keyboard('a')
+    expect(view.emitted('changeItemRole')).toContainEqual(['q-2', 'answer', 1])
+  })
+
+  it('moves between adjacent cards with ctrl or command arrows', async () => {
+    const user = userEvent.setup()
+    const view = renderCard()
+    const inner = view.container.querySelector('.card-inner') as HTMLElement
+
+    inner.focus()
+    await user.keyboard('{Control>}{ArrowDown}{/Control}')
+    expect(view.emitted('navigateDraft')).toEqual([['next']])
+  })
+
   it('explains why a card is incomplete and corrects an assigned image in place', async () => {
     const user = userEvent.setup()
     const incomplete: CaptureDraftSummary = {

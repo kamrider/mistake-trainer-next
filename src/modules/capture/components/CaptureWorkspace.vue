@@ -292,6 +292,17 @@ function requestDeleteDraft(draftId: string) {
   emit('deleteDraft', draftId)
 }
 
+function navigateDraft(direction: 'previous' | 'next') {
+  const drafts = props.detail?.drafts ?? []
+  const index = drafts.findIndex(draft => draft.id === selectedDraftId.value)
+  const nextDraft = drafts[direction === 'previous' ? index - 1 : index + 1]
+  if (!nextDraft) return
+  selectedDraftId.value = nextDraft.id
+  requestAnimationFrame(() => {
+    document.querySelector<HTMLElement>(`[data-draft-id="${nextDraft.id}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  })
+}
+
 function statusLabel(batch: CaptureBatchSummary) {
   if (batch.state === 'collecting') return '采集中'
   if (batch.state === 'organizing') return '待整理'
@@ -856,6 +867,7 @@ function statusLabel(batch: CaptureBatchSummary) {
                 :drop-role="pointerDrag.drag.hoveredTarget?.kind === 'card' && pointerDrag.drag.hoveredTarget.draftId === draft.id ? draggedRole : null"
                 :settled="settledDraftId === draft.id"
                 @select="selectedDraftId = $event"
+                @navigate-draft="navigateDraft"
                 @preview="emit('preview', $event)"
                 @pointer-start="pointerDrag.start"
                 @return-item="itemId => emit('moveItem', { itemId, targetDraftId: null, targetRole: null, targetPosition: 0 })"

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ArrowRightLeft, Check, Image as ImageIcon, Maximize2, RotateCw, Trash2, Undo2, X } from '@lucide/vue'
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import type { CaptureDraftSummary, CaptureItemSummary } from '../../../shared/api/bindings'
 import CaptureThumbnail from './CaptureThumbnail.vue'
 
@@ -20,6 +20,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   select: [draftId: string]
+  navigateDraft: [direction: 'previous' | 'next']
   preview: [itemId: string]
   pointerStart: [itemId: string, event: PointerEvent]
   returnItem: [itemId: string]
@@ -63,7 +64,9 @@ function activeItem(role: CardRole) {
 function selectImage(role: CardRole, index: number) {
   indexes[role] = index
   const item = activeItem(role)
-  if (item) emit('preview', item.id)
+  if (!item) return
+  emit('preview', item.id)
+  nextTick(() => document.querySelector<HTMLElement>(`[data-capture-item-id="${item.id}"]`)?.focus())
 }
 
 function flip() {
@@ -79,6 +82,38 @@ function openImage(role: CardRole) {
 function changeSubject(event: Event) {
   const select = event.target as HTMLSelectElement
   if (select.value && select.value !== props.draft.subject) emit('changeSubject', select.value)
+}
+
+function handleCardKeydown(event: KeyboardEvent) {
+  if (!event.ctrlKey && !event.metaKey) return
+  if (event.key === 'ArrowUp') {
+    event.preventDefault()
+    emit('navigateDraft', 'previous')
+  } else if (event.key === 'ArrowDown') {
+    event.preventDefault()
+    emit('navigateDraft', 'next')
+  }
+}
+
+function handleThumbnailKeydown(role: CardRole, index: number, item: CaptureItemSummary, event: KeyboardEvent) {
+  if (event.currentTarget !== event.target) return
+  const items = role === 'question' ? questionItems.value : answerItems.value
+  if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+    event.preventDefault()
+    selectImage(role, Math.max(0, index - 1))
+  } else if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+    event.preventDefault()
+    selectImage(role, Math.min(items.length - 1, index + 1))
+  } else if (event.key.toLowerCase() === 'q' && role !== 'question') {
+    event.preventDefault()
+    emit('changeItemRole', item.id, 'question', questionItems.value.length)
+  } else if (event.key.toLowerCase() === 'a' && role !== 'answer') {
+    event.preventDefault()
+    emit('changeItemRole', item.id, 'answer', answerItems.value.length)
+  } else if (event.key === 'Backspace' || event.key === 'Delete') {
+    event.preventDefault()
+    emit('returnItem', item.id)
+  }
 }
 </script>
 
@@ -153,6 +188,7 @@ function changeSubject(event: Event) {
         tabindex="0"
         :aria-label="flipped ? '当前显示答案，点击翻回题面' : '当前显示题面，点击翻到答案'"
         @click="flip"
+        @keydown="handleCardKeydown"
         @keydown.enter.prevent="flip"
         @keydown.space.prevent="flip"
       >
@@ -220,6 +256,7 @@ function changeSubject(event: Event) {
               @preview="emit('preview', $event)"
               @activate="selectImage(role, index)"
               @pointer-start="(itemId, event) => emit('pointerStart', itemId, event)"
+              @keydown="handleThumbnailKeydown(role, index, item, $event)"
             />
             <button
               type="button"

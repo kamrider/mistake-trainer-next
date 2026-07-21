@@ -41,6 +41,7 @@ onBeforeUnmount(() => observer?.disconnect())
     class="capture-thumbnail"
     :class="[`is-${variant ?? 'compact'}`, { 'is-disabled': disabled, 'is-active': active }]"
     :aria-label="item.sourceName"
+    :data-capture-item-id="item.id"
     tabindex="0"
     @pointerdown="!disabled && emit('pointerStart', item.id, $event)"
     @click="emit('activate', item.id)"
