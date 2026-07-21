@@ -55,4 +55,23 @@ describe('App', () => {
     )
     warning.mockRestore()
   })
+
+  it('shows a recoverable message instead of a blank page when a route throws', async () => {
+    const router = createAppRouter(createMemoryHistory())
+    router.addRoute({
+      name: 'broken-route',
+      path: '/broken-route',
+      component: { setup() { throw new Error('render failed') }, template: '<div />' },
+      meta: { shellPage: 'settings' },
+    })
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    await router.push('/broken-route')
+    await router.isReady()
+
+    render(App, { global: { plugins: [router] } })
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('这个页面暂时打不开')
+    expect(screen.getByRole('button', { name: '回到训练台' })).toBeVisible()
+    error.mockRestore()
+  })
 })

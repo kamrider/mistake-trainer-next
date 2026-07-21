@@ -67,6 +67,7 @@ describe('CaptureWorkspace Next', () => {
   it('creates and reopens persistent batches', async () => {
     const user = userEvent.setup()
     const view = renderWorkspace()
+    expect(screen.getByRole('combobox')).toHaveValue('')
     await user.selectOptions(screen.getByRole('combobox'), '物理')
     await user.click(screen.getByRole('button', { name: '新建批次' }))
     await user.click(screen.getAllByRole('button', { name: /数学/ })[0]!)

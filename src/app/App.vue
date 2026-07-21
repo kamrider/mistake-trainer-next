@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { isTauri } from '@tauri-apps/api/core'
 import { CheckCircle2, ShieldAlert, X } from '@lucide/vue'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onErrorCaptured, onMounted, ref, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import type { AppResult } from '../shared/api/app-result'
 import { commands, type BackupRestoreReceipt, type ProfileOverview, type ProfileSummary, type SystemStatus } from '../shared/api/bindings'
@@ -20,6 +20,8 @@ const profileBusy = ref(false)
 const profileError = ref('')
 const profileEpoch = ref(0)
 const restoreNotice = ref<BackupRestoreReceipt>()
+const routeError = ref('')
+const routeErrorDetail = ref('')
 const desktopRuntime = isTauri()
 const previewProfile: ProfileSummary = {
   id: 'preview-profile',
@@ -34,6 +36,20 @@ const shellProfiles = computed(() =>
 const shellActiveProfileId = computed(() =>
   activeProfileId.value || (desktopRuntime ? '' : previewProfile.id),
 )
+
+watch(() => route.fullPath, () => {
+  routeError.value = ''
+  routeErrorDetail.value = ''
+})
+
+onErrorCaptured((error, _instance, info) => {
+  routeError.value = '这个页面暂时打不开'
+  routeErrorDetail.value = desktopRuntime
+    ? '本地资料库没有被修改。返回训练台后可以重新打开这个页面。'
+    : `浏览器预览遇到异常（${info}），请重新打开页面。`
+  if (import.meta.env.DEV) console.error('route render error', error)
+  return false
+})
 
 onMounted(async () => {
   systemStatus.value = await loadSystemStatus()
@@ -170,7 +186,25 @@ function selectProfile(profileId: string) {
           :key="`${route.fullPath}:${profileEpoch}`"
           class="route-page"
         >
-          <Suspense timeout="0">
+          <section
+            v-if="routeError"
+            class="route-error"
+            role="alert"
+          >
+            <ShieldAlert :size="28" />
+            <h1>{{ routeError }}</h1>
+            <p>{{ routeErrorDetail }}</p>
+            <button
+              type="button"
+              @click="router.push({ name: 'dashboard' })"
+            >
+              回到训练台
+            </button>
+          </section>
+          <Suspense
+            v-else
+            timeout="0"
+          >
             <component :is="Component" />
             <template #fallback>
               <div
@@ -199,4 +233,6 @@ function selectProfile(profileId: string) {
 @media (max-width: 760px) { .restore-notice { top: 12px; right: 12px; width: calc(100vw - 24px); } }
 @media (prefers-reduced-motion: reduce) { .restore-notice-enter-active,.restore-notice-leave-active { transition: none; } }
 .route-loading { display: grid; min-height: 50vh; place-items: center; color: var(--ink-muted); font-size: 14px; }
+.route-error { display: grid; min-height: 50vh; padding: 52px 24px; place-items: center; align-content: center; gap: 10px; color: var(--ink-muted); text-align: center; }.route-error svg { color: var(--cinnabar); }.route-error h1 { margin: 0; color: var(--ink); font-family: var(--font-serif); font-size: 28px; }.route-error p { max-width: 420px; margin: 0; line-height: 1.7; }.route-error button { min-height: 42px; margin-top: 8px; padding: 0 18px; color: var(--paper); border: 0; border-radius: 999px; background: var(--green-deep); cursor: pointer; }
+@media (prefers-reduced-motion: reduce) { .route-error button { transition: none; } }
 </style>

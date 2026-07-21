@@ -142,6 +142,15 @@ describe('CaptureView one-time Windows LAN permission', () => {
     }))
   })
 
+  it('makes custom subjects from settings available in the capture workspace', async () => {
+    api.subjectPreferencesGet.mockResolvedValue(success({
+      enabledSubjects: ['数学'], customSubjects: ['编程', '竞赛'], captureSoundEnabled: true,
+    }))
+    render(CaptureView)
+
+    await waitFor(() => expect(screen.getByTestId('subjects')).toHaveTextContent('数学、编程、竞赛'))
+  })
+
   it('repairs once on the first scan and immediately starts the QR session', async () => {
     api.captureLanPreflight.mockResolvedValue(success(missingRule))
     api.captureLanFirewallRepair.mockResolvedValue(success(readyRule))

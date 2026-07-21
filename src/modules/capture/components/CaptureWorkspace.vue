@@ -109,7 +109,9 @@ watch(() => props.detail, (detail) => {
 }, { immediate: true })
 
 watch(() => props.subjectOptions, (subjects) => {
-  if (!newSubject.value || !subjects.includes(newSubject.value)) {
+  // Keep the explicit "暂不设置科目" choice as the initial state. Only
+  // repair a non-empty selection when settings removed that subject.
+  if (newSubject.value && !subjects.includes(newSubject.value)) {
     newSubject.value = subjects[0] ?? ''
   }
 }, { immediate: true })

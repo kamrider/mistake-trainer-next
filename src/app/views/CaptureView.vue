@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { isTauri } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import CaptureWorkspace from '../../modules/capture/components/CaptureWorkspace.vue'
 import {
   commands,
@@ -32,6 +32,10 @@ const subjectPreferences = ref<SubjectPreferences>({
   customSubjects: [],
   captureSoundEnabled: true,
 })
+const subjectOptions = computed(() => [...new Set([
+  ...subjectPreferences.value.enabledSubjects,
+  ...subjectPreferences.value.customSubjects,
+])])
 const previewOrder: string[] = []
 const desktopAvailable = isTauri()
 let unlisten: UnlistenFn | undefined
@@ -651,7 +655,7 @@ onBeforeUnmount(() => {
     :lan-preflight="lanPreflight"
     :lan-preflight-busy="lanPreflightBusy"
     :lan-session="lanSession"
-    :subject-options="subjectPreferences.enabledSubjects"
+    :subject-options="subjectOptions"
     :capture-sound-enabled="subjectPreferences.captureSoundEnabled"
     @create-batch="createBatch"
     @open-batch="loadDetail"
