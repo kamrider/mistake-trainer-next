@@ -9,8 +9,6 @@ export const commands = {
 	backupRestore: (candidateId: string) => typedError<AppResult<boolean>, null>(__TAURI_INVOKE("backup_restore", { candidateId })),
 	backupRestoreStatus: () => __TAURI_INVOKE<AppResult<BackupRestoreReceipt | null>>("backup_restore_status"),
 	systemStatus: () => __TAURI_INVOKE<AppResult<SystemStatus>>("system_status"),
-	syncBackendStatus: () => __TAURI_INVOKE<AppResult<CloudBackendStatus>>("sync_backend_status"),
-	syncBackendSet: (request: SetBackendRequest) => __TAURI_INVOKE<AppResult<CloudBackendStatus>>("sync_backend_set", { request }),
 	profileList: () => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_list"),
 	profileCreate: (input: ProfileNameInput) => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_create", { input }),
 	profileRename: (input: ProfileRenameInput) => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_rename", { input }),
@@ -72,6 +70,8 @@ export const commands = {
 	captureLanStart: (input: CaptureLanStartInput) => __TAURI_INVOKE<AppResult<CaptureLanSession>>("capture_lan_start", { input }),
 	captureLanStatus: () => __TAURI_INVOKE<AppResult<CaptureLanSession | null>>("capture_lan_status"),
 	captureLanStop: () => __TAURI_INVOKE<AppResult<boolean>>("capture_lan_stop"),
+	syncBackendStatus: () => __TAURI_INVOKE<AppResult<CloudBackendStatus>>("sync_backend_status"),
+	syncBackendSet: (request: SetBackendRequest) => __TAURI_INVOKE<AppResult<CloudBackendStatus>>("sync_backend_set", { request }),
 };
 
 /* Types */
@@ -103,15 +103,6 @@ export type BackupSummary = {
 	encryptedBytes: number | null,
 	label: string,
 	readyForRestore: boolean,
-};
-
-export type CloudBackendKind = "local-only" | "supabase" | "tencent";
-
-export type CloudBackendStatus = {
-	kind: CloudBackendKind,
-	configured: boolean,
-	ready: boolean,
-	syncEnabled: boolean,
 };
 
 export type CaptureBatchCreateInput = {
@@ -277,6 +268,30 @@ export type CaptureLayoutInput = {
 };
 
 export type CaptureLayoutMode = "alternating" | "split" | "questions_only" | "manual";
+
+/**
+ *  The remote implementation used for optional synchronization.
+ * 
+ *  The product remains usable without a remote provider. Keeping this choice in
+ *  Rust prevents the Vue layer from depending on a particular cloud vendor.
+ */
+export type CloudBackendKind = "local-only" | "supabase" | "tencent";
+
+/**
+ *  The configuration/status exposed to the desktop settings UI.
+ * 
+ *  `configured` only means that the provider has the minimum endpoint and
+ *  credential environment variables. It does not imply that a provider
+ *  implementation is shipped in this build. `ready` is therefore false for
+ *  the currently reserved remote providers, which makes an accidental sync
+ *  attempt fail closed.
+ */
+export type CloudBackendStatus = {
+	kind: CloudBackendKind,
+	configured: boolean,
+	ready: boolean,
+	syncEnabled: boolean,
+};
 
 export type CurrentScheduleProjection = {
 	dueAtUtcMs: number | null,
@@ -606,6 +621,15 @@ export type ReviewSubmitInput = {
 	durationMs: number,
 };
 
+/**
+ *  DTO used by the generated command client when changing the sync provider.
+ *  Keeping this as a named request leaves room for non-secret provider options
+ *  (for example a region) without exposing credentials to the Vue layer.
+ */
+export type SetBackendRequest = {
+	kind: CloudBackendKind,
+};
+
 export type SettingsOverview = {
 	activeProblemCount: number,
 	archivedProblemCount: number,
@@ -633,10 +657,6 @@ export type SubjectPreferencesInput = {
 	enabledSubjects: string[],
 	customSubjects: string[],
 	captureSoundEnabled: boolean,
-};
-
-export type SetBackendRequest = {
-	kind: CloudBackendKind,
 };
 
 export type SystemStatus = {
