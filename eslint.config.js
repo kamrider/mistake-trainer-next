@@ -11,6 +11,7 @@ export default tseslint.config(
       'src-tauri/target/**',
       'src/shared/api/bindings.ts',
       '.tools/**',
+      '.worktrees/**',
     ],
   },
   js.configs.recommended,

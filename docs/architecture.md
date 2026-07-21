@@ -4,14 +4,15 @@
 
 Mistake Trainer Next is a Windows-first, offline-first modular monolith. Vue renders
 the product experience. Rust owns use cases, storage, encryption, file operations,
-exports, scheduling, migration, and synchronization. Supabase is a remote replica,
-not the source of truth for an active local session.
+exports, scheduling, migration, and synchronization. Cloud synchronization is an
+optional provider behind a Rust boundary; the local encrypted database is always
+the source of truth for an active session. The default provider is `local-only`.
 
 ## Dependency rule
 
 ```text
 Vue feature -> generated typed command client -> Tauri command -> Rust use case
-  -> repository/port -> SQLite, encrypted blobs, Windows Credential Manager, Supabase
+  -> repository/port -> SQLite, encrypted blobs, Windows Credential Manager, cloud backend
 ```
 
 - Vue never receives arbitrary filesystem access or database handles.
@@ -39,6 +40,19 @@ Vue feature -> generated typed command client -> Tauri command -> Rust use case
   SQLite transaction.
 - A sign-out revokes remote credentials and locks the local database.
 - User-provided paths never cross a Tauri command boundary.
+
+## Cloud backends
+
+The `CloudBackend` port is provider-neutral and selected by Rust configuration:
+
+| Mode | Intended use | Network requirement |
+| --- | --- | --- |
+| `local-only` | Default and offline-first operation | None |
+| `supabase` | Development or overseas deployments | Supabase Cloud reachable |
+| `tencent` | Mainland-China deployment | Domestic API/storage endpoint |
+
+Vue must not import a vendor SDK or construct a cloud URL. A backend that is not
+configured fails closed and leaves the local outbox intact for a later retry.
 
 ## Conflict policy
 
