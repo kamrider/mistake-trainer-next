@@ -27,8 +27,8 @@
     }
   },
   "bundle": {
-    "active": false,
-    "targets": "all",
+    "active": true,
+    "targets": ["nsis"],
     "resources": {
       "../THIRD_PARTY_NOTICES.md": "licenses/THIRD_PARTY_NOTICES.md",
       "../third-party-licenses/heic2any-MIT.txt": "licenses/heic2any-MIT.txt",
