@@ -3,7 +3,9 @@ use specta::Type;
 
 use crate::{
     application::result::AppResult,
-    infrastructure::cloud_backend::{self, CloudBackendError, CloudBackendKind, CloudBackendStatus},
+    infrastructure::cloud_backend::{
+        self, CloudBackendError, CloudBackendKind, CloudBackendStatus,
+    },
 };
 
 /// DTO used by the generated command client when changing the sync provider.

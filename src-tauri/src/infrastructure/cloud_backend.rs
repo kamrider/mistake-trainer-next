@@ -1,4 +1,7 @@
-use std::{fmt, sync::{OnceLock, RwLock}};
+use std::{
+    fmt,
+    sync::{OnceLock, RwLock},
+};
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
