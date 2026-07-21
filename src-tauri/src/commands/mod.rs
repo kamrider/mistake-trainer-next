@@ -1,1 +1,12 @@
+pub mod backup;
+pub mod capture_inbox;
+pub mod capture_lan;
+pub mod exports;
+pub mod insights;
+pub mod legacy;
+pub mod library;
+pub mod preferences;
+pub mod profiles;
+pub mod review;
+pub mod review_history;
 pub mod system;

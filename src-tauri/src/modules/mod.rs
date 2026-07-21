@@ -1,4 +1,17 @@
+pub mod auth_sync;
+pub mod backup;
+pub mod capture;
+pub mod capture_firewall;
+pub mod capture_inbox;
+pub mod capture_lan;
+pub mod exports;
+pub mod insights;
 pub mod legacy;
+pub mod preferences;
 pub mod problems;
 pub mod profiles;
 pub mod review;
+pub mod review_focus;
+pub mod review_history;
+pub mod sync_push;
+pub mod sync_store;

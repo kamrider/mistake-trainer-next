@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light" />
+    <title>手机采集 · Mistake Trainer</title>
+    <style>
+      :root { color:#22302b; background:#f6f1e7; font-family:"Microsoft YaHei UI","PingFang SC",system-ui,sans-serif; font-synthesis:none; }
+      * { box-sizing:border-box; } body { min-height:100vh; margin:0; background:radial-gradient(circle at 90% 0%,rgba(185,88,63,.11),transparent 30rem),#f6f1e7; }
+      button,input { font:inherit; } button { -webkit-tap-highlight-color:transparent; }
+      .shell { width:min(760px,100%); max-width:100%; margin:0 auto; padding:22px 18px 120px; overflow-x:hidden; }
+      .eyebrow { margin:0 0 8px; color:#9c513c; font-size:13px; font-weight:700; letter-spacing:.08em; }
+      h1 { margin:0; font-family:Georgia,"STSong",serif; font-size:clamp(34px,9vw,52px); line-height:1.05; }
+      .lede { margin:12px 0 20px; color:#64716c; line-height:1.7; }
+      .notice,.panel { border:1px solid rgba(33,51,45,.12); border-radius:20px; background:rgba(255,253,247,.82); box-shadow:0 18px 44px rgba(62,49,30,.08); }
+      .notice { padding:12px 15px; color:#6d6256; font-size:13px; line-height:1.55; }
+      .panel { margin-top:16px; padding:18px; } label { display:block; margin-bottom:8px; font-size:13px; font-weight:700; }
+      .subject { width:100%; min-height:48px; padding:0 14px; border:1px solid #d9cfbd; border-radius:13px; outline:none; color:#22302b; background:#fffdf8; }
+      .subject:focus { border-color:#42675b; box-shadow:0 0 0 3px rgba(66,103,91,.12); }
+      .stats { display:flex; gap:10px; margin-top:14px; } .stat { flex:1; padding:12px; border-radius:14px; background:#ece4d5; }
+      .stat span { display:block; color:#6c756f; font-size:12px; } .stat strong { display:block; margin-top:4px; font-family:Georgia,serif; font-size:20px; }
+      .actions { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:16px; }
+      .pick { position:relative; min-height:116px; padding:18px 12px; display:grid; place-items:center; align-content:center; gap:7px; overflow:hidden; border:1px solid rgba(33,51,45,.12); border-radius:18px; background:#21332d; color:#fffdf8; text-align:center; }
+      .pick.secondary { background:#e8ddc7; color:#22302b; } .pick input { position:absolute; inset:0; opacity:0; } .pick b { font-size:17px; } .pick small { opacity:.72; }
+      .queue-head { display:flex; align-items:end; justify-content:space-between; gap:12px; margin:28px 2px 12px; } .queue-head h2 { margin:0; font-size:21px; } .queue-head span { color:#737d77; font-size:13px; }
+      .queue { display:grid; gap:10px; } .empty { padding:30px 18px; border:1px dashed #cfc3ae; border-radius:18px; color:#78817c; text-align:center; }
+      .item { display:grid; width:100%; max-width:100%; min-width:0; overflow:hidden; grid-template-columns:76px minmax(0,1fr) auto; grid-template-rows:auto auto; gap:8px 10px; align-items:center; padding:10px; border:1px solid rgba(33,51,45,.11); border-radius:16px; background:rgba(255,253,248,.8); }
+      .item img { grid-row:1/3; width:76px; height:76px; object-fit:cover; border-radius:11px; background:#e8ddc7; } .item>div { min-width:0; grid-row:1/3; } .item strong,.item small { display:block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .item strong { font-size:14px; } .item small { margin-top:6px; color:#727b76; } .item[data-status="failed"] small { color:#b04331; white-space:normal; overflow-wrap:anywhere; }
+      .retry { display:none; grid-column:3; min-height:38px; padding:0 10px; border:0; border-radius:12px; background:#dce7e1; color:#21332d; font-weight:700; } .item[data-status="failed"] .retry { display:block; }
+      .remove { grid-column:3; width:38px; height:38px; border:0; border-radius:50%; background:#eee5d6; color:#744b3e; }
+      .footer { position:fixed; z-index:10; left:0; right:0; bottom:0; padding:12px max(18px,env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)); border-top:1px solid rgba(33,51,45,.12); background:rgba(246,241,231,.92); backdrop-filter:blur(16px); }
+      .finish { width:min(724px,100%); min-height:52px; margin:auto; display:block; border:0; border-radius:15px; color:#fffdf8; background:#b9583f; font-weight:800; } .finish:disabled { opacity:.48; }
+      .error { margin-top:14px; padding:12px 14px; border-radius:12px; color:#8c3525; background:#f6ded6; line-height:1.5; } .hidden { display:none!important; }
+      @media(max-width:420px){.shell{padding-inline:14px}.panel{padding:14px}.actions{gap:9px}.pick{min-height:108px}}
+      @media(prefers-reduced-motion:no-preference){button{transition:transform 120ms ease,opacity 120ms ease}button:active,.pick:active{transform:scale(.98)}}
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <p class="eyebrow">MISTAKE TRAINER · 局域网采集</p><h1>把错题先收进来</h1>
+      <p class="lede">连续拍照或一次选择多张。图片会直接发送到你的电脑，不经过云端。</p>
+      <div class="notice">仅限可信的家庭 Wi‑Fi 或个人热点。公共 Wi‑Fi 不安全，也不受支持。</div>
+      <div id="error" class="error hidden" role="alert"></div>
+      <section class="panel" aria-label="采集设置">
+        <label for="subject">这一批的科目</label><input id="subject" class="subject" maxlength="40" placeholder="例如：数学（可以稍后补）" />
+        <div class="stats"><div class="stat"><span>本次已收到</span><strong id="receivedCount">0 张</strong></div><div class="stat"><span>会话剩余</span><strong id="remaining">--</strong></div></div>
+        <div class="actions">
+          <label class="pick"><b>连续拍照</b><small>调用手机相机</small><input id="cameraInput" type="file" accept="image/*,.heic,.heif" capture="environment" multiple /></label>
+          <label class="pick secondary"><b>相册多选</b><small>一次选择多张</small><input id="albumInput" type="file" accept="image/*,.heic,.heif" multiple /></label>
+        </div>
+      </section>
+      <div class="queue-head"><h2>上传队列</h2><span id="queueSummary">等待选择图片</span></div>
+      <section id="queue" class="queue" aria-live="polite"><div id="empty" class="empty">拍完就会自动压缩、去除定位信息并上传。</div></section>
+    </main>
+    <footer class="footer"><button id="finish" class="finish">结束拍摄，回电脑整理</button></footer>
+    <script>
+      (()=>{
+        const fragmentToken=location.hash.slice(1); if(fragmentToken)sessionStorage.setItem('captureLanToken',fragmentToken);
+        const token=fragmentToken||sessionStorage.getItem('captureLanToken')||''; if(fragmentToken)history.replaceState(null,'','/mobile/');
+        const state={items:[],active:0,nextSourceSequence:0,session:null,subjectTimer:0};
+        const queue=document.querySelector('#queue'),empty=document.querySelector('#empty'),errorBox=document.querySelector('#error'),subject=document.querySelector('#subject'),finish=document.querySelector('#finish'),count=document.querySelector('#receivedCount'),remaining=document.querySelector('#remaining'),queueSummary=document.querySelector('#queueSummary');
+        const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms)),nextFrame=()=>new Promise(resolve=>requestAnimationFrame(resolve));
+        const showError=message=>{errorBox.textContent=message;errorBox.classList.toggle('hidden',!message)};
+        const createClientId=()=>{if(window.crypto&&typeof window.crypto.randomUUID==='function')return window.crypto.randomUUID();const bytes=new Uint8Array(16);if(window.crypto&&typeof window.crypto.getRandomValues==='function')window.crypto.getRandomValues(bytes);else for(let index=0;index<bytes.length;index+=1)bytes[index]=Math.floor(Math.random()*256);bytes[6]=(bytes[6]&15)|64;bytes[8]=(bytes[8]&63)|128;const hex=Array.from(bytes).map(value=>value.toString(16).padStart(2,'0')).join('');return`${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`};
+        const api=async(path,options={})=>{const headers=new Headers(options.headers||{});headers.set('Authorization',`Bearer ${token}`);const response=await fetch(`/api/v1${path}`,{...options,headers});if(!response.ok){const detail=await response.json().catch(()=>({}));throw new Error(detail.message||`请求失败（${response.status}）`)}if(response.status===204)return null;return response.json()};
+        const refreshSession=async()=>{if(!token)throw new Error('二维码已失效，请回到电脑重新扫码。');const latest=await api('/session');state.session=latest;state.nextSourceSequence=Math.max(state.nextSourceSequence,latest.nextSourceSequence||0);if(document.activeElement!==subject)subject.value=latest.subject||'';count.textContent=`${latest.receivedItemCount} 张`;remaining.textContent=`${Math.max(0,Math.ceil((latest.expiresAtUtcMs-Date.now())/60000))} 分钟`;if(latest.state!=='collecting'){finish.disabled=true;throw new Error('这批拍摄已经结束，请回到电脑整理。')}};
+        const isHeic=file=>/heic|heif/i.test(file.type)||/\.(heic|heif)$/i.test(file.name);
+        let heic2anyLoader;
+        const loadHeic2any=()=>{if(typeof window.heic2any==='function')return Promise.resolve(window.heic2any);if(!heic2anyLoader)heic2anyLoader=new Promise((resolve,reject)=>{const script=document.createElement('script');script.src='/mobile/vendor/heic2any.js';script.async=true;script.onload=()=>{if(typeof window.heic2any==='function')resolve(window.heic2any);else{heic2anyLoader=undefined;script.remove();reject(new Error('HEIC 转换组件没有正确加载。'))}};script.onerror=()=>{heic2anyLoader=undefined;script.remove();reject(new Error('HEIC 转换组件加载失败，请保持手机与电脑在同一网络后重试。'))};document.head.append(script)});return heic2anyLoader};
+        const convertHeic=async file=>{const convert=await loadHeic2any();let result=await convert({blob:file,toType:'image/jpeg',quality:.9});if(Array.isArray(result))result=result[0];if(!(result instanceof Blob)||!result.size)throw new Error('这张 HEIC 照片无法转换。请在 iPhone“设置 → 相机 → 格式”中选择“兼容性最佳”后重试。');return result};
+        const loadImage=file=>new Promise((resolve,reject)=>{const url=URL.createObjectURL(file),image=new Image();image.onload=()=>{URL.revokeObjectURL(url);resolve(image)};image.onerror=()=>{URL.revokeObjectURL(url);reject(new Error('图片无法读取。'))};image.src=url});
+        const canvasBlob=(canvas,type,quality)=>new Promise((resolve,reject)=>canvas.toBlob(blob=>blob?resolve(blob):reject(new Error('图片转换失败。')),type,quality));
+        const normalize=async file=>{const heic=isHeic(file),input=heic?await convertHeic(file):file,image=await loadImage(input),scale=Math.min(1,4096/Math.max(image.naturalWidth,image.naturalHeight)),width=Math.max(1,Math.round(image.naturalWidth*scale)),height=Math.max(1,Math.round(image.naturalHeight*scale));if(width*height>80000000)throw new Error('图片像素过大。');const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;const type=!heic&&(file.type==='image/png'||file.type==='image/webp')?file.type:'image/jpeg',context=canvas.getContext('2d',{alpha:type!=='image/jpeg'});if(!context)throw new Error('浏览器无法处理图片。');context.drawImage(image,0,0,width,height);const blob=await canvasBlob(canvas,type,type==='image/jpeg'?.9:undefined);if(blob.size>25*1024*1024)throw new Error('转换后的图片仍超过 25 MB。');return{blob,type,width,height}};
+        const renderItem=item=>{const article=document.createElement('article');article.className='item';article.dataset.status=item.status;article.innerHTML='<img alt="" /><div><strong></strong><small></small></div><button class="retry">重试</button><button class="remove" aria-label="删除">×</button>';article.querySelector('img').src=item.preview;article.querySelector('strong').textContent=item.name;article.querySelector('small').textContent=item.message;article.querySelector('.retry').addEventListener('click',()=>retryItem(item));article.querySelector('.remove').addEventListener('click',()=>removeItem(item));item.element=article;queue.append(article)};
+        const updateItem=(item,status,message)=>{item.status=status;item.message=message;if(item.element){item.element.dataset.status=status;item.element.querySelector('small').textContent=message}renderSummary()};
+        const renderSummary=()=>{const waiting=state.items.filter(item=>item.status==='pending'||item.status==='uploading').length,failed=state.items.filter(item=>item.status==='failed').length;queueSummary.textContent=waiting?`${waiting} 张处理中`:failed?`${failed} 张需要重试或删除`:state.items.length?'本轮已上传':'等待选择图片';finish.disabled=state.active>0||waiting>0||!state.session||state.session.state!=='collecting';empty.classList.toggle('hidden',state.items.length>0)};
+        const upload=async item=>{updateItem(item,'uploading','正在上传…');let lastError;for(let attempt=0;attempt<4;attempt+=1){try{const result=await api(`/uploads/${item.clientId}`,{method:'PUT',headers:{'Content-Type':item.type,'X-Source-Name':item.safeName,'X-Source-Sequence':String(item.sourceSequence)},body:item.blob});item.serverId=result.itemId;updateItem(item,'done',result.duplicate?'已在电脑中，无需重复上传':'电脑已收到');await refreshSession();return}catch(error){lastError=error;if(attempt<3)await delay(800*(2**attempt))}}updateItem(item,'failed',lastError?.message||'上传失败，请重试。')};
+        const pump=()=>{while(state.active<2){const next=state.items.find(item=>item.status==='pending');if(!next)break;state.active+=1;upload(next).finally(()=>{state.active-=1;renderSummary();pump()})}renderSummary()};
+        const addFiles=async files=>{showError('');for(const file of files){const clientId=createClientId(),item={clientId,file,name:file.name||'手机照片',safeName:`mobile-${clientId}.${file.type==='image/png'?'png':file.type==='image/webp'?'webp':'jpg'}`,sourceSequence:state.nextSourceSequence++,status:'preparing',message:'已选中，正在处理图片…',preview:URL.createObjectURL(file),serverId:null};state.items.push(item);renderItem(item);renderSummary();await nextFrame();try{const normalized=await normalize(file);URL.revokeObjectURL(item.preview);Object.assign(item,normalized,{file:null});item.preview=URL.createObjectURL(normalized.blob);item.element.querySelector('img').src=item.preview;updateItem(item,'pending','等待上传');pump()}catch(error){updateItem(item,'failed',error?.message||'图片处理失败。')}await nextFrame()}renderSummary()};
+        const retryItem=async item=>{if(item.status!=='failed')return;showError('');if(item.file){updateItem(item,'preparing','正在重新处理图片…');try{const normalized=await normalize(item.file);Object.assign(item,normalized,{file:null});item.preview=URL.createObjectURL(normalized.blob);item.element.querySelector('img').src=item.preview}catch(error){updateItem(item,'failed',error?.message||'图片处理失败。');return}}updateItem(item,'pending','等待重新上传');pump()};
+        const removeItem=async item=>{if(item.status==='uploading')return;try{if(item.serverId)await api(`/items/${item.serverId}`,{method:'DELETE'});if(item.preview)URL.revokeObjectURL(item.preview);item.element?.remove();state.items=state.items.filter(candidate=>candidate!==item);await refreshSession();renderSummary()}catch(error){showError(error?.message||'删除失败。')}};
+        const handleFileSelection=event=>{const input=event.currentTarget,files=Array.from(input.files||[]);input.value='';if(!files.length)return;addFiles(files).catch(error=>showError(error?.message||'没有成功读取所选图片，请重试。'))};
+        document.querySelector('#cameraInput').addEventListener('change',handleFileSelection);document.querySelector('#albumInput').addEventListener('change',handleFileSelection);
+        subject.addEventListener('input',()=>{clearTimeout(state.subjectTimer);state.subjectTimer=setTimeout(async()=>{try{await api('/session',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({subject:subject.value})});await refreshSession()}catch(error){showError(error?.message||'科目没有保存。')}},450)});
+        finish.addEventListener('click',async()=>{finish.disabled=true;try{await api('/session/finish',{method:'POST'});sessionStorage.removeItem('captureLanToken');document.querySelectorAll('input').forEach(input=>{input.disabled=true});finish.textContent='已结束，请回到电脑整理'}catch(error){showError(error?.message||'没有结束成功。');finish.disabled=false}});
+        refreshSession().then(()=>{renderSummary();setInterval(()=>refreshSession().catch(error=>showError(error.message)),5000)}).catch(error=>{showError(error.message);finish.disabled=true});
+      })();
+    </script>
+  </body>
+</html>

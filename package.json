@@ -10,7 +10,9 @@
   "scripts": {
     "dev": "vite",
     "lint": "eslint . --max-warnings 0",
-    "build": "vue-tsc --noEmit && vite build",
+    "mobile:vendor": "node scripts/vendor-mobile-assets.js",
+    "mobile:vendor:check": "node scripts/vendor-mobile-assets.js --check",
+    "build": "pnpm mobile:vendor:check && vue-tsc --noEmit && vite build",
     "bindings:generate": ".\\scripts\\cargo-msvc.cmd run --manifest-path src-tauri\\Cargo.toml --bin mistake-trainer-next -- --export-bindings",
     "bindings:check": "pnpm bindings:generate && git diff --exit-code -- src/shared/api/bindings.ts",
     "preview": "vite preview",
@@ -19,7 +21,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "supabase:test": "supabase test db",
-    "tauri": "tauri"
+    "tauri": ".\\scripts\\tauri-msvc.cmd"
   },
   "dependencies": {
     "@lucide/vue": "^1.24.0",
@@ -43,6 +45,7 @@
     "eslint": "^9.39.2",
     "eslint-plugin-vue": "^10.7.0",
     "globals": "^16.5.0",
+    "heic2any": "0.0.4",
     "jsdom": "^29.1.1",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.54.0",

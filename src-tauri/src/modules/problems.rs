@@ -1,14 +1,26 @@
 use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
+    collections::{BTreeSet, HashMap},
+    io::{Cursor, Read},
+    path::{Component, Path, PathBuf},
 };
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rusqlite::{Connection, OptionalExtension, params};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use specta::Type;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::infrastructure::assets::{AssetCryptoError, encrypt_asset, plaintext_sha256};
+use crate::{
+    infrastructure::assets::{AssetCryptoError, decrypt_asset, encrypt_asset, plaintext_sha256},
+    modules::capture::MAX_CAPTURE_FILE_BYTES,
+};
+
+const MAX_ENCRYPTED_ASSET_BYTES: u64 = MAX_CAPTURE_FILE_BYTES + 64;
+const PREVIEW_MAX_DIMENSION: u32 = 1_600;
+const MAX_SOURCE_DIMENSION: u32 = 12_000;
+const MAX_SOURCE_PIXELS: u64 = 80_000_000;
+const TRASH_RETENTION_MILLIS: i64 = 30 * 86_400_000;
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -57,6 +69,93 @@ pub struct Problem {
     pub revision: i64,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ProblemStatusFilter {
+    Active,
+    Archived,
+    Trashed,
+}
+
+impl ProblemStatusFilter {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Archived => "archived",
+            Self::Trashed => "trashed",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ProblemListQuery {
+    pub account_id: String,
+    pub profile_id: String,
+    pub status: ProblemStatusFilter,
+    pub search: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ProblemSummary {
+    pub id: String,
+    pub subject: String,
+    pub note: String,
+    pub status: String,
+    pub question_asset_count: i32,
+    pub answer_asset_count: i32,
+    pub updated_at_utc_ms: f64,
+}
+
+#[derive(Clone, Debug)]
+pub struct ProblemDetailQuery {
+    pub account_id: String,
+    pub profile_id: String,
+    pub problem_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ProblemAssetPreview {
+    pub id: String,
+    pub role: String,
+    pub position: i32,
+    pub media_type: String,
+    pub data_url: String,
+}
+
+#[derive(Clone, Debug, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ProblemDetail {
+    pub id: String,
+    pub subject: String,
+    pub note: String,
+    pub status: String,
+    pub time_limit_seconds: Option<i32>,
+    pub updated_at_utc_ms: f64,
+    pub assets: Vec<ProblemAssetPreview>,
+}
+
+#[derive(Clone, Debug)]
+pub struct UpdateProblem {
+    pub account_id: String,
+    pub profile_id: String,
+    pub problem_id: String,
+    pub subject: String,
+    pub note: String,
+    pub time_limit_seconds: Option<i32>,
+    pub now_utc_ms: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct ChangeProblemStatus {
+    pub account_id: String,
+    pub profile_id: String,
+    pub problem_ids: Vec<String>,
+    pub target_status: ProblemStatusFilter,
+    pub now_utc_ms: i64,
+}
+
 #[derive(Debug, Error)]
 pub enum ProblemUseCaseError {
     #[error("learner profile was not found for this account")]
@@ -65,12 +164,359 @@ pub enum ProblemUseCaseError {
     MissingAsset,
     #[error("problem persistence failed")]
     Database(#[from] rusqlite::Error),
+    #[error("problem was not found for this account and profile")]
+    ProblemNotFound,
+    #[error("stored asset path is invalid")]
+    InvalidAssetPath,
+    #[error("stored asset is too large")]
+    AssetTooLarge,
+    #[error("stored asset image is invalid")]
+    InvalidAssetImage,
+    #[error("problem text is too long")]
+    InvalidText,
+    #[error("problem time limit must be between 1 and 86400 seconds")]
+    InvalidTimeLimit,
+    #[error("at least one problem must be selected")]
+    EmptySelection,
     #[error("asset encryption failed")]
     Crypto(#[from] AssetCryptoError),
     #[error("asset file operation failed")]
     File(#[from] std::io::Error),
     #[error("problem outbox serialization failed")]
     Serialization(#[from] serde_json::Error),
+}
+
+pub fn list_problem_summaries(
+    connection: &Connection,
+    query: ProblemListQuery,
+) -> Result<Vec<ProblemSummary>, ProblemUseCaseError> {
+    let search = query
+        .search
+        .unwrap_or_default()
+        .trim()
+        .chars()
+        .take(100)
+        .collect::<String>()
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    let mut statement = connection.prepare(
+        "SELECT p.id, p.subject, p.note, p.status,
+                SUM(CASE WHEN pa.role = 'question' THEN 1 ELSE 0 END),
+                SUM(CASE WHEN pa.role = 'answer' THEN 1 ELSE 0 END),
+                p.updated_at_utc_ms
+         FROM problems p
+         LEFT JOIN problem_assets pa ON pa.problem_id = p.id
+         WHERE p.account_id = ?1 AND p.profile_id = ?2 AND p.status = ?3
+           AND (?4 = '' OR p.subject LIKE '%' || ?4 || '%' ESCAPE '\\'
+                        OR p.note LIKE '%' || ?4 || '%' ESCAPE '\\')
+         GROUP BY p.id
+         ORDER BY p.updated_at_utc_ms DESC, p.id DESC",
+    )?;
+    let rows = statement.query_map(
+        params![
+            query.account_id,
+            query.profile_id,
+            query.status.as_str(),
+            search
+        ],
+        |row| {
+            Ok(ProblemSummary {
+                id: row.get(0)?,
+                subject: row.get(1)?,
+                note: row.get(2)?,
+                status: row.get(3)?,
+                question_asset_count: row.get(4)?,
+                answer_asset_count: row.get(5)?,
+                updated_at_utc_ms: row.get(6)?,
+            })
+        },
+    )?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(ProblemUseCaseError::Database)
+}
+
+pub fn get_problem_detail(
+    connection: &Connection,
+    blob_root: &Path,
+    key: &[u8; 32],
+    query: ProblemDetailQuery,
+) -> Result<ProblemDetail, ProblemUseCaseError> {
+    let mut detail = connection
+        .query_row(
+            "SELECT id, subject, note, status, time_limit_seconds, updated_at_utc_ms
+             FROM problems
+             WHERE id = ?1 AND account_id = ?2 AND profile_id = ?3",
+            params![query.problem_id, query.account_id, query.profile_id],
+            |row| {
+                Ok(ProblemDetail {
+                    id: row.get(0)?,
+                    subject: row.get(1)?,
+                    note: row.get(2)?,
+                    status: row.get(3)?,
+                    time_limit_seconds: row.get(4)?,
+                    updated_at_utc_ms: row.get(5)?,
+                    assets: Vec::new(),
+                })
+            },
+        )
+        .optional()?
+        .ok_or(ProblemUseCaseError::ProblemNotFound)?;
+
+    let mut statement = connection.prepare(
+        "SELECT a.id, pa.role, pa.position, a.media_type, a.encrypted_path
+         FROM problem_assets pa
+         JOIN assets a ON a.id = pa.asset_id
+         WHERE pa.problem_id = ?1 AND a.account_id = ?2
+         ORDER BY CASE pa.role WHEN 'question' THEN 0 ELSE 1 END, pa.position",
+    )?;
+    let rows = statement
+        .query_map(params![detail.id, query.account_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i32>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    detail.assets = rows
+        .into_iter()
+        .map(|(id, role, position, media_type, encrypted_path)| {
+            let bytes = read_decrypted_asset(blob_root, key, &encrypted_path)?;
+            let (preview_media_type, preview_bytes) = make_preview(&bytes, &media_type)?;
+            Ok(ProblemAssetPreview {
+                id,
+                role,
+                position,
+                media_type: preview_media_type.to_owned(),
+                data_url: format!(
+                    "data:{preview_media_type};base64,{}",
+                    STANDARD.encode(preview_bytes)
+                ),
+            })
+        })
+        .collect::<Result<Vec<_>, ProblemUseCaseError>>()?;
+    Ok(detail)
+}
+
+fn read_decrypted_asset(
+    blob_root: &Path,
+    key: &[u8; 32],
+    encrypted_path: &str,
+) -> Result<Vec<u8>, ProblemUseCaseError> {
+    let relative = Path::new(encrypted_path);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(ProblemUseCaseError::InvalidAssetPath);
+    }
+    let file = std::fs::File::open(blob_root.join(relative))?;
+    let mut reader = file.take(MAX_ENCRYPTED_ASSET_BYTES + 1);
+    let mut encrypted = Vec::new();
+    reader.read_to_end(&mut encrypted)?;
+    if u64::try_from(encrypted.len()).unwrap_or(u64::MAX) > MAX_ENCRYPTED_ASSET_BYTES {
+        return Err(ProblemUseCaseError::AssetTooLarge);
+    }
+    decrypt_asset(&encrypted, key).map_err(ProblemUseCaseError::Crypto)
+}
+
+fn make_preview<'a>(
+    bytes: &'a [u8],
+    media_type: &str,
+) -> Result<(&'static str, Vec<u8>), ProblemUseCaseError> {
+    let format = match media_type {
+        "image/png" => image::ImageFormat::Png,
+        "image/jpeg" => image::ImageFormat::Jpeg,
+        "image/webp" => image::ImageFormat::WebP,
+        _ => return Err(ProblemUseCaseError::InvalidAssetImage),
+    };
+    let (width, height) = image::ImageReader::with_format(Cursor::new(bytes), format)
+        .into_dimensions()
+        .map_err(|_| ProblemUseCaseError::InvalidAssetImage)?;
+    if width == 0
+        || height == 0
+        || width > MAX_SOURCE_DIMENSION
+        || height > MAX_SOURCE_DIMENSION
+        || u64::from(width) * u64::from(height) > MAX_SOURCE_PIXELS
+    {
+        return Err(ProblemUseCaseError::InvalidAssetImage);
+    }
+    let image = image::load_from_memory_with_format(bytes, format)
+        .map_err(|_| ProblemUseCaseError::InvalidAssetImage)?;
+    if image.width() <= PREVIEW_MAX_DIMENSION && image.height() <= PREVIEW_MAX_DIMENSION {
+        return Ok((media_type_for(format), bytes.to_vec()));
+    }
+    let thumbnail = image.thumbnail(PREVIEW_MAX_DIMENSION, PREVIEW_MAX_DIMENSION);
+    let mut output = Cursor::new(Vec::new());
+    thumbnail
+        .write_to(&mut output, image::ImageFormat::Png)
+        .map_err(|_| ProblemUseCaseError::InvalidAssetImage)?;
+    Ok(("image/png", output.into_inner()))
+}
+
+const fn media_type_for(format: image::ImageFormat) -> &'static str {
+    match format {
+        image::ImageFormat::Png => "image/png",
+        image::ImageFormat::Jpeg => "image/jpeg",
+        image::ImageFormat::WebP => "image/webp",
+        _ => "application/octet-stream",
+    }
+}
+
+pub fn update_problem(
+    connection: &mut Connection,
+    input: UpdateProblem,
+) -> Result<(), ProblemUseCaseError> {
+    let subject = input.subject.trim();
+    let note = input.note.trim();
+    if subject.chars().count() > 40 || note.chars().count() > 2_000 {
+        return Err(ProblemUseCaseError::InvalidText);
+    }
+    if input
+        .time_limit_seconds
+        .is_some_and(|seconds| !(1..=86_400).contains(&seconds))
+    {
+        return Err(ProblemUseCaseError::InvalidTimeLimit);
+    }
+    let transaction = connection.transaction()?;
+    let base_revision = transaction
+        .query_row(
+            "SELECT revision FROM problems WHERE id = ?1 AND account_id = ?2 AND profile_id = ?3",
+            params![input.problem_id, input.account_id, input.profile_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+        .ok_or(ProblemUseCaseError::ProblemNotFound)?;
+    let new_revision = base_revision + 1;
+    let changed = transaction.execute(
+        "UPDATE problems
+         SET subject = ?1, note = ?2, time_limit_seconds = ?3, updated_at_utc_ms = ?4, revision = ?5
+         WHERE id = ?6 AND account_id = ?7 AND profile_id = ?8 AND revision = ?9",
+        params![
+            subject,
+            note,
+            input.time_limit_seconds,
+            input.now_utc_ms,
+            new_revision,
+            input.problem_id,
+            input.account_id,
+            input.profile_id,
+            base_revision
+        ],
+    )?;
+    if changed != 1 {
+        return Err(ProblemUseCaseError::ProblemNotFound);
+    }
+    let payload = serde_json::to_string(&serde_json::json!({
+        "id": input.problem_id,
+        "subject": subject,
+        "note": note,
+        "timeLimitSeconds": input.time_limit_seconds,
+        "baseRevision": base_revision,
+        "revision": new_revision,
+        "updatedAtUtcMs": input.now_utc_ms,
+    }))?;
+    transaction.execute(
+        "INSERT INTO sync_operations(id, account_id, profile_id, entity_type, entity_id, operation, payload_json, status, attempt_count, created_at_utc_ms, next_attempt_at_utc_ms)
+         VALUES(?1, ?2, ?3, 'problem', ?4, 'upsert', ?5, 'pending', 0, ?6, ?6)",
+        params![
+            Uuid::now_v7().to_string(),
+            input.account_id,
+            input.profile_id,
+            input.problem_id,
+            payload,
+            input.now_utc_ms
+        ],
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+pub fn change_problem_status(
+    connection: &mut Connection,
+    input: ChangeProblemStatus,
+) -> Result<usize, ProblemUseCaseError> {
+    let problem_ids = input.problem_ids.into_iter().collect::<BTreeSet<_>>();
+    if problem_ids.is_empty() {
+        return Err(ProblemUseCaseError::EmptySelection);
+    }
+    let transaction = connection.transaction()?;
+    for problem_id in &problem_ids {
+        let current = transaction
+            .query_row(
+                "SELECT status, revision FROM problems
+                 WHERE id = ?1 AND account_id = ?2 AND profile_id = ?3",
+                params![problem_id, input.account_id, input.profile_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()?
+            .ok_or(ProblemUseCaseError::ProblemNotFound)?;
+        let next_revision = current.1 + 1;
+        let target = input.target_status.as_str();
+        transaction.execute(
+            "UPDATE problems SET status = ?1, updated_at_utc_ms = ?2, revision = ?3 WHERE id = ?4",
+            params![target, input.now_utc_ms, next_revision, problem_id],
+        )?;
+        let purge_after_utc_ms = input.now_utc_ms + TRASH_RETENTION_MILLIS;
+        let operation = if target == "trashed" {
+            transaction.execute(
+                "INSERT INTO tombstones(id, account_id, profile_id, entity_type, entity_id, deleted_at_utc_ms, purge_after_utc_ms, revision)
+                 VALUES(?1, ?2, ?3, 'problem', ?4, ?5, ?6, ?7)
+                 ON CONFLICT(entity_type, entity_id) DO UPDATE SET deleted_at_utc_ms = excluded.deleted_at_utc_ms, purge_after_utc_ms = excluded.purge_after_utc_ms, revision = excluded.revision",
+                params![
+                    Uuid::now_v7().to_string(), input.account_id, input.profile_id, problem_id,
+                    input.now_utc_ms, purge_after_utc_ms, next_revision
+                ],
+            )?;
+            "delete"
+        } else {
+            transaction.execute(
+                "DELETE FROM tombstones WHERE entity_type = 'problem' AND entity_id = ?1",
+                [problem_id],
+            )?;
+            if current.0 == "trashed" {
+                "restore"
+            } else {
+                "upsert"
+            }
+        };
+        let payload = if target == "trashed" {
+            serde_json::json!({
+                "id": problem_id,
+                "status": target,
+                "baseRevision": current.1,
+                "revision": next_revision,
+                "deletedAtUtcMs": input.now_utc_ms,
+                "purgeAfterUtcMs": purge_after_utc_ms,
+            })
+        } else {
+            serde_json::json!({
+                "id": problem_id,
+                "status": target,
+                "baseRevision": current.1,
+                "revision": next_revision,
+                "restoredAtUtcMs": if current.0 == "trashed" { Some(input.now_utc_ms) } else { None },
+                "updatedAtUtcMs": input.now_utc_ms,
+            })
+        };
+        let payload = serde_json::to_string(&payload)?;
+        transaction.execute(
+            "INSERT INTO sync_operations(id, account_id, profile_id, entity_type, entity_id, operation, payload_json, status, attempt_count, created_at_utc_ms, next_attempt_at_utc_ms)
+             VALUES(?1, ?2, ?3, 'problem', ?4, ?5, ?6, 'pending', 0, ?7, ?7)",
+            params![
+                Uuid::now_v7().to_string(), input.account_id, input.profile_id, problem_id,
+                operation, payload, input.now_utc_ms
+            ],
+        )?;
+    }
+    transaction.commit()?;
+    Ok(problem_ids.len())
 }
 
 #[derive(Serialize)]

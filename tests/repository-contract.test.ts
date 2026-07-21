@@ -31,4 +31,24 @@ describe('repository quality gates', () => {
       expect(workflow).toContain(command)
     }
   })
+
+  it('builds the frontend before compiling Tauri test targets', () => {
+    const workflow = readFileSync(resolve('.github/workflows/ci.yml'), 'utf8')
+    const frontendBuild = workflow.indexOf('- run: pnpm build')
+    const rustTests = workflow.indexOf('cargo test --all-targets')
+
+    expect(frontendBuild).toBeGreaterThan(-1)
+    expect(rustTests).toBeGreaterThan(frontendBuild)
+  })
+
+  it('routes desktop commands through the reproducible MSVC toolchain wrapper', () => {
+    const packageJson = JSON.parse(readFileSync(resolve('package.json'), 'utf8')) as {
+      scripts: Record<string, string>
+    }
+    const wrapper = readFileSync(resolve('scripts/tauri-msvc.cmd'), 'utf8')
+
+    expect(packageJson.scripts.tauri).toContain('scripts\\tauri-msvc.cmd')
+    expect(wrapper).toContain('pnpm exec tauri')
+    expect(wrapper).toContain('strawberry-perl')
+  })
 })

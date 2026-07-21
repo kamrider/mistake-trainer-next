@@ -2,25 +2,37 @@
 import {
   BookOpen,
   ChartNoAxesColumnIncreasing,
-  CircleUserRound,
   Cloud,
   Inbox,
   LayoutDashboard,
   Settings,
   SquareStack,
 } from '@lucide/vue'
+import ProfileSwitcher from '../modules/profiles/components/ProfileSwitcher.vue'
+import type { ProfileSummary } from '../shared/api/bindings'
 
 export type AppPage = 'dashboard' | 'inbox' | 'library' | 'review' | 'report' | 'settings'
 
 defineProps<{
-  learnerName: string
+  profiles: ProfileSummary[]
+  activeProfileId: string
+  profileBusy: boolean
+  profileError: string
   activePage: AppPage
   systemStatus: string
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   navigate: [page: AppPage]
+  profileSelect: [profileId: string]
+  profileCreate: [name: string]
+  profileRename: [profileId: string, name: string]
+  profileRetry: []
 }>()
+
+function emitProfileRename(profileId: string, name: string) {
+  emit('profileRename', profileId, name)
+}
 
 const navigation = [
   { id: 'dashboard', label: '训练台', icon: LayoutDashboard },
@@ -71,17 +83,16 @@ const navigation = [
             aria-hidden="true"
           /><span>{{ systemStatus }}</span>
         </div>
-        <button
-          class="profile-button"
-          type="button"
-          :aria-label="`当前学习档案：${learnerName}`"
-        >
-          <CircleUserRound
-            :size="21"
-            aria-hidden="true"
-          />
-          <span><strong>{{ learnerName }}</strong><small>私人学习档案</small></span>
-        </button>
+        <ProfileSwitcher
+          :profiles="profiles"
+          :active-profile-id="activeProfileId"
+          :busy="profileBusy"
+          :error-message="profileError"
+          @select="$emit('profileSelect', $event)"
+          @create="$emit('profileCreate', $event)"
+          @rename="emitProfileRename"
+          @retry="$emit('profileRetry')"
+        />
       </div>
     </aside>
     <section class="app-content">
@@ -106,10 +117,6 @@ nav { display: grid; gap: 5px; }
 .rail-footer { display: grid; gap: 12px; margin-top: auto; }
 .sync-state { display: flex; gap: 7px; align-items: center; padding: 0 11px; color: var(--ink-muted); font-size: 12px; }
 .sync-state svg { color: #657f70; }
-.profile-button { display: flex; gap: 10px; align-items: center; width: 100%; padding: 12px; border: 1px solid var(--line); border-radius: 13px; background: rgba(255,253,247,.66); cursor: pointer; text-align: left; }
-.profile-button strong, .profile-button small { display: block; }
-.profile-button strong { font-size: 13px; }
-.profile-button small { margin-top: 3px; color: var(--ink-muted); font-size: 10px; }
 .app-content { min-width: 0; }
 @media (max-width: 760px) { .app-frame { grid-template-columns: 1fr; padding-bottom: 68px; } .side-rail { position: fixed; z-index: 20; top: auto; right: 0; bottom: 0; left: 0; height: 68px; padding: 8px 10px; border-top: 1px solid var(--line); border-right: 0; } .brand, .rail-footer { display: none; } nav { display: grid; grid-template-columns: repeat(6,1fr); } .nav-item { justify-content: center; min-height: 50px; padding: 0; } .nav-item span { display: none; } }
 </style>

@@ -1,0 +1,678 @@
+<script setup lang="ts">
+import { isTauri } from '@tauri-apps/api/core'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import CaptureWorkspace from '../../modules/capture/components/CaptureWorkspace.vue'
+import {
+  commands,
+  type CaptureBatchDetail,
+  type CaptureBatchSummary,
+  type CaptureDraftSummary,
+  type CaptureLanAddress,
+  type CaptureLanPreflight,
+  type CaptureLanSession,
+  type CaptureLayoutMode,
+  type SubjectPreferences,
+} from '../../shared/api/bindings'
+import { normalizeAppResult } from '../../shared/api/normalize-result'
+
+const batches = ref<CaptureBatchSummary[]>([])
+const detail = ref<CaptureBatchDetail>()
+const busy = ref(false)
+const errorMessage = ref('')
+const saveState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
+const commitMessage = ref('')
+const previews = reactive<Record<string, string>>({})
+const lanAddresses = ref<CaptureLanAddress[]>([])
+const lanPreflight = ref<CaptureLanPreflight>()
+const lanPreflightBusy = ref(false)
+const lanSession = ref<CaptureLanSession>()
+const subjectPreferences = ref<SubjectPreferences>({
+  enabledSubjects: ['语文', '数学', '英语', '政治', '历史', '地理', '物理', '化学', '生物'],
+  customSubjects: [],
+  captureSoundEnabled: true,
+})
+const previewOrder: string[] = []
+const desktopAvailable = isTauri()
+let unlisten: UnlistenFn | undefined
+let refreshTimer: ReturnType<typeof setTimeout> | undefined
+let lanPollTimer: ReturnType<typeof setInterval> | undefined
+let viewMounted = false
+type LanPreflightCommandResult = Awaited<ReturnType<typeof commands.captureLanPreflight>>
+let lanPreflightRequest: Promise<LanPreflightCommandResult> | undefined
+
+function showError(message: string) {
+  errorMessage.value = message
+}
+
+async function loadBatches() {
+  if (!desktopAvailable) return
+  try {
+    const result = normalizeAppResult(await commands.captureBatchList())
+    if (result.ok) batches.value = result.data
+    else showError(result.error.userMessage)
+  }
+  catch {
+    showError('采集箱连接中断，请重新打开应用后重试。')
+  }
+}
+
+async function loadSubjectPreferences() {
+  if (!desktopAvailable) return
+  try {
+    const result = normalizeAppResult(await commands.subjectPreferencesGet())
+    if (result.ok) subjectPreferences.value = result.data
+    else showError(result.error.userMessage)
+  }
+  catch {
+    showError('科目配置暂时无法读取，当前仍可使用内置九科。')
+  }
+}
+
+async function loadDetail(batchId: string) {
+  if (!desktopAvailable) return
+  try {
+    const result = normalizeAppResult(await commands.captureBatchDetail(batchId))
+    if (result.ok) detail.value = result.data
+    else showError(result.error.userMessage)
+  }
+  catch {
+    showError('没有读取到这个采集批次，请返回后重试。')
+  }
+}
+
+async function createBatch(subject: string) {
+  if (!desktopAvailable || busy.value) return
+  busy.value = true
+  errorMessage.value = ''
+  try {
+    const result = normalizeAppResult(await commands.captureBatchCreate({ subject }))
+    if (result.ok) {
+      await loadBatches()
+      await loadDetail(result.data.id)
+    }
+    else showError(result.error.userMessage)
+  }
+  catch {
+    showError('新批次没有创建成功，请稍后重试。')
+  }
+  finally {
+    busy.value = false
+  }
+}
+
+async function discardBatch(batchId: string) {
+  if (!desktopAvailable || busy.value) return
+  if (lanSession.value?.batchId === batchId) await stopMobileCapture(true)
+  busy.value = true
+  try {
+    const result = normalizeAppResult(await commands.captureBatchDiscard(batchId))
+    if (result.ok) {
+      if (detail.value?.batch.id === batchId) detail.value = undefined
+      await loadBatches()
+    }
+    else showError(result.error.userMessage)
+  }
+  catch {
+    showError('批次没有删除成功，原有图片仍会保留。')
+  }
+  finally {
+    busy.value = false
+  }
+}
+
+async function importSelect() {
+  const batchId = detail.value?.batch.id
+  if (!desktopAvailable || !batchId || busy.value) return
+  busy.value = true
+  errorMessage.value = ''
+  try {
+    const result = normalizeAppResult(await commands.captureImportSelect(batchId))
+    if (!result.ok) showError(result.error.userMessage)
+    await loadDetail(batchId)
+  }
+  catch {
+    showError('图片选择没有完成，请稍后重试。')
+  }
+  finally {
+    busy.value = false
+  }
+}
+
+async function importFiles(files: File[]) {
+  const batchId = detail.value?.batch.id
+  if (!desktopAvailable || !batchId || busy.value || !files.length) return
+  busy.value = true
+  errorMessage.value = ''
+  try {
+    for (const file of files.slice(0, 150)) {
+      const bytes = [...new Uint8Array(await file.arrayBuffer())]
+      const result = normalizeAppResult(await commands.captureImportBytes({
+        batchId,
+        clientUploadId: crypto.randomUUID(),
+        sourceName: file.name || 'clipboard-image',
+        sourceSequence: null,
+        bytes,
+      }))
+      if (!result.ok) {
+        showError(`${file.name || '图片'}：${result.error.userMessage}`)
+        break
+      }
+    }
+    await loadDetail(batchId)
+  }
+  catch {
+    showError('拖入或粘贴的图片没有全部保存；已成功的图片仍在批次中。')
+    await loadDetail(batchId)
+  }
+  finally {
+    busy.value = false
+  }
+}
+
+async function finishCollecting(subject: string) {
+  const current = detail.value
+  if (!desktopAvailable || !current || busy.value) return
+  if (lanSession.value?.batchId === current.batch.id) await stopMobileCapture(true)
+  busy.value = true
+  try {
+    const result = normalizeAppResult(await commands.captureBatchUpdate({
+      batchId: current.batch.id,
+      expectedRevision: current.batch.revision,
+      subject,
+      finishCollecting: true,
+    }))
+    if (result.ok) await loadDetail(current.batch.id)
+    else showError(result.error.userMessage)
+  }
+  catch {
+    showError('没有结束采集，请稍后重试。')
+  }
+  finally {
+    busy.value = false
+  }
+}
+
+async function applyLayout(mode: CaptureLayoutMode, questions: number, answers: number, splitIndex: number | null) {
+  const current = detail.value
+  if (!desktopAvailable || !current || busy.value) return
+  busy.value = true
+  try {
+    const result = normalizeAppResult(await commands.captureLayoutApply({
+      batchId: current.batch.id,
+      expectedRevision: current.batch.revision,
+      mode,
+      questionImagesPerDraft: questions,
+      answerImagesPerDraft: answers,
+      splitIndex,
+    }))
+    if (result.ok) detail.value = result.data
+    else showError(result.error.userMessage)
+  }
+  catch {
+    showError('整理模板没有应用，原有分组仍会保留。')
+  }
+  finally {
+    busy.value = false
+  }
+}
+
+async function assignBatchSubject(subject: string) {
+  const current = detail.value
+  if (!desktopAvailable || !current || busy.value || !subject.trim()) return
+  busy.value = true
+  saveState.value = 'saving'
+  errorMessage.value = ''
+  try {
+    const result = normalizeAppResult(await commands.captureBatchAssignSubject({
+      batchId: current.batch.id,
+      expectedRevision: current.batch.revision,
+      subject,
+    }))
+    if (result.ok) {
+      detail.value = result.data
+      saveState.value = 'saved'
+    }
+    else {
+      saveState.value = 'error'
+      showError(result.error.userMessage)
+      if (result.error.code === 'capture_revision_conflict') await loadDetail(current.batch.id)
+    }
+  }
+  catch {
+    saveState.value = 'error'
+    showError('整批科目没有保存成功，原有题卡保持不变。')
+  }
+  finally {
+    busy.value = false
+  }
+}
+
+async function moveItem(target: { itemId: string, targetDraftId: string | null, targetRole: 'question' | 'answer' | null, targetPosition: number }) {
+  const current = detail.value
+  if (!desktopAvailable || !current || busy.value) return
+  busy.value = true
+  saveState.value = 'saving'
+  try {
+    const result = normalizeAppResult(await commands.captureItemMove({
+      batchId: current.batch.id,
+      expectedRevision: current.batch.revision,
+      ...target,
+    }))
+    if (result.ok) {
+      detail.value = result.data
+      saveState.value = 'saved'
+    }
+    else {
+      saveState.value = 'error'
+      showError(result.error.userMessage)
+      if (result.error.code === 'capture_revision_conflict') await loadDetail(current.batch.id)
+    }
+  }
+  catch {
+    saveState.value = 'error'
+    showError('图片没有移动成功，请刷新批次后重试。')
+  }
+  finally {
+    busy.value = false
+  }
+}
+
+async function stageItemRole(itemId: string, stagedRole: 'question' | 'answer') {
+  const current = detail.value
+  if (!desktopAvailable || !current || busy.value) return
+  busy.value = true
+  saveState.value = 'saving'
+  errorMessage.value = ''
+  try {
+    const result = normalizeAppResult(await commands.captureItemStageRole({
+      batchId: current.batch.id,
+      expectedRevision: current.batch.revision,
+      itemId,
+      stagedRole,
+    }))
+    if (result.ok) {
+      detail.value = result.data
+      saveState.value = 'saved'
+    }
+    else {
+      saveState.value = 'error'
+      showError(result.error.userMessage)
+      if (result.error.code === 'capture_revision_conflict') await loadDetail(current.batch.id)
+    }
+  }
+  catch {
+    saveState.value = 'error'
+    showError('图片角色没有保存成功，请重试。')
+  }
+  finally {
+    busy.value = false
+  }
+}
+
+async function mergeCard(itemIds: string[], targetDraftId: string | null, newDraftSubject: string | null) {
+  const current = detail.value
+  if (!desktopAvailable || !current || busy.value || !itemIds.length) return
+  busy.value = true
+  saveState.value = 'saving'
+  errorMessage.value = ''
+  try {
+    const result = normalizeAppResult(await commands.captureCardMerge({
+      batchId: current.batch.id,
+      expectedRevision: current.batch.revision,
+      targetDraftId,
+      itemIds,
+      newDraftSubject,
+    }))
+    if (result.ok) {
+      detail.value = result.data
+      saveState.value = 'saved'
+    }
+    else {
+      saveState.value = 'error'
+      showError(result.error.userMessage)
+      if (result.error.code === 'capture_revision_conflict') await loadDetail(current.batch.id)
+    }
+  }
+  catch {
+    saveState.value = 'error'
+    showError('题卡没有保存成功，图片仍保留在原位置。')
+  }
+  finally {
+    busy.value = false
+  }
+}
+
+async function deleteDraft(draftId: string) {
+  const current = detail.value
+  if (!desktopAvailable || !current || busy.value) return
+  busy.value = true
+  saveState.value = 'saving'
+  errorMessage.value = ''
+  try {
+    const result = normalizeAppResult(await commands.captureDraftDelete(
+      current.batch.id,
+      current.batch.revision,
+      draftId,
+    ))
+    if (result.ok) {
+      detail.value = result.data
+      saveState.value = 'saved'
+    }
+    else {
+      saveState.value = 'error'
+      showError(result.error.userMessage)
+      if (result.error.code === 'capture_revision_conflict') await loadDetail(current.batch.id)
+    }
+  }
+  catch {
+    saveState.value = 'error'
+    showError('题卡没有撤销成功，原有图片和分组仍会保留。')
+  }
+  finally {
+    busy.value = false
+  }
+}
+
+async function updateDraft(draft: CaptureDraftSummary, subject: string, tags: string[], note: string) {
+  const current = detail.value
+  if (!desktopAvailable || !current || busy.value) return
+  busy.value = true
+  saveState.value = 'saving'
+  try {
+    const result = normalizeAppResult(await commands.captureDraftUpdate({
+      batchId: current.batch.id,
+      expectedRevision: current.batch.revision,
+      draftId: draft.id,
+      subject,
+      tags,
+      note,
+    }))
+    if (result.ok) {
+      detail.value = result.data
+      saveState.value = 'saved'
+    }
+    else {
+      saveState.value = 'error'
+      showError(result.error.userMessage)
+    }
+  }
+  catch {
+    saveState.value = 'error'
+    showError('草稿文字没有保存成功，请重试。')
+  }
+  finally {
+    busy.value = false
+  }
+}
+
+async function removeItem(itemId: string) {
+  const current = detail.value
+  if (!desktopAvailable || !current || busy.value) return
+  if (!window.confirm('删除这张采集图片？如果没有其他引用，对应的加密资产也会被清理。')) return
+  busy.value = true
+  try {
+    const result = normalizeAppResult(await commands.captureItemRemove(current.batch.id, current.batch.revision, itemId))
+    if (result.ok) {
+      detail.value = result.data
+      delete previews[itemId]
+    }
+    else showError(result.error.userMessage)
+  }
+  catch {
+    showError('图片没有删除成功。')
+  }
+  finally {
+    busy.value = false
+  }
+}
+
+async function commitReady() {
+  const current = detail.value
+  if (!desktopAvailable || !current || busy.value) return
+  busy.value = true
+  commitMessage.value = ''
+  try {
+    const result = normalizeAppResult(await commands.captureCommitReady(current.batch.id, current.batch.revision))
+    if (result.ok) {
+      commitMessage.value = result.data.committedCount
+        ? `已将 ${result.data.committedCount} 道题加入题库。`
+        : '没有可加入题库的完整题卡。'
+      await loadDetail(current.batch.id)
+      await loadBatches()
+    }
+    else showError(result.error.userMessage)
+  }
+  catch {
+    showError('批量入库没有完成，所有草稿仍保持原样，可以直接重试。')
+  }
+  finally {
+    busy.value = false
+  }
+}
+
+async function loadPreview(itemId: string) {
+  const batchId = detail.value?.batch.id
+  if (!desktopAvailable || !batchId || previews[itemId]) return
+  try {
+    const result = normalizeAppResult(await commands.captureItemPreview(batchId, itemId))
+    if (!result.ok) return
+    previews[itemId] = result.data.dataUrl
+    previewOrder.push(itemId)
+    while (previewOrder.length > 40) {
+      const expired = previewOrder.shift()
+      if (expired && expired !== itemId) delete previews[expired]
+    }
+  }
+  catch {
+    // A failed thumbnail must not interrupt organizing the rest of the batch.
+  }
+}
+
+async function requestLanPreflight(): Promise<LanPreflightCommandResult> {
+  if (lanPreflightRequest) return lanPreflightRequest
+  const request = commands.captureLanPreflight()
+  lanPreflightRequest = request
+  try {
+    return await request
+  }
+  finally {
+    if (lanPreflightRequest === request) lanPreflightRequest = undefined
+  }
+}
+
+async function loadLanAddresses(): Promise<CaptureLanAddress[]> {
+  if (!desktopAvailable) return []
+  try {
+    const result = normalizeAppResult(await commands.captureLanAddresses())
+    if (!viewMounted) return []
+    if (result.ok) {
+      lanAddresses.value = result.data
+      return result.data
+    }
+  }
+  catch {
+    if (viewMounted) lanAddresses.value = []
+  }
+  return []
+}
+
+async function loadLanPreflight(): Promise<CaptureLanPreflight | undefined> {
+  if (!desktopAvailable) return lanPreflight.value
+  lanPreflightBusy.value = true
+  try {
+    const result = normalizeAppResult(await requestLanPreflight())
+    if (!viewMounted) return undefined
+    if (result.ok) {
+      lanPreflight.value = result.data
+      return result.data
+    }
+    lanPreflight.value = undefined
+    showError(result.error.userMessage)
+  }
+  catch {
+    if (viewMounted) {
+      lanPreflight.value = undefined
+      showError('没有读取到 Windows 手机连接权限，请重新检测。')
+    }
+  }
+  finally {
+    if (viewMounted) lanPreflightBusy.value = false
+  }
+  return undefined
+}
+
+async function requestLanPermission(): Promise<CaptureLanPreflight | undefined> {
+  if (!desktopAvailable) return undefined
+  lanPreflightBusy.value = true
+  try {
+    const result = normalizeAppResult(await commands.captureLanFirewallRepair())
+    if (result.ok) {
+      lanPreflight.value = result.data
+      return result.data
+    }
+    showError(result.error.userMessage)
+  }
+  catch {
+    showError('Windows 授权没有完成；下次点击“手机扫码”时会再次请求。')
+  }
+  finally {
+    if (viewMounted) lanPreflightBusy.value = false
+  }
+  return undefined
+}
+
+async function loadLanStatus() {
+  if (!desktopAvailable) return
+  try {
+    const result = normalizeAppResult(await commands.captureLanStatus())
+    if (result.ok) lanSession.value = result.data ?? undefined
+  }
+  catch {
+    lanSession.value = undefined
+  }
+}
+
+async function startMobileCapture(selectedAddress: string | null) {
+  const requestedBatchId = detail.value?.batch.id
+  if (!desktopAvailable || !requestedBatchId || busy.value) return
+  busy.value = true
+  errorMessage.value = ''
+  try {
+    let preflight = await loadLanPreflight()
+    if (preflight?.needsFirewallRepair) preflight = await requestLanPermission()
+    const current = detail.value
+    if (!preflight?.canStart || !current || current.batch.id !== requestedBatchId) return
+    const addresses = await loadLanAddresses()
+    const currentAddress = selectedAddress && addresses.some(address => address.address === selectedAddress)
+      ? selectedAddress
+      : addresses[0]?.address ?? null
+    const result = normalizeAppResult(await commands.captureLanStart({
+      batchId: current.batch.id,
+      selectedAddress: currentAddress,
+    }))
+    if (result.ok) lanSession.value = result.data
+    else showError(result.error.userMessage)
+  }
+  catch {
+    showError('手机采集服务没有启动成功，请检查 Wi‑Fi 后重试。')
+  }
+  finally {
+    busy.value = false
+  }
+}
+
+async function stopMobileCapture(silent = false) {
+  if (!desktopAvailable) return
+  try {
+    const result = normalizeAppResult(await commands.captureLanStop())
+    if (result.ok) lanSession.value = undefined
+    else if (!silent) showError(result.error.userMessage)
+  }
+  catch {
+    if (!silent) showError('手机采集服务没有停止成功；退出应用会强制关闭端口。')
+  }
+}
+
+function handlePaste(event: ClipboardEvent) {
+  if (!detail.value || detail.value.batch.state === 'completed') return
+  if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return
+  const files = [...(event.clipboardData?.items ?? [])]
+    .filter(item => item.kind === 'file' && item.type.startsWith('image/'))
+    .map(item => item.getAsFile())
+    .filter((file): file is File => Boolean(file))
+  if (!files.length) return
+  event.preventDefault()
+  void importFiles(files)
+}
+
+function scheduleRefresh(batchId: string) {
+  if (refreshTimer) clearTimeout(refreshTimer)
+  refreshTimer = setTimeout(() => {
+    if (detail.value?.batch.id === batchId) void loadDetail(batchId)
+    else void loadBatches()
+    void loadLanStatus()
+  }, 120)
+}
+
+onMounted(async () => {
+  viewMounted = true
+  window.addEventListener('paste', handlePaste)
+  if (!desktopAvailable) {
+    showError('浏览器预览只展示界面；请在 Windows 桌面应用中使用加密采集箱。')
+    return
+  }
+  await Promise.all([loadBatches(), loadSubjectPreferences()])
+  await Promise.all([loadLanAddresses(), loadLanPreflight(), loadLanStatus()])
+  lanPollTimer = setInterval(() => void loadLanStatus(), 5_000)
+  unlisten = await listen<{ batchId: string }>('capture_batch_changed', event => scheduleRefresh(event.payload.batchId))
+})
+
+onBeforeUnmount(() => {
+  viewMounted = false
+  window.removeEventListener('paste', handlePaste)
+  if (refreshTimer) clearTimeout(refreshTimer)
+  if (lanPollTimer) clearInterval(lanPollTimer)
+  unlisten?.()
+})
+</script>
+
+<template>
+  <CaptureWorkspace
+    :batches="batches"
+    :detail="detail"
+    :previews="previews"
+    :busy="busy"
+    :save-state="saveState"
+    :commit-message="commitMessage"
+    :error-message="errorMessage"
+    :desktop-available="desktopAvailable"
+    :lan-addresses="lanAddresses"
+    :lan-preflight="lanPreflight"
+    :lan-preflight-busy="lanPreflightBusy"
+    :lan-session="lanSession"
+    :subject-options="subjectPreferences.enabledSubjects"
+    :capture-sound-enabled="subjectPreferences.captureSoundEnabled"
+    @create-batch="createBatch"
+    @open-batch="loadDetail"
+    @back="detail = undefined; loadBatches()"
+    @discard-batch="discardBatch"
+    @import-select="importSelect"
+    @import-files="importFiles"
+    @finish-collecting="finishCollecting"
+    @apply-layout="applyLayout"
+    @assign-batch-subject="assignBatchSubject"
+    @move-item="moveItem"
+    @stage-item-role="stageItemRole"
+    @merge-card="mergeCard"
+    @delete-draft="deleteDraft"
+    @update-draft="updateDraft"
+    @remove-item="removeItem"
+    @commit-ready="commitReady"
+    @preview="loadPreview"
+    @mobile-capture="startMobileCapture"
+    @refresh-lan-addresses="loadLanAddresses"
+    @refresh-lan-preflight="loadLanPreflight"
+    @stop-mobile-capture="stopMobileCapture()"
+  />
+</template>

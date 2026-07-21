@@ -13,6 +13,7 @@ describe('app router', () => {
       'library',
       'review',
       'report',
+      'review-history',
       'settings',
     ]))
     expect(new Set(names).size).toBe(names.length)
@@ -24,5 +25,30 @@ describe('app router', () => {
 
     expect(review).toBeDefined()
     expect(typeof review?.components?.default).not.toBe('function')
+  })
+
+  it('lazy-loads review history while keeping the report navigation active', () => {
+    const router = createAppRouter(createMemoryHistory())
+    const history = router.getRoutes().find(route => route.name === 'review-history')
+
+    expect(history).toBeDefined()
+    expect(typeof history?.components?.default).toBe('function')
+    expect(history?.meta.shellPage).toBe('report')
+  })
+
+  it('uses a real eager library workspace instead of the placeholder route', () => {
+    const router = createAppRouter(createMemoryHistory())
+    const library = router.getRoutes().find((route) => route.name === 'library')
+
+    expect(library).toBeDefined()
+    expect(typeof library?.components?.default).not.toBe('function')
+  })
+
+  it('uses a real eager capture workspace instead of the placeholder route', () => {
+    const router = createAppRouter(createMemoryHistory())
+    const inbox = router.getRoutes().find((route) => route.name === 'inbox')
+
+    expect(inbox).toBeDefined()
+    expect(typeof inbox?.components?.default).not.toBe('function')
   })
 })
