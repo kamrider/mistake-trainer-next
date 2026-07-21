@@ -29,8 +29,9 @@ use tokio::{
 use uuid::Uuid;
 
 use crate::modules::capture_inbox::{
-    CaptureBatchState, CaptureInboxError, IngestCaptureItem, get_capture_batch_detail,
-    ingest_capture_item, remove_capture_item, update_capture_batch,
+    CaptureBatchState, CaptureInboxError, CaptureItemPreview, IngestCaptureItem,
+    get_capture_batch_detail, get_capture_item_preview, ingest_capture_item, remove_capture_item,
+    update_capture_batch,
 };
 
 const MOBILE_PAGE: &str = include_str!("../../mobile/capture.html");
@@ -413,6 +414,7 @@ fn build_router(state: Arc<ServerState>) -> Router {
         .route("/session", get(get_session).patch(patch_session))
         .route("/session/finish", post(finish_session))
         .route("/uploads/{client_upload_id}", put(upload_item))
+        .route("/items/{item_id}/preview", get(item_preview))
         .route("/items/{item_id}", delete(delete_item))
         .layer(DefaultBodyLimit::max(
             usize::try_from(MAX_ORIGINAL_UPLOAD_BYTES).unwrap_or(usize::MAX),
@@ -465,6 +467,16 @@ struct MobileSessionPayload {
     received_item_count: u32,
     received_bytes: u64,
     next_source_sequence: u32,
+    items: Vec<MobileSessionItem>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MobileSessionItem {
+    item_id: String,
+    source_name: String,
+    source_sequence: u32,
+    byte_length: u64,
 }
 
 #[derive(Serialize)]
@@ -713,6 +725,33 @@ async fn delete_item(
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn item_preview(
+    State(state): State<Arc<ServerState>>,
+    Path(item_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<CaptureItemPreview>, ApiError> {
+    authorize(&state, &headers)?;
+    let preview = {
+        let connection = state
+            .context
+            .connection
+            .lock()
+            .map_err(|_| ApiError::internal())?;
+        get_capture_item_preview(
+            &connection,
+            &state.context.blob_root,
+            &state.context.asset_key,
+            &state.context.account_id,
+            &state.context.profile_id,
+            &state.context.batch_id,
+            &item_id,
+        )
+        .map_err(ApiError::capture)?
+    };
+    state.touch(current_utc_millis());
+    Ok(Json(preview))
+}
+
 async fn finish_session(
     State(state): State<Arc<ServerState>>,
     headers: HeaderMap,
@@ -782,6 +821,16 @@ fn session_payload(state: &ServerState) -> Result<MobileSessionPayload, ApiError
         received_item_count: activity.received_item_count,
         received_bytes: activity.received_bytes,
         next_source_sequence: activity.next_source_sequence,
+        items: detail
+            .items
+            .into_iter()
+            .map(|item| MobileSessionItem {
+                item_id: item.id,
+                source_name: item.source_name,
+                source_sequence: item.source_sequence,
+                byte_length: item.byte_length.max(0.0) as u64,
+            })
+            .collect(),
     })
 }
 
@@ -1324,6 +1373,9 @@ mod tests {
         assert!(MOBILE_PAGE.contains("const createClientId="));
         assert!(MOBILE_PAGE.contains("crypto.getRandomValues"));
         assert!(MOBILE_PAGE.contains("Array.from(input.files||[])"));
+        assert!(MOBILE_PAGE.contains("restoreRemoteItems"));
+        assert!(MOBILE_PAGE.contains("pumpRemotePreviews"));
+        assert!(MOBILE_PAGE.contains("/items/${encodeURIComponent(item.serverId)}/preview"));
         assert!(MOBILE_PAGE.contains("grid-template-columns:76px minmax(0,1fr) auto"));
         assert!(MOBILE_PAGE.contains(".item>div { min-width:0"));
         assert!(MOBILE_PAGE.contains("overflow-wrap:anywhere"));
@@ -1396,6 +1448,77 @@ mod tests {
         assert_eq!(detail.items.len(), 1);
         assert_eq!(detail.batch.state, CaptureBatchState::Organizing);
         assert_eq!(server.state.activity_snapshot().received_item_count, 1);
+    }
+
+    #[test]
+    fn session_rehydrates_uploaded_items_and_serves_a_preview() {
+        let server = TestServer::new();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let upload_id = Uuid::now_v7();
+        let mut upload = server.request(
+            Method::PUT,
+            &format!("/api/v1/uploads/{upload_id}"),
+            Body::from(png(23)),
+        );
+        upload
+            .headers_mut()
+            .insert("x-source-sequence", "0".parse().expect("header"));
+        upload
+            .headers_mut()
+            .insert(header::CONTENT_TYPE, "image/png".parse().expect("header"));
+        upload
+            .headers_mut()
+            .insert("x-source-name", "photo.png".parse().expect("header"));
+        let upload_response = runtime
+            .block_on(server.router.clone().oneshot(upload))
+            .expect("upload response");
+        assert_eq!(upload_response.status(), StatusCode::OK);
+        let upload_body = runtime
+            .block_on(axum::body::to_bytes(upload_response.into_body(), 1_000_000))
+            .expect("upload body");
+        let upload_json: serde_json::Value = serde_json::from_slice(&upload_body).expect("json");
+        let item_id = upload_json["itemId"].as_str().expect("item id").to_owned();
+
+        let session_response = runtime
+            .block_on(server.router.clone().oneshot(server.request(
+                Method::GET,
+                "/api/v1/session",
+                Body::empty(),
+            )))
+            .expect("session response");
+        let session_body = runtime
+            .block_on(axum::body::to_bytes(
+                session_response.into_body(),
+                1_000_000,
+            ))
+            .expect("session body");
+        let session_json: serde_json::Value = serde_json::from_slice(&session_body).expect("json");
+        assert_eq!(session_json["items"][0]["itemId"], item_id);
+        assert_eq!(session_json["items"][0]["sourceName"], "photo.png");
+
+        let preview_response = runtime
+            .block_on(server.router.clone().oneshot(server.request(
+                Method::GET,
+                &format!("/api/v1/items/{item_id}/preview"),
+                Body::empty(),
+            )))
+            .expect("preview response");
+        assert_eq!(preview_response.status(), StatusCode::OK);
+        let preview_body = runtime
+            .block_on(axum::body::to_bytes(
+                preview_response.into_body(),
+                2_000_000,
+            ))
+            .expect("preview body");
+        let preview_json: serde_json::Value = serde_json::from_slice(&preview_body).expect("json");
+        assert!(
+            preview_json["dataUrl"]
+                .as_str()
+                .is_some_and(|value| value.starts_with("data:image/png;base64,"))
+        );
     }
 
     #[test]
