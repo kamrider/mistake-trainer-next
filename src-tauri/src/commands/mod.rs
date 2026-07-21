@@ -10,3 +10,4 @@ pub mod profiles;
 pub mod review;
 pub mod review_history;
 pub mod system;
+pub mod sync;

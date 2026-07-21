@@ -73,6 +73,8 @@ pub fn builder() -> Builder<tauri::Wry> {
         commands::capture_lan::capture_lan_start,
         commands::capture_lan::capture_lan_status,
         commands::capture_lan::capture_lan_stop,
+        commands::sync::sync_backend_status,
+        commands::sync::sync_backend_set,
     ])
 }
 

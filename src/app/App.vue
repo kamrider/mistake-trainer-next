@@ -170,7 +170,18 @@ function selectProfile(profileId: string) {
           :key="`${route.fullPath}:${profileEpoch}`"
           class="route-page"
         >
-          <component :is="Component" />
+          <Suspense timeout="0">
+            <component :is="Component" />
+            <template #fallback>
+              <div
+                class="route-loading"
+                role="status"
+                aria-live="polite"
+              >
+                正在打开页面…
+              </div>
+            </template>
+          </Suspense>
         </div>
       </Transition>
     </RouterView>
@@ -187,4 +198,5 @@ function selectProfile(profileId: string) {
 .restore-notice-enter-active,.restore-notice-leave-active { transition: opacity var(--motion-standard) var(--ease-standard), transform var(--motion-page) var(--ease-standard); }.restore-notice-enter-from,.restore-notice-leave-to { opacity: 0; transform: translateY(-10px) scale(.98); }
 @media (max-width: 760px) { .restore-notice { top: 12px; right: 12px; width: calc(100vw - 24px); } }
 @media (prefers-reduced-motion: reduce) { .restore-notice-enter-active,.restore-notice-leave-active { transition: none; } }
+.route-loading { display: grid; min-height: 50vh; place-items: center; color: var(--ink-muted); font-size: 14px; }
 </style>
