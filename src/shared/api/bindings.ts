@@ -9,6 +9,8 @@ export const commands = {
 	backupRestore: (candidateId: string) => typedError<AppResult<boolean>, null>(__TAURI_INVOKE("backup_restore", { candidateId })),
 	backupRestoreStatus: () => __TAURI_INVOKE<AppResult<BackupRestoreReceipt | null>>("backup_restore_status"),
 	systemStatus: () => __TAURI_INVOKE<AppResult<SystemStatus>>("system_status"),
+	syncBackendStatus: () => __TAURI_INVOKE<AppResult<CloudBackendStatus>>("sync_backend_status"),
+	syncBackendSet: (request: SetBackendRequest) => __TAURI_INVOKE<AppResult<CloudBackendStatus>>("sync_backend_set", { request }),
 	profileList: () => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_list"),
 	profileCreate: (input: ProfileNameInput) => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_create", { input }),
 	profileRename: (input: ProfileRenameInput) => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_rename", { input }),
@@ -101,6 +103,15 @@ export type BackupSummary = {
 	encryptedBytes: number | null,
 	label: string,
 	readyForRestore: boolean,
+};
+
+export type CloudBackendKind = "local-only" | "supabase" | "tencent";
+
+export type CloudBackendStatus = {
+	kind: CloudBackendKind,
+	configured: boolean,
+	ready: boolean,
+	syncEnabled: boolean,
 };
 
 export type CaptureBatchCreateInput = {
@@ -622,6 +633,10 @@ export type SubjectPreferencesInput = {
 	enabledSubjects: string[],
 	customSubjects: string[],
 	captureSoundEnabled: boolean,
+};
+
+export type SetBackendRequest = {
+	kind: CloudBackendKind,
 };
 
 export type SystemStatus = {

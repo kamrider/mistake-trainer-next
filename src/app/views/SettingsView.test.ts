@@ -5,6 +5,8 @@ import SettingsView from './SettingsView.vue'
 
 const api = vi.hoisted(() => ({
   settingsOverview: vi.fn(),
+  syncBackendStatus: vi.fn(),
+  syncBackendSet: vi.fn(),
   legacyScan: vi.fn(),
   legacyImport: vi.fn(),
   legacyImportList: vi.fn(),
@@ -24,6 +26,12 @@ describe('SettingsView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     api.legacyImportList.mockResolvedValue({ ok: true, data: [] })
+    api.syncBackendStatus.mockResolvedValue({ ok: true, data: {
+      kind: 'local-only', configured: true, ready: true, syncEnabled: false,
+    } })
+    api.syncBackendSet.mockResolvedValue({ ok: true, data: {
+      kind: 'local-only', configured: true, ready: true, syncEnabled: false,
+    } })
     api.subjectPreferencesGet.mockResolvedValue({ ok: true, data: {
       enabledSubjects: ['语文', '数学', '英语'],
       customSubjects: [],
@@ -111,6 +119,22 @@ describe('SettingsView', () => {
     expect(screen.getByText('8 道活动题')).toBeVisible()
     expect(screen.getByText('尚未配置')).toBeVisible()
     expect(screen.getByText(/本地 outbox 已记录 11 项变更/)).toBeVisible()
+  })
+
+  it('keeps local mode selected when a remote backend is not configured', async () => {
+    api.syncBackendSet.mockResolvedValue({ ok: false, error: {
+      code: 'SYNC_BACKEND_NOT_CONFIGURED',
+      userMessage: '该同步服务尚未配置，已保持本地模式',
+      retryable: false,
+      diagnosticId: 'sync-backend-selection',
+    } })
+    render(SettingsView)
+
+    expect(await screen.findByText('本地优先 · 不需要网络')).toBeVisible()
+    await userEvent.click(screen.getByRole('button', { name: /^Supabase/ }))
+    expect(api.syncBackendSet).toHaveBeenCalledWith({ kind: 'supabase' })
+    expect(await screen.findByText('该同步服务尚未配置，已保持本地模式')).toBeVisible()
+    expect(screen.getByRole('button', { name: /^仅本地/ })).toHaveClass('selected')
   })
 
   it('runs a read-only legacy preflight and renders actionable issues', async () => {
