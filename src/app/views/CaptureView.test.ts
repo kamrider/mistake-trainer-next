@@ -5,6 +5,7 @@ import CaptureView from './CaptureView.vue'
 const api = vi.hoisted(() => ({
   captureBatchList: vi.fn(),
   captureBatchDetail: vi.fn(),
+  captureImportBytes: vi.fn(),
   captureLanAddresses: vi.fn(),
   captureLanPreflight: vi.fn(),
   captureLanFirewallRepair: vi.fn(),
@@ -23,10 +24,18 @@ vi.mock('../../shared/api/bindings', () => ({ commands: api }))
 vi.mock('../../modules/capture/components/CaptureWorkspace.vue', () => ({
   default: {
     props: ['batches', 'detail', 'busy', 'errorMessage', 'lanSession', 'subjectOptions'],
-    emits: ['openBatch', 'mobileCapture', 'mergeCard', 'deleteDraft', 'moveItem', 'assignBatchSubject'],
+    emits: ['openBatch', 'mobileCapture', 'mergeCard', 'deleteDraft', 'moveItem', 'assignBatchSubject', 'importFiles'],
+    setup(_props: Record<string, unknown>, { emit }: { emit: (event: string, ...args: unknown[]) => void }) {
+      const emitFiles = () => emit('importFiles', [
+        { name: 'bad.png', arrayBuffer: async () => new Uint8Array([1]).buffer },
+        { name: 'good.png', arrayBuffer: async () => new Uint8Array([2]).buffer },
+      ])
+      return { emitFiles }
+    },
     template: `
       <div>
         <button @click="$emit('openBatch', 'batch-1')">open batch</button>
+        <button @click="emitFiles">import files</button>
         <button :disabled="busy" @click="$emit('mobileCapture', '192.168.1.20')">scan</button>
         <button :disabled="busy" @click="$emit('mergeCard', ['item-1'], null, '数学')">merge card</button>
         <button :disabled="busy" @click="$emit('deleteDraft', 'draft-1')">delete card</button>
@@ -86,6 +95,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   api.captureBatchList.mockResolvedValue(success([batch]))
   api.captureBatchDetail.mockResolvedValue(success(detail))
+  api.captureImportBytes.mockResolvedValue(success({ ...detail, items: [] }))
   api.captureLanAddresses.mockResolvedValue(success([{ label: 'Wi-Fi', address: '192.168.1.20' }]))
   api.captureLanStatus.mockResolvedValue(success(null))
   api.captureLanStart.mockResolvedValue(success(session))
@@ -149,6 +159,21 @@ describe('CaptureView one-time Windows LAN permission', () => {
     render(CaptureView)
 
     await waitFor(() => expect(screen.getByTestId('subjects')).toHaveTextContent('数学、编程、竞赛'))
+  })
+
+  it('continues a desktop batch import after one image is rejected', async () => {
+    api.captureImportBytes
+      .mockResolvedValueOnce(failure('图片损坏'))
+      .mockResolvedValueOnce(success({ ...detail, items: [] }))
+    render(CaptureView)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'open batch' }))
+    await waitFor(() => expect(api.captureBatchDetail).toHaveBeenCalledWith('batch-1'))
+    await fireEvent.click(screen.getByRole('button', { name: 'import files' }))
+
+    await waitFor(() => expect(api.captureImportBytes).toHaveBeenCalledTimes(2))
+    expect((api.captureImportBytes.mock.calls[0]![0] as { sourceName: string }).sourceName).toBe('bad.png')
+    expect((api.captureImportBytes.mock.calls[1]![0] as { sourceName: string }).sourceName).toBe('good.png')
   })
 
   it('repairs once on the first scan and immediately starts the QR session', async () => {

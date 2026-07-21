@@ -149,19 +149,31 @@ async function importFiles(files: File[]) {
   busy.value = true
   errorMessage.value = ''
   try {
+    const failedNames: string[] = []
     for (const file of files.slice(0, 150)) {
-      const bytes = [...new Uint8Array(await file.arrayBuffer())]
-      const result = normalizeAppResult(await commands.captureImportBytes({
-        batchId,
-        clientUploadId: crypto.randomUUID(),
-        sourceName: file.name || 'clipboard-image',
-        sourceSequence: null,
-        bytes,
-      }))
-      if (!result.ok) {
-        showError(`${file.name || '图片'}：${result.error.userMessage}`)
-        break
+      try {
+        const bytes = [...new Uint8Array(await file.arrayBuffer())]
+        const result = normalizeAppResult(await commands.captureImportBytes({
+          batchId,
+          clientUploadId: crypto.randomUUID(),
+          sourceName: file.name || 'clipboard-image',
+          sourceSequence: null,
+          bytes,
+        }))
+        if (!result.ok) {
+          failedNames.push(file.name || '未命名图片')
+          showError(`${file.name || '图片'}：${result.error.userMessage}`)
+          continue
+        }
       }
+      catch {
+        failedNames.push(file.name || '未命名图片')
+      }
+    }
+    if (failedNames.length) {
+      const preview = failedNames.slice(0, 3).join('、')
+      const suffix = failedNames.length > 3 ? ` 等 ${failedNames.length} 张` : ''
+      showError(`${preview}${suffix} 未能加入采集箱，其余图片已继续导入。`)
     }
     await loadDetail(batchId)
   }
