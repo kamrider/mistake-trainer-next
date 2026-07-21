@@ -4,6 +4,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use futures_util::StreamExt;
 use reqwest::{StatusCode, Url, redirect::Policy};
 use serde::{Deserialize, Serialize};
@@ -223,6 +224,66 @@ pub trait AuthTransport: Sync {
     ) -> impl Future<Output = Result<(), CloudError>> + Send + 'a;
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteObjectMetadata {
+    pub byte_length: i64,
+    pub media_type: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObjectUploadResult {
+    Created,
+    AlreadyExists,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PushAcknowledgement {
+    pub operation_id: String,
+    pub entity_type: String,
+    pub entity_id: String,
+    pub change_seq: i64,
+}
+
+pub trait CloudPushTransport: Sync {
+    fn object_metadata<'a>(
+        &'a self,
+        access_token: &'a str,
+        storage_object: &'a str,
+    ) -> impl Future<Output = Result<Option<RemoteObjectMetadata>, CloudError>> + Send + 'a;
+    fn upload_small_object<'a>(
+        &'a self,
+        access_token: &'a str,
+        storage_object: &'a str,
+        media_type: &'a str,
+        bytes: &'a [u8],
+    ) -> impl Future<Output = Result<ObjectUploadResult, CloudError>> + Send + 'a;
+    fn create_resumable_upload<'a>(
+        &'a self,
+        access_token: &'a str,
+        storage_object: &'a str,
+        media_type: &'a str,
+        byte_length: i64,
+    ) -> impl Future<Output = Result<String, CloudError>> + Send + 'a;
+    fn resumable_offset<'a>(
+        &'a self,
+        access_token: &'a str,
+        upload_url: &'a str,
+    ) -> impl Future<Output = Result<Option<i64>, CloudError>> + Send + 'a;
+    fn upload_resumable_chunk<'a>(
+        &'a self,
+        access_token: &'a str,
+        upload_url: &'a str,
+        offset: i64,
+        bytes: &'a [u8],
+    ) -> impl Future<Output = Result<Option<i64>, CloudError>> + Send + 'a;
+    fn push_operations<'a>(
+        &'a self,
+        access_token: &'a str,
+        operations: &'a serde_json::Value,
+    ) -> impl Future<Output = Result<Vec<PushAcknowledgement>, CloudError>> + Send + 'a;
+}
+
 impl AuthTransport for SupabaseClient {
     fn sign_up<'a>(
         &'a self,
@@ -304,6 +365,306 @@ impl AuthTransport for SupabaseClient {
             }
         }
     }
+}
+
+impl CloudPushTransport for SupabaseClient {
+    fn object_metadata<'a>(
+        &'a self,
+        access_token: &'a str,
+        storage_object: &'a str,
+    ) -> impl Future<Output = Result<Option<RemoteObjectMetadata>, CloudError>> + Send + 'a {
+        async move {
+            validate_access_token(access_token)?;
+            let url = self.object_url(storage_object)?;
+            let response = self
+                .http
+                .head(url)
+                .header("apikey", self.config.publishable_key.expose())
+                .bearer_auth(access_token)
+                .send()
+                .await
+                .map_err(map_request_error)?;
+            if response.status() == StatusCode::NOT_FOUND {
+                return Ok(None);
+            }
+            if !response.status().is_success() {
+                return Err(map_status(response.status()));
+            }
+            let byte_length = response
+                .headers()
+                .get(reqwest::header::CONTENT_LENGTH)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<i64>().ok())
+                .filter(|value| *value >= 0)
+                .ok_or(CloudError::InvalidResponse)?;
+            let media_type = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.split(';').next())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or(CloudError::InvalidResponse)?
+                .to_owned();
+            Ok(Some(RemoteObjectMetadata {
+                byte_length,
+                media_type,
+            }))
+        }
+    }
+
+    fn upload_small_object<'a>(
+        &'a self,
+        access_token: &'a str,
+        storage_object: &'a str,
+        media_type: &'a str,
+        bytes: &'a [u8],
+    ) -> impl Future<Output = Result<ObjectUploadResult, CloudError>> + Send + 'a {
+        async move {
+            validate_access_token(access_token)?;
+            let url = self.object_url(storage_object)?;
+            let response = self
+                .http
+                .post(url)
+                .header("apikey", self.config.publishable_key.expose())
+                .header("x-upsert", "false")
+                .header(reqwest::header::CONTENT_TYPE, media_type)
+                .bearer_auth(access_token)
+                .body(bytes.to_vec())
+                .send()
+                .await
+                .map_err(map_request_error)?;
+            if response.status().is_success() {
+                Ok(ObjectUploadResult::Created)
+            } else if matches!(
+                response.status(),
+                StatusCode::BAD_REQUEST | StatusCode::CONFLICT
+            ) {
+                // Storage reports an immutable-path collision as 400 today and
+                // some compatible deployments use 409. The caller must still
+                // re-read and match the remote metadata before accepting it.
+                Ok(ObjectUploadResult::AlreadyExists)
+            } else {
+                Err(map_status(response.status()))
+            }
+        }
+    }
+
+    fn create_resumable_upload<'a>(
+        &'a self,
+        access_token: &'a str,
+        storage_object: &'a str,
+        media_type: &'a str,
+        byte_length: i64,
+    ) -> impl Future<Output = Result<String, CloudError>> + Send + 'a {
+        async move {
+            validate_access_token(access_token)?;
+            validate_storage_object(storage_object)?;
+            if byte_length <= 0 {
+                return Err(CloudError::InvalidResponse);
+            }
+            let url = self
+                .config
+                .storage_url
+                .join("/storage/v1/upload/resumable")
+                .map_err(|_| CloudError::InvalidConfiguration)?;
+            let metadata = format!(
+                "bucketName {},objectName {},contentType {}",
+                BASE64.encode("mistake-assets"),
+                BASE64.encode(storage_object),
+                BASE64.encode(media_type)
+            );
+            let response = self
+                .http
+                .post(url)
+                .header("apikey", self.config.publishable_key.expose())
+                .header("tus-resumable", "1.0.0")
+                .header("upload-length", byte_length)
+                .header("upload-metadata", metadata)
+                .header("x-upsert", "false")
+                .bearer_auth(access_token)
+                .send()
+                .await
+                .map_err(map_request_error)?;
+            if !response.status().is_success() {
+                return Err(map_status(response.status()));
+            }
+            let location = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .ok_or(CloudError::InvalidResponse)?;
+            let upload_url = self
+                .config
+                .storage_url
+                .join(location)
+                .map_err(|_| CloudError::InvalidResponse)?;
+            self.validate_resumable_url(&upload_url)?;
+            Ok(upload_url.to_string())
+        }
+    }
+
+    fn resumable_offset<'a>(
+        &'a self,
+        access_token: &'a str,
+        upload_url: &'a str,
+    ) -> impl Future<Output = Result<Option<i64>, CloudError>> + Send + 'a {
+        async move {
+            validate_access_token(access_token)?;
+            let url = Url::parse(upload_url).map_err(|_| CloudError::InvalidResponse)?;
+            self.validate_resumable_url(&url)?;
+            let response = self
+                .http
+                .head(url)
+                .header("apikey", self.config.publishable_key.expose())
+                .header("tus-resumable", "1.0.0")
+                .bearer_auth(access_token)
+                .send()
+                .await
+                .map_err(map_request_error)?;
+            if matches!(response.status(), StatusCode::NOT_FOUND | StatusCode::GONE) {
+                return Ok(None);
+            }
+            if !response.status().is_success() {
+                return Err(map_status(response.status()));
+            }
+            parse_upload_offset(&response).map(Some)
+        }
+    }
+
+    fn upload_resumable_chunk<'a>(
+        &'a self,
+        access_token: &'a str,
+        upload_url: &'a str,
+        offset: i64,
+        bytes: &'a [u8],
+    ) -> impl Future<Output = Result<Option<i64>, CloudError>> + Send + 'a {
+        async move {
+            validate_access_token(access_token)?;
+            if offset < 0 || bytes.is_empty() {
+                return Err(CloudError::InvalidResponse);
+            }
+            let url = Url::parse(upload_url).map_err(|_| CloudError::InvalidResponse)?;
+            self.validate_resumable_url(&url)?;
+            let response = self
+                .http
+                .patch(url)
+                .header("apikey", self.config.publishable_key.expose())
+                .header("tus-resumable", "1.0.0")
+                .header("upload-offset", offset)
+                .header(
+                    reqwest::header::CONTENT_TYPE,
+                    "application/offset+octet-stream",
+                )
+                .bearer_auth(access_token)
+                .body(bytes.to_vec())
+                .send()
+                .await
+                .map_err(map_request_error)?;
+            if matches!(response.status(), StatusCode::NOT_FOUND | StatusCode::GONE) {
+                return Ok(None);
+            }
+            if !response.status().is_success() {
+                return Err(map_status(response.status()));
+            }
+            parse_upload_offset(&response).map(Some)
+        }
+    }
+
+    fn push_operations<'a>(
+        &'a self,
+        access_token: &'a str,
+        operations: &'a serde_json::Value,
+    ) -> impl Future<Output = Result<Vec<PushAcknowledgement>, CloudError>> + Send + 'a {
+        async move {
+            validate_access_token(access_token)?;
+            let operation_count = operations.as_array().map(Vec::len).unwrap_or_default();
+            if !(1..=100).contains(&operation_count) {
+                return Err(CloudError::InvalidResponse);
+            }
+            let url = self
+                .config
+                .base_url
+                .join("/rest/v1/rpc/push_sync_batch")
+                .map_err(|_| CloudError::InvalidConfiguration)?;
+            let response = self
+                .http
+                .post(url)
+                .header("apikey", self.config.publishable_key.expose())
+                .header("accept", "application/json")
+                .bearer_auth(access_token)
+                .json(&serde_json::json!({ "p_operations": operations }))
+                .send()
+                .await
+                .map_err(map_request_error)?;
+            if !response.status().is_success() {
+                return Err(map_status(response.status()));
+            }
+            let bytes = read_capped(response, MAX_AUTH_RESPONSE_BYTES).await?;
+            serde_json::from_slice(&bytes).map_err(|_| CloudError::InvalidResponse)
+        }
+    }
+}
+
+impl SupabaseClient {
+    fn object_url(&self, storage_object: &str) -> Result<Url, CloudError> {
+        validate_storage_object(storage_object)?;
+        self.config
+            .base_url
+            .join(&format!(
+                "/storage/v1/object/mistake-assets/{storage_object}"
+            ))
+            .map_err(|_| CloudError::InvalidConfiguration)
+    }
+
+    fn validate_resumable_url(&self, candidate: &Url) -> Result<(), CloudError> {
+        let expected = &self.config.storage_url;
+        if candidate.scheme() != expected.scheme()
+            || candidate.host_str() != expected.host_str()
+            || candidate.port_or_known_default() != expected.port_or_known_default()
+            || !candidate.username().is_empty()
+            || candidate.password().is_some()
+            || candidate.fragment().is_some()
+            || !candidate.path().starts_with("/storage/v1/upload/resumable")
+        {
+            return Err(CloudError::InvalidResponse);
+        }
+        Ok(())
+    }
+}
+
+fn validate_access_token(access_token: &str) -> Result<(), CloudError> {
+    if access_token.is_empty() || access_token.len() > 16 * 1024 {
+        Err(CloudError::InvalidResponse)
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_storage_object(storage_object: &str) -> Result<(), CloudError> {
+    let mut parts = storage_object.split('/');
+    let account = parts.next().unwrap_or_default();
+    let hash = parts.next().unwrap_or_default();
+    if parts.next().is_some()
+        || Uuid::parse_str(account).is_err()
+        || hash.len() != 64
+        || !hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(CloudError::InvalidResponse);
+    }
+    Ok(())
+}
+
+fn parse_upload_offset(response: &reqwest::Response) -> Result<i64, CloudError> {
+    response
+        .headers()
+        .get("upload-offset")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|value| *value >= 0)
+        .ok_or(CloudError::InvalidResponse)
 }
 
 #[derive(Serialize)]

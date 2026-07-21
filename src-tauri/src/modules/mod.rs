@@ -13,4 +13,5 @@ pub mod profiles;
 pub mod review;
 pub mod review_focus;
 pub mod review_history;
+pub mod sync_push;
 pub mod sync_store;

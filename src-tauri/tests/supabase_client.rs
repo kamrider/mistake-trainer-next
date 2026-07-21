@@ -1,15 +1,19 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use axum::{
     Router,
     body::{Body, to_bytes},
     extract::State,
-    http::{Request, StatusCode},
+    http::{Method, Request, StatusCode},
     response::Response,
     routing::any,
 };
 use mistake_trainer_next_lib::infrastructure::supabase::{
-    AuthTransport, CloudError, SupabaseClient, SupabaseConfig,
+    AuthTransport, CloudError, CloudPushTransport, ObjectUploadResult, SupabaseClient,
+    SupabaseConfig,
 };
 use tokio::sync::oneshot;
 
@@ -19,6 +23,14 @@ struct CapturedRequest {
     api_key: String,
     authorization: Option<String>,
     body: String,
+}
+
+#[derive(Clone, Debug)]
+struct CapturedCloudRequest {
+    method: Method,
+    path: String,
+    headers: HashMap<String, String>,
+    body: Vec<u8>,
 }
 
 #[test]
@@ -121,6 +133,130 @@ fn oversized_auth_responses_are_rejected_before_deserialization() {
     });
 }
 
+#[test]
+fn storage_tus_and_rpc_requests_follow_the_supabase_wire_contract() {
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let captured = Arc::new(Mutex::new(Vec::<CapturedCloudRequest>::new()));
+        let app = Router::new()
+            .fallback(any(capture_cloud_request))
+            .with_state(captured.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = SupabaseClient::new(
+            SupabaseConfig::for_loopback_test(&format!("http://{address}"), "publishable").unwrap(),
+        )
+        .unwrap();
+        let storage_object = format!("33333333-3333-4333-8333-333333333333/{}", "a".repeat(64));
+
+        assert_eq!(
+            client
+                .upload_small_object("access", &storage_object, "image/jpeg", b"small")
+                .await
+                .unwrap(),
+            ObjectUploadResult::Created
+        );
+        let upload_url = client
+            .create_resumable_upload("access", &storage_object, "image/jpeg", 9)
+            .await
+            .unwrap();
+        assert_eq!(
+            client
+                .resumable_offset("access", &upload_url)
+                .await
+                .unwrap(),
+            Some(6)
+        );
+        assert_eq!(
+            client
+                .upload_resumable_chunk("access", &upload_url, 6, b"end")
+                .await
+                .unwrap(),
+            Some(9)
+        );
+        let acknowledgements = client
+            .push_operations(
+                "access",
+                &serde_json::json!([{
+                    "operationId": "0191365e-2f2f-7b89-b3b0-777777777777",
+                    "entityType": "asset",
+                    "entityId": "0191365e-2f2f-7b89-b3b0-888888888888",
+                    "operation": "upsert",
+                    "payload": {"id": "0191365e-2f2f-7b89-b3b0-888888888888"}
+                }]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(acknowledgements.len(), 1);
+
+        let captured = captured.lock().unwrap();
+        assert_eq!(captured.len(), 5);
+        let small = &captured[0];
+        assert_eq!(small.method, Method::POST);
+        assert_eq!(
+            small.path,
+            format!("/storage/v1/object/mistake-assets/{storage_object}")
+        );
+        assert_eq!(small.headers["x-upsert"], "false");
+        assert_eq!(small.headers["content-type"], "image/jpeg");
+        assert_eq!(small.headers["authorization"], "Bearer access");
+        assert_eq!(small.body, b"small");
+
+        let create = &captured[1];
+        assert_eq!(create.path, "/storage/v1/upload/resumable");
+        assert_eq!(create.headers["tus-resumable"], "1.0.0");
+        assert_eq!(create.headers["upload-length"], "9");
+        assert_eq!(create.headers["x-upsert"], "false");
+        assert!(create.headers["upload-metadata"].contains("bucketName bWlzdGFrZS1hc3NldHM="));
+
+        let head = &captured[2];
+        assert_eq!(head.method, Method::HEAD);
+        assert_eq!(head.headers["tus-resumable"], "1.0.0");
+        let patch = &captured[3];
+        assert_eq!(patch.method, Method::PATCH);
+        assert_eq!(patch.headers["upload-offset"], "6");
+        assert_eq!(
+            patch.headers["content-type"],
+            "application/offset+octet-stream"
+        );
+        assert_eq!(patch.body, b"end");
+
+        let rpc = &captured[4];
+        assert_eq!(rpc.path, "/rest/v1/rpc/push_sync_batch");
+        let rpc_body: serde_json::Value = serde_json::from_slice(&rpc.body).unwrap();
+        assert_eq!(rpc_body["p_operations"].as_array().unwrap().len(), 1);
+    });
+}
+
+#[test]
+fn storage_collision_requires_caller_side_metadata_revalidation() {
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let app = Router::new().fallback(any(|| async {
+            Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"error":"ResourceAlreadyExists"}"#))
+                .unwrap()
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = SupabaseClient::new(
+            SupabaseConfig::for_loopback_test(&format!("http://{address}"), "publishable").unwrap(),
+        )
+        .unwrap();
+        let storage_object = format!("33333333-3333-4333-8333-333333333333/{}", "b".repeat(64));
+
+        assert_eq!(
+            client
+                .upload_small_object("access", &storage_object, "image/png", b"duplicate")
+                .await
+                .unwrap(),
+            ObjectUploadResult::AlreadyExists
+        );
+    });
+}
+
 async fn capture_auth_request(
     State(sender): State<Arc<Mutex<Option<oneshot::Sender<CapturedRequest>>>>>,
     request: Request<Body>,
@@ -160,5 +296,74 @@ async fn capture_auth_request(
         .body(Body::from(
             r#"{"access_token":"access-secret","refresh_token":"refresh-secret","expires_in":3600,"user":{"id":"33333333-3333-4333-8333-333333333333","email":"student@example.test","email_confirmed_at":"2026-07-21T00:00:00Z"}}"#,
         ))
+        .unwrap()
+}
+
+async fn capture_cloud_request(
+    State(captured): State<Arc<Mutex<Vec<CapturedCloudRequest>>>>,
+    request: Request<Body>,
+) -> Response<Body> {
+    let method = request.method().clone();
+    let path = request.uri().path().to_owned();
+    let headers = request
+        .headers()
+        .iter()
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.as_str().to_owned(), value.to_owned()))
+        })
+        .collect();
+    let body = to_bytes(request.into_body(), 8 * 1024 * 1024)
+        .await
+        .unwrap()
+        .to_vec();
+    captured.lock().unwrap().push(CapturedCloudRequest {
+        method: method.clone(),
+        path: path.clone(),
+        headers,
+        body,
+    });
+
+    if method == Method::POST && path.starts_with("/storage/v1/object/") {
+        return Response::builder()
+            .status(StatusCode::OK)
+            .body(Body::empty())
+            .unwrap();
+    }
+    if method == Method::POST && path == "/storage/v1/upload/resumable" {
+        return Response::builder()
+            .status(StatusCode::CREATED)
+            .header("location", "/storage/v1/upload/resumable/upload-id")
+            .body(Body::empty())
+            .unwrap();
+    }
+    if method == Method::HEAD && path == "/storage/v1/upload/resumable/upload-id" {
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header("upload-offset", "6")
+            .body(Body::empty())
+            .unwrap();
+    }
+    if method == Method::PATCH && path == "/storage/v1/upload/resumable/upload-id" {
+        return Response::builder()
+            .status(StatusCode::NO_CONTENT)
+            .header("upload-offset", "9")
+            .body(Body::empty())
+            .unwrap();
+    }
+    if method == Method::POST && path == "/rest/v1/rpc/push_sync_batch" {
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"[{"operationId":"0191365e-2f2f-7b89-b3b0-777777777777","entityType":"asset","entityId":"0191365e-2f2f-7b89-b3b0-888888888888","changeSeq":1}]"#,
+            ))
+            .unwrap();
+    }
+    Response::builder()
+        .status(StatusCode::NOT_FOUND)
+        .body(Body::empty())
         .unwrap()
 }
