@@ -216,17 +216,17 @@ git commit -m "feat: connect secure Supabase sessions"
 - Consumes: local v10 schema and canonical formal entities.
 - Produces: v11 `cloud_sync_state`, leased outbox access, `WireOperation`, `PendingAssetTransfer`, cursor management, and version-aware backup validation.
 
-- [ ] **Step 1: Write failing v10→v11 and projection tests**
+- [x] **Step 1: Write failing v10→v11 and projection tests**
 
 Assert migration preserves every row/blob hash and adds exactly one account cursor. Insert stale/misleading outbox JSON, then assert `lease_push_batch` reloads the canonical profile/problem/assets/ordered links/review/export/tombstone from normalized tables. Assert 100-operation cap, dependency order, expired-lease recovery, retry backoff, asset dedupe, cross-account/profile rejection, and no capture table rows in any wire DTO.
 
-- [ ] **Step 2: Run focused tests and verify failure**
+- [x] **Step 2: Run focused tests and verify failure**
 
 Run: `.\scripts\cargo-msvc.cmd test --manifest-path src-tauri\Cargo.toml --test database_migrations --test sync_store --test backup_store`
 
 Expected: fails before v11 and `sync_store` exist.
 
-- [ ] **Step 3: Add the v11 state migration**
+- [x] **Step 3: Add the v11 state migration**
 
 ```sql
 CREATE TABLE cloud_sync_state (
@@ -254,7 +254,7 @@ CREATE INDEX sync_operations_lease_idx ON sync_operations(status, lease_expires_
 
 `remote_user_fingerprint` is SHA-256 of the remote UUID plus an application domain separator; it detects a mismatched binding without storing/exposing the raw remote ID in SQLite.
 
-- [ ] **Step 4: Implement canonical projection and leasing**
+- [x] **Step 4: Implement canonical projection and leasing**
 
 ```rust
 pub enum WireEntity {
@@ -275,7 +275,7 @@ pub struct LeasedPushBatch {
 
 The transaction first resets expired leases, selects due rows, loads canonical state, and marks selected operations `processing` with a 5-minute lease. Acknowledgement deletes only matching `(operation_id, lease_id)` rows. Failure restores them to `pending`, increments attempts, records a stable code, and schedules `min(2^attempt * 5 s, 30 min)` plus deterministic per-operation jitter.
 
-- [ ] **Step 5: Raise backup validation to v11 and run tests**
+- [x] **Step 5: Raise backup validation to v11 and run tests**
 
 Backups at schema v11 must contain `cloud_sync_state`, `cloud_asset_transfers`, and new outbox columns, but refresh/access tokens remain absent. Older v1–v10 backups retain their existing validation rules. Transfer rows may be restored, but an expired URL is discarded before any network request.
 
@@ -283,7 +283,7 @@ Run: `.\scripts\cargo-msvc.cmd test --manifest-path src-tauri\Cargo.toml --test 
 
 Expected: all focused tests pass.
 
-- [ ] **Step 6: Commit the local sync-state checkpoint**
+- [x] **Step 6: Commit the local sync-state checkpoint**
 
 ```powershell
 git add src-tauri/migrations src-tauri/src/infrastructure/database.rs src-tauri/src/modules/backup.rs src-tauri/src/modules/sync_store.rs src-tauri/tests

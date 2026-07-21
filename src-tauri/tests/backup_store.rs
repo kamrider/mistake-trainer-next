@@ -100,6 +100,96 @@ fn refresh_database_manifest(package: &std::path::Path, schema_version: i64) {
     .unwrap();
 }
 
+fn remove_v11_cloud_schema(database: &Connection) {
+    database
+        .execute_batch(
+            "DROP INDEX sync_operations_lease_idx;
+         DROP TABLE cloud_asset_transfers;
+         DROP TABLE cloud_sync_state;
+         ALTER TABLE sync_operations DROP COLUMN lease_id;
+         ALTER TABLE sync_operations DROP COLUMN lease_expires_at_utc_ms;
+         ALTER TABLE sync_operations DROP COLUMN last_error_code;",
+        )
+        .unwrap();
+}
+
+#[test]
+fn schema_v11_backup_preserves_cloud_progress_and_requires_the_complete_shape() {
+    let fixture = fixture();
+    {
+        let connection = fixture.connection.lock().unwrap();
+        connection
+            .execute(
+                "INSERT INTO cloud_sync_state(
+                 account_id, pull_cursor, last_attempt_at_utc_ms, last_success_at_utc_ms,
+                 last_error_code, remote_user_fingerprint
+             ) VALUES(?1, 42, 100, 90, 'network', 'fingerprint')",
+                [ACCOUNT_ID],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO cloud_asset_transfers(
+                 asset_id, upload_url, confirmed_offset, expires_at_utc_ms, updated_at_utc_ms
+             ) VALUES('asset-1', 'https://example.invalid/upload/opaque', 6, 200, 110)",
+                [],
+            )
+            .unwrap();
+    }
+
+    let (_, package) = created_package(&fixture);
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(package.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest["schemaVersion"], 11);
+    validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID).unwrap();
+    {
+        let database =
+            open_encrypted_database_read_only(&package.join("library.db"), DATABASE_KEY).unwrap();
+        let state: (i64, Option<String>) = database
+            .query_row(
+                "SELECT pull_cursor, last_error_code FROM cloud_sync_state WHERE account_id = ?1",
+                [ACCOUNT_ID],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(state, (42, Some("network".to_owned())));
+        assert_eq!(
+            database
+                .query_row(
+                    "SELECT confirmed_offset FROM cloud_asset_transfers WHERE asset_id = 'asset-1'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            6
+        );
+        let token_columns: i64 = database
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('cloud_sync_state')
+             WHERE lower(name) LIKE '%access_token%' OR lower(name) LIKE '%refresh_token%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(token_columns, 0);
+    }
+
+    {
+        let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        database
+            .execute("DROP INDEX sync_operations_lease_idx", [])
+            .unwrap();
+        database
+            .pragma_update(None, "journal_mode", "DELETE")
+            .unwrap();
+    }
+    refresh_database_manifest(&package, 11);
+    assert!(matches!(
+        validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID),
+        Err(BackupError::Integrity)
+    ));
+}
+
 #[test]
 fn encrypted_backup_round_trips_without_leaking_identity_or_plaintext() {
     let fixture = fixture();
@@ -398,6 +488,7 @@ fn validation_requires_review_sessions_exactly_when_the_schema_requires_it() {
 
     {
         let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        remove_v11_cloud_schema(&database);
         database
             .execute("DROP TABLE legacy_import_entities", [])
             .unwrap();
@@ -569,6 +660,7 @@ fn validation_requires_review_history_index_only_for_schema_v9() {
 
     {
         let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        remove_v11_cloud_schema(&database);
         database
             .execute("DROP TABLE legacy_import_entities", [])
             .unwrap();
@@ -606,6 +698,7 @@ fn validation_requires_legacy_import_ledger_only_for_schema_v10() {
 
     {
         let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        remove_v11_cloud_schema(&database);
         database
             .execute("DROP TABLE legacy_import_entities", [])
             .unwrap();

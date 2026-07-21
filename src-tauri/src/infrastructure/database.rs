@@ -74,7 +74,9 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             transaction.execute_batch(include_str!(
                 "../../migrations/0010_legacy_import_ledger.sql"
             ))?;
-            transaction.pragma_update(None, "user_version", 10)?;
+            transaction
+                .execute_batch(include_str!("../../migrations/0011_cloud_sync_state.sql"))?;
+            transaction.pragma_update(None, "user_version", 11)?;
             transaction.commit()?;
             Ok(())
         }
@@ -99,7 +101,9 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             transaction.execute_batch(include_str!(
                 "../../migrations/0010_legacy_import_ledger.sql"
             ))?;
-            transaction.pragma_update(None, "user_version", 10)?;
+            transaction
+                .execute_batch(include_str!("../../migrations/0011_cloud_sync_state.sql"))?;
+            transaction.pragma_update(None, "user_version", 11)?;
             transaction.commit()?;
             Ok(())
         }
@@ -123,7 +127,9 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             transaction.execute_batch(include_str!(
                 "../../migrations/0010_legacy_import_ledger.sql"
             ))?;
-            transaction.pragma_update(None, "user_version", 10)?;
+            transaction
+                .execute_batch(include_str!("../../migrations/0011_cloud_sync_state.sql"))?;
+            transaction.pragma_update(None, "user_version", 11)?;
             transaction.commit()?;
             Ok(())
         }
@@ -146,7 +152,9 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             transaction.execute_batch(include_str!(
                 "../../migrations/0010_legacy_import_ledger.sql"
             ))?;
-            transaction.pragma_update(None, "user_version", 10)?;
+            transaction
+                .execute_batch(include_str!("../../migrations/0011_cloud_sync_state.sql"))?;
+            transaction.pragma_update(None, "user_version", 11)?;
             transaction.commit()?;
             Ok(())
         }
@@ -166,7 +174,9 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             transaction.execute_batch(include_str!(
                 "../../migrations/0010_legacy_import_ledger.sql"
             ))?;
-            transaction.pragma_update(None, "user_version", 10)?;
+            transaction
+                .execute_batch(include_str!("../../migrations/0011_cloud_sync_state.sql"))?;
+            transaction.pragma_update(None, "user_version", 11)?;
             transaction.commit()?;
             Ok(())
         }
@@ -183,7 +193,9 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             transaction.execute_batch(include_str!(
                 "../../migrations/0010_legacy_import_ledger.sql"
             ))?;
-            transaction.pragma_update(None, "user_version", 10)?;
+            transaction
+                .execute_batch(include_str!("../../migrations/0011_cloud_sync_state.sql"))?;
+            transaction.pragma_update(None, "user_version", 11)?;
             transaction.commit()?;
             Ok(())
         }
@@ -197,7 +209,9 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             transaction.execute_batch(include_str!(
                 "../../migrations/0010_legacy_import_ledger.sql"
             ))?;
-            transaction.pragma_update(None, "user_version", 10)?;
+            transaction
+                .execute_batch(include_str!("../../migrations/0011_cloud_sync_state.sql"))?;
+            transaction.pragma_update(None, "user_version", 11)?;
             transaction.commit()?;
             Ok(())
         }
@@ -210,7 +224,9 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             transaction.execute_batch(include_str!(
                 "../../migrations/0010_legacy_import_ledger.sql"
             ))?;
-            transaction.pragma_update(None, "user_version", 10)?;
+            transaction
+                .execute_batch(include_str!("../../migrations/0011_cloud_sync_state.sql"))?;
+            transaction.pragma_update(None, "user_version", 11)?;
             transaction.commit()?;
             Ok(())
         }
@@ -222,7 +238,9 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             transaction.execute_batch(include_str!(
                 "../../migrations/0010_legacy_import_ledger.sql"
             ))?;
-            transaction.pragma_update(None, "user_version", 10)?;
+            transaction
+                .execute_batch(include_str!("../../migrations/0011_cloud_sync_state.sql"))?;
+            transaction.pragma_update(None, "user_version", 11)?;
             transaction.commit()?;
             Ok(())
         }
@@ -231,11 +249,21 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             transaction.execute_batch(include_str!(
                 "../../migrations/0010_legacy_import_ledger.sql"
             ))?;
-            transaction.pragma_update(None, "user_version", 10)?;
+            transaction
+                .execute_batch(include_str!("../../migrations/0011_cloud_sync_state.sql"))?;
+            transaction.pragma_update(None, "user_version", 11)?;
             transaction.commit()?;
             Ok(())
         }
-        10 => Ok(()),
+        10 => {
+            let transaction = connection.transaction()?;
+            transaction
+                .execute_batch(include_str!("../../migrations/0011_cloud_sync_state.sql"))?;
+            transaction.pragma_update(None, "user_version", 11)?;
+            transaction.commit()?;
+            Ok(())
+        }
+        11 => Ok(()),
         newer => Err(DatabaseError::UnsupportedSchema(newer)),
     }
 }

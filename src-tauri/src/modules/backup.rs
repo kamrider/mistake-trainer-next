@@ -20,7 +20,7 @@ use crate::infrastructure::{
 };
 
 const FORMAT_VERSION: i32 = 1;
-const CURRENT_SCHEMA_VERSION: i64 = 10;
+const CURRENT_SCHEMA_VERSION: i64 = 11;
 const DATABASE_FILE: &str = "library.db";
 const MANIFEST_FILE: &str = "manifest.json";
 const ASSETS_DIRECTORY: &str = "assets";
@@ -1074,6 +1074,72 @@ fn ensure_single_account(
     account_id: &str,
     schema_version: i64,
 ) -> Result<(), BackupError> {
+    let cloud_tables = ["cloud_sync_state", "cloud_asset_transfers"];
+    let cloud_table_count = cloud_tables
+        .iter()
+        .map(|table| table_exists(connection, table))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|exists| *exists)
+        .count();
+    if (schema_version < 11 && cloud_table_count != 0)
+        || (schema_version >= 11 && cloud_table_count != cloud_tables.len())
+    {
+        return Err(BackupError::Integrity);
+    }
+    let cloud_outbox_columns = ["lease_id", "lease_expires_at_utc_ms", "last_error_code"];
+    let present_cloud_outbox_columns = cloud_outbox_columns
+        .iter()
+        .map(|column| column_exists(connection, "sync_operations", column))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|exists| *exists)
+        .count();
+    if (schema_version < 11 && present_cloud_outbox_columns != 0)
+        || (schema_version >= 11 && present_cloud_outbox_columns != cloud_outbox_columns.len())
+    {
+        return Err(BackupError::Integrity);
+    }
+    if schema_version >= 11 {
+        if !table_columns_match(
+            connection,
+            "cloud_sync_state",
+            &[
+                "account_id",
+                "pull_cursor",
+                "last_attempt_at_utc_ms",
+                "last_success_at_utc_ms",
+                "last_error_code",
+                "remote_user_fingerprint",
+            ],
+        )? || !table_columns_match(
+            connection,
+            "cloud_asset_transfers",
+            &[
+                "asset_id",
+                "upload_url",
+                "confirmed_offset",
+                "expires_at_utc_ms",
+                "updated_at_utc_ms",
+            ],
+        )? || !index_columns_match(
+            connection,
+            "sync_operations_lease_idx",
+            &["status", "lease_expires_at_utc_ms"],
+        )? {
+            return Err(BackupError::Integrity);
+        }
+        let has_foreign_cloud_state: i64 = connection.query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM cloud_sync_state WHERE account_id <> ?1 LIMIT 1
+             )",
+            [account_id],
+            |row| row.get(0),
+        )?;
+        if has_foreign_cloud_state != 0 {
+            return Err(BackupError::ForeignAccountData);
+        }
+    }
     let legacy_tables = ["legacy_imports", "legacy_import_entities"];
     let legacy_table_count = legacy_tables
         .iter()
