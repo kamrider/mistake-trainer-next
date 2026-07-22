@@ -27,11 +27,16 @@ const emit = defineEmits<{
   profileSelect: [profileId: string]
   profileCreate: [name: string]
   profileRename: [profileId: string, name: string]
+  profileDelete: [profileId: string, confirmationName: string]
   profileRetry: []
 }>()
 
 function emitProfileRename(profileId: string, name: string) {
   emit('profileRename', profileId, name)
+}
+
+function emitProfileDelete(profileId: string, confirmationName: string) {
+  emit('profileDelete', profileId, confirmationName)
 }
 
 const navigation = [
@@ -91,6 +96,7 @@ const navigation = [
           @select="$emit('profileSelect', $event)"
           @create="$emit('profileCreate', $event)"
           @rename="emitProfileRename"
+          @delete="emitProfileDelete"
           @retry="$emit('profileRetry')"
         />
       </div>

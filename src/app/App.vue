@@ -136,6 +136,10 @@ function renameProfile(profileId: string, name: string) {
   return mutateProfile(() => commands.profileRename({ profileId, name }), false)
 }
 
+function deleteProfile(profileId: string, confirmationName: string) {
+  return mutateProfile(() => commands.profileDelete({ profileId, confirmationName }), true)
+}
+
 function selectProfile(profileId: string) {
   if (profileId === activeProfileId.value) return
   return mutateProfile(() => commands.profileSelect(profileId), true)
@@ -154,6 +158,7 @@ function selectProfile(profileId: string) {
     @profile-select="selectProfile"
     @profile-create="createProfile"
     @profile-rename="renameProfile"
+    @profile-delete="deleteProfile"
     @profile-retry="loadProfiles"
   >
     <Transition name="restore-notice">

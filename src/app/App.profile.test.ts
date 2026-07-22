@@ -9,6 +9,7 @@ const commandMocks = vi.hoisted(() => ({
   systemStatus: vi.fn(),
   profileList: vi.fn(),
   profileCreate: vi.fn(),
+  profileDelete: vi.fn(),
   profileRename: vi.fn(),
   profileSelect: vi.fn(),
   backupRestoreStatus: vi.fn(),
@@ -36,6 +37,10 @@ describe('App profile orchestration', () => {
       ok: true,
       data: { activeProfileId: contest.id, profiles: [daily, contest] },
     })
+    commandMocks.profileDelete.mockResolvedValue({
+      ok: true,
+      data: { activeProfileId: daily.id, profiles: [daily] },
+    })
   })
 
   it('switches the persisted profile, returns to the dashboard, and updates the shell', async () => {
@@ -53,6 +58,28 @@ describe('App profile orchestration', () => {
       expect(commandMocks.profileSelect).toHaveBeenCalledWith('contest')
       expect(router.currentRoute.value.name).toBe('dashboard')
       expect(screen.getByRole('button', { name: /当前学习档案：竞赛强化/ })).toBeVisible()
+    })
+  })
+
+  it('deletes a confirmed profile and refreshes the active workspace', async () => {
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/library')
+    await router.isReady()
+    render(App, { global: { plugins: [router], stubs: { transition: false } } })
+
+    await user.click(await screen.findByRole('button', { name: /当前学习档案：日常学习/ }))
+    await user.click(screen.getByRole('button', { name: '删除档案：竞赛强化' }))
+    await user.type(await screen.findByRole('textbox', { name: '输入“竞赛强化”确认删除' }), '竞赛强化')
+    await user.click(screen.getByRole('button', { name: '永久删除档案' }))
+
+    await waitFor(() => {
+      expect(commandMocks.profileDelete).toHaveBeenCalledWith({
+        profileId: 'contest',
+        confirmationName: '竞赛强化',
+      })
+      expect(router.currentRoute.value.name).toBe('dashboard')
+      expect(screen.getByRole('button', { name: /当前学习档案：日常学习/ })).toBeVisible()
     })
   })
 

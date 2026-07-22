@@ -44,6 +44,39 @@ describe('ProfileSwitcher', () => {
     expect(view.emitted('create')).toEqual([['错题冲刺']])
   })
 
+  it('requires the exact profile name before emitting a deletion', async () => {
+    const user = userEvent.setup()
+    const view = render(ProfileSwitcher, {
+      props: { profiles, activeProfileId: 'one', busy: false, errorMessage: '' },
+    })
+
+    await user.click(screen.getByRole('button', { name: /当前学习档案：日常学习/ }))
+    await user.click(screen.getByRole('button', { name: '删除档案：竞赛强化' }))
+
+    const confirmation = screen.getByRole('textbox', { name: '输入“竞赛强化”确认删除' })
+    const remove = screen.getByRole('button', { name: '永久删除档案' })
+    expect(remove).toBeDisabled()
+
+    await user.type(confirmation, '竞赛')
+    expect(remove).toBeDisabled()
+    expect(view.emitted('delete')).toBeUndefined()
+
+    await user.type(confirmation, '强化')
+    expect(remove).toBeEnabled()
+    await user.click(remove)
+    expect(view.emitted('delete')).toEqual([['two', '竞赛强化']])
+  })
+
+  it('does not expose deletion when only one profile remains', async () => {
+    const user = userEvent.setup()
+    render(ProfileSwitcher, {
+      props: { profiles: [profiles[0]!], activeProfileId: 'one', busy: false, errorMessage: '' },
+    })
+
+    await user.click(screen.getByRole('button', { name: /当前学习档案：日常学习/ }))
+    expect(screen.queryByRole('button', { name: /删除档案/ })).not.toBeInTheDocument()
+  })
+
   it('closes on Escape and restores focus to the trigger', async () => {
     const user = userEvent.setup()
     render(ProfileSwitcher, {
