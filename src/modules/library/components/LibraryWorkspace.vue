@@ -247,6 +247,27 @@ const filters: Array<{ value: ProblemStatusFilter; label: string }> = [
           </label>
           <span class="status-dot">{{ problem.status === 'active' ? '学习中' : problem.status }}</span>
         </div>
+        <button
+          class="problem-preview"
+          type="button"
+          :aria-label="`打开 ${problem.subject || '未分类'} 错题详情`"
+          @click="$emit('openDetail', problem.id)"
+        >
+          <img
+            v-if="problem.questionPreviewDataUrl"
+            :src="problem.questionPreviewDataUrl"
+            :alt="`${problem.subject || '未分类'} 题图预览`"
+            loading="lazy"
+          >
+          <span v-else>
+            <Image
+              :size="23"
+              aria-hidden="true"
+            />
+            题图预览暂不可用
+          </span>
+          <small>点击题图进入题卡</small>
+        </button>
         <p class="problem-note">
           {{ problem.note || '这道题还没有补充笔记。' }}
         </p>
@@ -258,14 +279,6 @@ const filters: Array<{ value: ProblemStatusFilter; label: string }> = [
           <span>·</span>
           <span>{{ problem.answerAssetCount }} 张答案</span>
         </div>
-        <button
-          type="button"
-          class="card-link"
-          @click="$emit('openDetail', problem.id)"
-        >
-          查看详情
-          <span aria-hidden="true">→</span>
-        </button>
       </article>
     </section>
 
@@ -361,11 +374,15 @@ h1 { margin: 0; font-size: clamp(42px,5vw,64px); letter-spacing: -.055em; line-h
 .select-problem input { width: 16px; height: 16px; accent-color: var(--green-deep); }
 .subject { font-weight: 760; }
 .status-dot { color: #567064; font-size: 11px; }
-.problem-note { min-height: 48px; margin: 22px 0; font-size: 16px; line-height: 1.55; }
+.problem-preview { position: relative; display: grid; width: 100%; min-height: 190px; margin-top: 18px; overflow: hidden; place-items: center; color: var(--ink-muted); border: 1px solid rgba(33,51,45,.12); border-radius: 14px; background: linear-gradient(145deg,rgba(232,221,199,.64),rgba(255,253,247,.92)); cursor: pointer; transition: transform var(--motion-standard) var(--ease-standard), border-color var(--motion-standard) var(--ease-standard), box-shadow var(--motion-standard) var(--ease-standard); }
+.problem-preview:hover { border-color: rgba(185,88,63,.48); box-shadow: 0 12px 26px rgba(34,48,43,.11); transform: translateY(-2px); }
+.problem-preview:focus-visible { outline: 3px solid rgba(185,88,63,.34); outline-offset: 2px; }
+.problem-preview img { width: 100%; height: 100%; min-height: 190px; object-fit: contain; background: #fff; }
+.problem-preview > span { display: grid; gap: 8px; place-items: center; padding: 24px; font-size: 12px; }
+.problem-preview small { position: absolute; right: 9px; bottom: 8px; padding: 5px 8px; color: var(--paper); border-radius: 999px; background: rgba(33,51,45,.76); font-size: 10px; font-weight: 720; }
+.problem-note { min-height: 48px; margin: 20px 0; font-size: 16px; line-height: 1.55; }
 .asset-counts { color: var(--ink-muted); font-size: 12px; }
 .asset-counts span { display: inline-flex; gap: 5px; align-items: center; }
-.card-link { display: flex; justify-content: space-between; width: 100%; margin-top: 20px; padding: 14px 0 0; color: var(--green-deep); border: 0; border-top: 1px solid var(--line); background: transparent; text-align: left; cursor: pointer; }
-.card-link:hover { color: var(--cinnabar); }
 .empty-state { display: grid; justify-items: center; max-width: 680px; margin: 52px auto 0; padding: 62px 42px; border: 1px solid var(--line); border-radius: 4px 24px 24px 24px; background: rgba(255,253,247,.66); box-shadow: var(--shadow-soft); text-align: center; }
 .empty-icon { display: grid; width: 54px; height: 54px; place-items: center; color: var(--green-deep); border-radius: 18px 18px 18px 5px; background: var(--green-soft); }
 .empty-kicker { margin: 24px 0 7px; color: var(--cinnabar); font-size: 12px; letter-spacing: .08em; }
@@ -377,6 +394,6 @@ h1 { margin: 0; font-size: clamp(42px,5vw,64px); letter-spacing: -.055em; line-h
 @keyframes pulse { from { opacity: .45; } to { opacity: .8; } }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 980px) { .batch-bar { align-items: flex-start; flex-direction: column; } .batch-actions { width: 100%; flex-wrap: wrap; } }
-@media (max-width: 820px) { .library-workspace { padding: 34px 22px 110px; } .library-header { align-items: flex-start; flex-direction: column; } .library-toolbar { align-items: stretch; flex-direction: column; } .search-field { min-width: 0; } .select-all-action { justify-content: center; } .problem-grid { grid-template-columns: 1fr; } .batch-actions .start-review-action, .batch-actions .start-exam-action { flex: 1 0 calc(50% - 4px); justify-content: center; } }
-@media (prefers-reduced-motion: reduce) { .loading-state span, .spin { animation: none; } .primary-action, .batch-bar button, .deck-dock-enter-active, .deck-dock-leave-active, .problem-card { transition: none; } .deck-dock-enter-from, .deck-dock-leave-to { transform: none; } }
+@media (max-width: 820px) { .library-workspace { padding: 34px 22px 110px; } .library-header { align-items: flex-start; flex-direction: column; } .library-toolbar { align-items: stretch; flex-direction: column; } .search-field { min-width: 0; } .select-all-action { justify-content: center; } .problem-grid { grid-template-columns: 1fr; } .problem-preview, .problem-preview img { min-height: 220px; } .batch-actions .start-review-action, .batch-actions .start-exam-action { flex: 1 0 calc(50% - 4px); justify-content: center; } }
+@media (prefers-reduced-motion: reduce) { .loading-state span, .spin { animation: none; } .primary-action, .batch-bar button, .deck-dock-enter-active, .deck-dock-leave-active, .problem-card, .problem-preview { transition: none; } .deck-dock-enter-from, .deck-dock-leave-to { transform: none; } .problem-preview:hover { transform: none; } }
 </style>

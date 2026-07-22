@@ -21,11 +21,11 @@ vi.mock('../../shared/api/bindings', () => ({ commands: api }))
 const problems = [
   {
     id: 'problem-1', subject: '数学', note: '先看定义域。', status: 'active',
-    questionAssetCount: 1, answerAssetCount: 1, updatedAtUtcMs: 1,
+    questionAssetCount: 1, answerAssetCount: 1, questionPreviewDataUrl: null, updatedAtUtcMs: 1,
   },
   {
     id: 'problem-2', subject: '物理', note: '画出受力图。', status: 'active',
-    questionAssetCount: 1, answerAssetCount: 1, updatedAtUtcMs: 2,
+    questionAssetCount: 1, answerAssetCount: 1, questionPreviewDataUrl: null, updatedAtUtcMs: 2,
   },
 ]
 

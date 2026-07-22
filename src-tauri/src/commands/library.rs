@@ -9,7 +9,7 @@ use crate::{
     modules::problems::{
         ChangeProblemStatus, ProblemDetail, ProblemDetailQuery, ProblemListQuery,
         ProblemStatusFilter, ProblemSummary, UpdateProblem, change_problem_status,
-        get_problem_detail, list_problem_summaries, update_problem,
+        get_problem_detail, list_problem_summaries_with_previews, update_problem,
     },
 };
 
@@ -56,8 +56,10 @@ pub fn problem_list_for(
         Ok(connection) => connection,
         Err(_) => return internal_library_error("library_lock_poisoned"),
     };
-    match list_problem_summaries(
+    match list_problem_summaries_with_previews(
         &connection,
+        &runtime.blob_root,
+        &runtime.asset_key,
         ProblemListQuery {
             account_id: runtime.account_id().to_owned(),
             profile_id: profile.id,

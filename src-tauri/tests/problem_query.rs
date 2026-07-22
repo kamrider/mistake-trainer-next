@@ -1,9 +1,12 @@
+use std::io::Cursor;
+
+use image::{DynamicImage, ImageBuffer, ImageFormat, Rgba};
 use mistake_trainer_next_lib::{
     infrastructure::database::{open_encrypted_database, run_migrations},
     modules::{
         problems::{
             AssetRole, CaptureAsset, CreateProblem, ProblemListQuery, ProblemStatusFilter,
-            create_problem, list_problem_summaries,
+            create_problem, list_problem_summaries, list_problem_summaries_with_previews,
         },
         profiles::{CreateProfile, create_profile},
     },
@@ -216,6 +219,72 @@ fn list_search_matches_subject_or_note_without_treating_wildcards_as_patterns() 
     );
     assert_eq!(literal_wildcard.len(), 1);
     assert_eq!(literal_wildcard[0].subject, "物理_实验");
+}
+
+#[test]
+fn list_with_previews_returns_a_small_question_thumbnail() {
+    let directory = tempdir().expect("tempdir");
+    let mut connection =
+        open_encrypted_database(&directory.path().join("library.db"), "problem-preview-key")
+            .expect("open database");
+    run_migrations(&mut connection).expect("migrate database");
+    let profile = create_profile(
+        &mut connection,
+        CreateProfile {
+            account_id: "account-1".to_owned(),
+            name: "小树".to_owned(),
+            now_utc_ms: 10,
+        },
+    )
+    .expect("profile");
+    let mut image_bytes = Cursor::new(Vec::new());
+    DynamicImage::ImageRgba8(ImageBuffer::from_pixel(800, 600, Rgba([185, 88, 63, 255])))
+        .write_to(&mut image_bytes, ImageFormat::Png)
+        .expect("encode fixture image");
+    create_problem(
+        &mut connection,
+        &directory.path().join("assets"),
+        &[61_u8; 32],
+        CreateProblem {
+            account_id: "account-1".to_owned(),
+            profile_id: profile.id.clone(),
+            subject: "数学".to_owned(),
+            note: String::new(),
+            assets: vec![
+                CaptureAsset {
+                    role: AssetRole::Question,
+                    media_type: "image/png".to_owned(),
+                    bytes: image_bytes.get_ref().clone(),
+                },
+                CaptureAsset {
+                    role: AssetRole::Answer,
+                    media_type: "image/png".to_owned(),
+                    bytes: image_bytes.into_inner(),
+                },
+            ],
+            now_utc_ms: 20,
+        },
+    )
+    .expect("create problem");
+
+    let summaries = list_problem_summaries_with_previews(
+        &connection,
+        &directory.path().join("assets"),
+        &[61_u8; 32],
+        ProblemListQuery {
+            account_id: "account-1".to_owned(),
+            profile_id: profile.id,
+            status: ProblemStatusFilter::Active,
+            search: None,
+        },
+    )
+    .expect("list previews");
+
+    let preview = summaries[0]
+        .question_preview_data_url
+        .as_deref()
+        .expect("question preview");
+    assert!(preview.starts_with("data:image/png;base64,"));
 }
 
 fn create_fixture_problem(

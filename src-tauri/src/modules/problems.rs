@@ -18,6 +18,7 @@ use crate::{
 
 const MAX_ENCRYPTED_ASSET_BYTES: u64 = MAX_CAPTURE_FILE_BYTES + 64;
 const PREVIEW_MAX_DIMENSION: u32 = 1_600;
+const LIST_PREVIEW_MAX_DIMENSION: u32 = 480;
 const MAX_SOURCE_DIMENSION: u32 = 12_000;
 const MAX_SOURCE_PIXELS: u64 = 80_000_000;
 const TRASH_RETENTION_MILLIS: i64 = 30 * 86_400_000;
@@ -104,6 +105,7 @@ pub struct ProblemSummary {
     pub status: String,
     pub question_asset_count: i32,
     pub answer_asset_count: i32,
+    pub question_preview_data_url: Option<String>,
     pub updated_at_utc_ms: f64,
 }
 
@@ -190,6 +192,34 @@ pub fn list_problem_summaries(
     connection: &Connection,
     query: ProblemListQuery,
 ) -> Result<Vec<ProblemSummary>, ProblemUseCaseError> {
+    list_problem_summaries_internal(connection, None, query)
+}
+
+pub fn list_problem_summaries_with_previews(
+    connection: &Connection,
+    blob_root: &Path,
+    key: &[u8; 32],
+    query: ProblemListQuery,
+) -> Result<Vec<ProblemSummary>, ProblemUseCaseError> {
+    list_problem_summaries_internal(connection, Some((blob_root, key)), query)
+}
+
+fn list_problem_summaries_internal(
+    connection: &Connection,
+    preview_store: Option<(&Path, &[u8; 32])>,
+    query: ProblemListQuery,
+) -> Result<Vec<ProblemSummary>, ProblemUseCaseError> {
+    struct ProblemSummaryRow {
+        id: String,
+        subject: String,
+        note: String,
+        status: String,
+        question_asset_count: i32,
+        answer_asset_count: i32,
+        updated_at_utc_ms: f64,
+        question_asset_path: Option<String>,
+        question_asset_media_type: Option<String>,
+    }
     let search = query
         .search
         .unwrap_or_default()
@@ -204,7 +234,23 @@ pub fn list_problem_summaries(
         "SELECT p.id, p.subject, p.note, p.status,
                 SUM(CASE WHEN pa.role = 'question' THEN 1 ELSE 0 END),
                 SUM(CASE WHEN pa.role = 'answer' THEN 1 ELSE 0 END),
-                p.updated_at_utc_ms
+                p.updated_at_utc_ms,
+                (SELECT a.encrypted_path
+                 FROM problem_assets pa_preview
+                 JOIN assets a ON a.id = pa_preview.asset_id
+                 WHERE pa_preview.problem_id = p.id
+                   AND pa_preview.role = 'question'
+                   AND a.account_id = p.account_id
+                 ORDER BY pa_preview.position
+                 LIMIT 1),
+                (SELECT a.media_type
+                 FROM problem_assets pa_preview
+                 JOIN assets a ON a.id = pa_preview.asset_id
+                 WHERE pa_preview.problem_id = p.id
+                   AND pa_preview.role = 'question'
+                   AND a.account_id = p.account_id
+                 ORDER BY pa_preview.position
+                 LIMIT 1)
          FROM problems p
          LEFT JOIN problem_assets pa ON pa.problem_id = p.id
          WHERE p.account_id = ?1 AND p.profile_id = ?2 AND p.status = ?3
@@ -221,7 +267,7 @@ pub fn list_problem_summaries(
             search
         ],
         |row| {
-            Ok(ProblemSummary {
+            Ok(ProblemSummaryRow {
                 id: row.get(0)?,
                 subject: row.get(1)?,
                 note: row.get(2)?,
@@ -229,12 +275,39 @@ pub fn list_problem_summaries(
                 question_asset_count: row.get(4)?,
                 answer_asset_count: row.get(5)?,
                 updated_at_utc_ms: row.get(6)?,
+                question_asset_path: row.get(7)?,
+                question_asset_media_type: row.get(8)?,
             })
         },
     )?;
 
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(ProblemUseCaseError::Database)
+    rows.collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .map(|row| {
+            let question_preview_data_url = preview_store.and_then(|(blob_root, key)| {
+                let encrypted_path = row.question_asset_path.as_deref()?;
+                let media_type = row.question_asset_media_type.as_deref()?;
+                let encrypted = read_decrypted_asset(blob_root, key, encrypted_path).ok()?;
+                let (preview_media_type, preview_bytes) =
+                    make_preview_with_dimension(&encrypted, media_type, LIST_PREVIEW_MAX_DIMENSION)
+                        .ok()?;
+                Some(format!(
+                    "data:{preview_media_type};base64,{}",
+                    STANDARD.encode(preview_bytes)
+                ))
+            });
+            Ok(ProblemSummary {
+                id: row.id,
+                subject: row.subject,
+                note: row.note,
+                status: row.status,
+                question_asset_count: row.question_asset_count,
+                answer_asset_count: row.answer_asset_count,
+                question_preview_data_url,
+                updated_at_utc_ms: row.updated_at_utc_ms,
+            })
+        })
+        .collect()
 }
 
 pub fn get_problem_detail(
@@ -330,6 +403,14 @@ fn make_preview<'a>(
     bytes: &'a [u8],
     media_type: &str,
 ) -> Result<(&'static str, Vec<u8>), ProblemUseCaseError> {
+    make_preview_with_dimension(bytes, media_type, PREVIEW_MAX_DIMENSION)
+}
+
+fn make_preview_with_dimension<'a>(
+    bytes: &'a [u8],
+    media_type: &str,
+    max_dimension: u32,
+) -> Result<(&'static str, Vec<u8>), ProblemUseCaseError> {
     let format = match media_type {
         "image/png" => image::ImageFormat::Png,
         "image/jpeg" => image::ImageFormat::Jpeg,
@@ -349,10 +430,10 @@ fn make_preview<'a>(
     }
     let image = image::load_from_memory_with_format(bytes, format)
         .map_err(|_| ProblemUseCaseError::InvalidAssetImage)?;
-    if image.width() <= PREVIEW_MAX_DIMENSION && image.height() <= PREVIEW_MAX_DIMENSION {
+    if image.width() <= max_dimension && image.height() <= max_dimension {
         return Ok((media_type_for(format), bytes.to_vec()));
     }
-    let thumbnail = image.thumbnail(PREVIEW_MAX_DIMENSION, PREVIEW_MAX_DIMENSION);
+    let thumbnail = image.thumbnail(max_dimension, max_dimension);
     let mut output = Cursor::new(Vec::new());
     thumbnail
         .write_to(&mut output, image::ImageFormat::Png)

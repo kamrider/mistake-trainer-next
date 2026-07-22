@@ -476,6 +476,7 @@ export type ProblemSummary = {
 	status: string,
 	questionAssetCount: number,
 	answerAssetCount: number,
+	questionPreviewDataUrl: string | null,
 	updatedAtUtcMs: number | null,
 };
 
