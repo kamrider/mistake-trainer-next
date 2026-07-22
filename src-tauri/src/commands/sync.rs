@@ -10,7 +10,7 @@ use crate::{
         self, CloudBackendError, CloudBackendKind, CloudBackendStatus,
     },
     modules::auth_sync::{AuthStatus, AuthStatusKind, AuthSyncManager, CloudAuthRuntime},
-    modules::{sync_pull::pull_until_current, sync_push::push_once},
+    modules::{profiles::list_profiles, sync_pull::pull_until_current, sync_push::push_once},
 };
 
 /// DTO used by the generated command client when changing the sync provider.
@@ -325,7 +325,6 @@ pub async fn sync_now(
     let blob_root = state.blob_root.clone();
     let asset_key = state.asset_key;
     let account_id = state.account_id().to_owned();
-    drop(state);
     let worker = tauri::async_runtime::spawn_blocking(move || {
         let mut connection = connection.lock().map_err(|_| "sync_database_locked")?;
         let runtime = tokio::runtime::Runtime::new().map_err(|_| "sync_runtime_failed")?;
@@ -367,7 +366,19 @@ pub async fn sync_now(
         result
     });
     match worker.await {
-        Ok(Ok(report)) => Ok(AppResult::success(report)),
+        Ok(Ok(report)) => {
+            let current = state.active_profile();
+            if let Ok(connection) = state.connection.lock()
+                && let Ok(profiles) = list_profiles(&connection, state.account_id())
+                && let Some(active) = profiles
+                    .iter()
+                    .find(|profile| profile.id == current.id)
+                    .or_else(|| profiles.first())
+            {
+                state.replace_active_profile(active);
+            }
+            Ok(AppResult::success(report))
+        }
         Ok(Err(code)) => Ok(AppResult::failure(
             code,
             "同步未完成，本地数据保持不变；请稍后重试或查看诊断信息",

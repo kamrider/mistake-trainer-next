@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 use image::GenericImageView;
@@ -151,6 +151,7 @@ pub async fn pull_until_current<T: CloudPullTransport>(
             account_id,
             &decoded,
             &staged_assets,
+            blob_root,
             page_cursor,
             now_utc_ms,
         ) {
@@ -372,6 +373,7 @@ fn apply_page(
     account_id: &str,
     changes: &[DecodedChange],
     staged_assets: &[StagedAsset],
+    blob_root: &Path,
     page_cursor: i64,
     now_utc_ms: i64,
 ) -> Result<usize, SyncPullError> {
@@ -393,6 +395,7 @@ fn apply_page(
         }
     }
     let mut affected_problems = HashSet::new();
+    let mut orphan_blob_paths = Vec::new();
     for change in changes {
         match change {
             DecodedChange::Profile(profile) => upsert_profile(&transaction, account_id, profile)?,
@@ -407,7 +410,9 @@ fn apply_page(
             }
             DecodedChange::Export(snapshot) => upsert_export(&transaction, account_id, snapshot)?,
             DecodedChange::Tombstone(tombstone) => {
-                apply_tombstone(&transaction, account_id, tombstone)?;
+                if let Some(relative_path) = apply_tombstone(&transaction, account_id, tombstone)? {
+                    orphan_blob_paths.push(relative_path);
+                }
                 if tombstone.entity_type == "problem" {
                     affected_problems.insert(tombstone.entity_id.clone());
                 }
@@ -419,6 +424,9 @@ fn apply_page(
     }
     record_pull_success_tx(&transaction, account_id, page_cursor, now_utc_ms)?;
     transaction.commit()?;
+    for relative_path in orphan_blob_paths {
+        remove_orphan_blob(blob_root, &relative_path);
+    }
     Ok(changes.len())
 }
 
@@ -570,7 +578,7 @@ fn apply_tombstone(
     tx: &Transaction<'_>,
     account_id: &str,
     tombstone: &WireTombstone,
-) -> Result<(), SyncPullError> {
+) -> Result<Option<String>, SyncPullError> {
     validate_uuid(&tombstone.tombstone_id)?;
     validate_uuid(&tombstone.entity_id)?;
     if let Some(profile_id) = &tombstone.profile_id {
@@ -586,13 +594,147 @@ fn apply_tombstone(
          WHERE tombstones.account_id = excluded.account_id AND excluded.revision > tombstones.revision",
         params![tombstone.tombstone_id, account_id, tombstone.profile_id, tombstone.entity_type, tombstone.entity_id, tombstone.deleted_at_utc_ms, tombstone.purge_after_utc_ms, tombstone.deleted_revision],
     )?;
-    if tombstone.entity_type == "problem" {
-        tx.execute(
-            "UPDATE problems SET status = 'trashed', updated_at_utc_ms = ?1, revision = max(revision, ?2) WHERE id = ?3 AND account_id = ?4",
-            params![tombstone.deleted_at_utc_ms, tombstone.deleted_revision, tombstone.entity_id, account_id],
-        )?;
+    match tombstone.entity_type.as_str() {
+        "problem" => {
+            tx.execute(
+                "UPDATE problems SET status = 'trashed', updated_at_utc_ms = ?1, revision = max(revision, ?2) WHERE id = ?3 AND account_id = ?4",
+                params![tombstone.deleted_at_utc_ms, tombstone.deleted_revision, tombstone.entity_id, account_id],
+            )?;
+        }
+        "learner_profile" => apply_profile_tombstone(tx, account_id, tombstone)?,
+        "asset" => return apply_asset_tombstone(tx, account_id, tombstone),
+        "review_event" | "export_snapshot" => {}
+        _ => return Err(SyncPullError::InvalidChange),
     }
+    Ok(None)
+}
+
+fn apply_profile_tombstone(
+    tx: &Transaction<'_>,
+    account_id: &str,
+    tombstone: &WireTombstone,
+) -> Result<(), SyncPullError> {
+    if tombstone.profile_id.is_some() {
+        return Err(SyncPullError::InvalidChange);
+    }
+    let target_revision = tx
+        .query_row(
+            "SELECT revision FROM learner_profiles WHERE id = ?1 AND account_id = ?2",
+            params![tombstone.entity_id, account_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?;
+    let Some(target_revision) = target_revision else {
+        return Ok(());
+    };
+    if tombstone.deleted_revision < target_revision {
+        return Ok(());
+    }
+    let replacement = tx
+        .query_row(
+            "SELECT id FROM learner_profiles
+             WHERE account_id = ?1 AND id <> ?2
+             ORDER BY created_at_utc_ms, id LIMIT 1",
+            params![account_id, tombstone.entity_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .ok_or(SyncPullError::InvalidChange)?;
+    tx.execute(
+        "INSERT INTO account_preferences(account_id, active_profile_id, updated_at_utc_ms)
+         VALUES(?3, ?1, ?2)
+         ON CONFLICT(account_id) DO UPDATE SET
+           active_profile_id = CASE
+             WHEN account_preferences.active_profile_id = ?4 THEN excluded.active_profile_id
+             ELSE account_preferences.active_profile_id
+           END,
+           updated_at_utc_ms = CASE
+             WHEN account_preferences.active_profile_id = ?4 THEN excluded.updated_at_utc_ms
+             ELSE account_preferences.updated_at_utc_ms
+           END",
+        params![
+            replacement,
+            tombstone.deleted_at_utc_ms,
+            account_id,
+            tombstone.entity_id
+        ],
+    )?;
+    tx.execute(
+        "DELETE FROM sync_operations
+         WHERE account_id = ?1 AND (
+           (entity_type = 'learner_profile' AND entity_id = ?2)
+           OR (profile_id = ?2 AND entity_type <> 'asset')
+         )",
+        params![account_id, tombstone.entity_id],
+    )?;
+    tx.execute(
+        "UPDATE sync_operations SET profile_id = NULL
+         WHERE account_id = ?1 AND profile_id = ?2 AND entity_type = 'asset'",
+        params![account_id, tombstone.entity_id],
+    )?;
+    tx.execute(
+        "DELETE FROM sync_conflicts WHERE account_id = ?1 AND profile_id = ?2",
+        params![account_id, tombstone.entity_id],
+    )?;
+    tx.execute(
+        "DELETE FROM tombstones
+         WHERE account_id = ?1 AND profile_id = ?2",
+        params![account_id, tombstone.entity_id],
+    )?;
+    tx.execute(
+        "DELETE FROM learner_profiles WHERE id = ?1 AND account_id = ?2",
+        params![tombstone.entity_id, account_id],
+    )?;
     Ok(())
+}
+
+fn apply_asset_tombstone(
+    tx: &Transaction<'_>,
+    account_id: &str,
+    tombstone: &WireTombstone,
+) -> Result<Option<String>, SyncPullError> {
+    if tombstone.profile_id.is_some() {
+        return Err(SyncPullError::InvalidChange);
+    }
+    let relative_path = tx
+        .query_row(
+            "SELECT encrypted_path FROM assets
+             WHERE id = ?1 AND account_id = ?2
+               AND NOT EXISTS(SELECT 1 FROM problem_assets WHERE asset_id = ?1)
+               AND NOT EXISTS(SELECT 1 FROM capture_items WHERE asset_id = ?1)",
+            params![tombstone.entity_id, account_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let Some(relative_path) = relative_path else {
+        return Ok(None);
+    };
+    tx.execute(
+        "DELETE FROM sync_operations
+         WHERE account_id = ?1 AND entity_type = 'asset' AND entity_id = ?2",
+        params![account_id, tombstone.entity_id],
+    )?;
+    tx.execute(
+        "DELETE FROM assets WHERE id = ?1 AND account_id = ?2",
+        params![tombstone.entity_id, account_id],
+    )?;
+    Ok(Some(relative_path))
+}
+
+fn remove_orphan_blob(blob_root: &Path, relative_path: &str) {
+    let relative = Path::new(relative_path);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return;
+    }
+    match fs::remove_file(blob_root.join(relative)) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => {}
+    }
 }
 
 fn cleanup_staged(staged: &[StagedAsset], remove_final: bool) {
