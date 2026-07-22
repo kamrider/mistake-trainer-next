@@ -25,7 +25,7 @@ vi.mock('../../shared/api/bindings', () => ({ commands: api }))
 vi.mock('../../modules/capture/components/CaptureWorkspace.vue', () => ({
   default: {
     props: ['batches', 'detail', 'busy', 'errorMessage', 'lanSession', 'subjectOptions'],
-    emits: ['openBatch', 'mobileCapture', 'mergeCard', 'deleteDraft', 'moveItem', 'assignBatchSubject', 'importFiles'],
+    emits: ['openBatch', 'mobileCapture', 'mergeCard', 'deleteDraft', 'moveItem', 'assignBatchSubject', 'updateDraft', 'importFiles'],
     setup(_props: Record<string, unknown>, { emit }: { emit: (event: string, ...args: unknown[]) => void }) {
       const emitFiles = () => emit('importFiles', [
         { name: 'bad.png', arrayBuffer: async () => new Uint8Array([1]).buffer },
@@ -133,6 +133,33 @@ describe('CaptureView one-time Windows LAN permission', () => {
     resolveFirst(success(detail))
     await waitFor(() => expect(api.captureDraftUpdate).toHaveBeenCalledTimes(2))
     expect(api.captureDraftUpdate.mock.calls[1]![0]).toMatchObject({ note: '最新备注' })
+  })
+
+  it('reloads the batch and retries a draft update after a revision conflict', async () => {
+    const refreshedDetail = { ...detail, batch: { ...batch, revision: 2 } }
+    api.captureBatchDetail
+      .mockResolvedValueOnce(success(detail))
+      .mockResolvedValueOnce(success(refreshedDetail))
+    api.captureDraftUpdate
+      .mockResolvedValueOnce({
+        ok: false,
+        error: {
+          code: 'capture_revision_conflict',
+          userMessage: '批次已更新',
+          retryable: true,
+          diagnosticId: 'diag-revision',
+        },
+      })
+      .mockResolvedValueOnce(success({ ...refreshedDetail, batch: { ...refreshedDetail.batch, revision: 3 } }))
+    render(CaptureView)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'open batch' }))
+    await waitFor(() => expect(api.captureBatchDetail).toHaveBeenCalledWith('batch-1'))
+    await fireEvent.click(screen.getByRole('button', { name: 'update draft' }))
+    await waitFor(() => expect(api.captureDraftUpdate).toHaveBeenCalledTimes(2))
+
+    expect(api.captureDraftUpdate.mock.calls[0]![0]).toMatchObject({ expectedRevision: 1 })
+    expect(api.captureDraftUpdate.mock.calls[1]![0]).toMatchObject({ expectedRevision: 2 })
   })
 
   it('persists card creation, in-card role changes, and reversible deletion', async () => {
