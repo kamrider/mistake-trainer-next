@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { isTauri } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import CaptureWorkspace from '../../modules/capture/components/CaptureWorkspace.vue'
 import {
   commands,
@@ -42,6 +42,16 @@ let unlisten: UnlistenFn | undefined
 let refreshTimer: ReturnType<typeof setTimeout> | undefined
 let lanPollTimer: ReturnType<typeof setInterval> | undefined
 let viewMounted = false
+type PendingDraftUpdate = {
+  batchId: string
+  draftId: string
+  subject: string
+  tags: string[]
+  note: string
+  attempts: number
+}
+const pendingDraftUpdates = new Map<string, PendingDraftUpdate>()
+let draftSaveRunning = false
 type LanPreflightCommandResult = Awaited<ReturnType<typeof commands.captureLanPreflight>>
 let lanPreflightRequest: Promise<LanPreflightCommandResult> | undefined
 
@@ -84,6 +94,72 @@ async function loadDetail(batchId: string) {
     showError('没有读取到这个采集批次，请返回后重试。')
   }
 }
+
+function draftUpdateKey(batchId: string, draftId: string) {
+  return `${batchId}:${draftId}`
+}
+
+async function flushDraftUpdates() {
+  if (draftSaveRunning || busy.value || !detail.value || !pendingDraftUpdates.size) return
+  const batchId = detail.value.batch.id
+  const entry = [...pendingDraftUpdates.entries()].find(([, value]) => value.batchId === batchId)
+  if (!entry) {
+    for (const [key, value] of pendingDraftUpdates) {
+      if (value.batchId !== batchId) pendingDraftUpdates.delete(key)
+    }
+    return
+  }
+
+  const [key, pending] = entry
+  pendingDraftUpdates.delete(key)
+  draftSaveRunning = true
+  busy.value = true
+  saveState.value = 'saving'
+  try {
+    const current = detail.value
+    if (!current || current.batch.id !== pending.batchId) return
+    const result = normalizeAppResult(await commands.captureDraftUpdate({
+      batchId: current.batch.id,
+      expectedRevision: current.batch.revision,
+      draftId: pending.draftId,
+      subject: pending.subject,
+      tags: pending.tags,
+      note: pending.note,
+    }))
+    if (result.ok) {
+      detail.value = result.data
+      saveState.value = 'saved'
+    }
+    else if (result.error.code === 'capture_revision_conflict' && pending.attempts < 1) {
+      await loadDetail(pending.batchId)
+      pending.attempts += 1
+      pendingDraftUpdates.set(key, pending)
+    }
+    else {
+      saveState.value = 'error'
+      showError(result.error.userMessage)
+    }
+  }
+  catch {
+    saveState.value = 'error'
+    showError('草稿文字保存没有完成；本次编辑仍保留在当前输入框中，请再次修改或重试。')
+  }
+  finally {
+    draftSaveRunning = false
+    busy.value = false
+  }
+}
+
+watch(busy, (isBusy) => {
+  if (!isBusy) void flushDraftUpdates()
+})
+
+watch(() => detail.value?.batch.id, (batchId) => {
+  if (!batchId) return
+  for (const [key, value] of pendingDraftUpdates) {
+    if (value.batchId !== batchId) pendingDraftUpdates.delete(key)
+  }
+})
 
 async function createBatch(subject: string) {
   if (!desktopAvailable || busy.value) return
@@ -407,34 +483,16 @@ async function deleteDraft(draftId: string) {
 
 async function updateDraft(draft: CaptureDraftSummary, subject: string, tags: string[], note: string) {
   const current = detail.value
-  if (!desktopAvailable || !current || busy.value) return
-  busy.value = true
-  saveState.value = 'saving'
-  try {
-    const result = normalizeAppResult(await commands.captureDraftUpdate({
-      batchId: current.batch.id,
-      expectedRevision: current.batch.revision,
-      draftId: draft.id,
-      subject,
-      tags,
-      note,
-    }))
-    if (result.ok) {
-      detail.value = result.data
-      saveState.value = 'saved'
-    }
-    else {
-      saveState.value = 'error'
-      showError(result.error.userMessage)
-    }
-  }
-  catch {
-    saveState.value = 'error'
-    showError('草稿文字没有保存成功，请重试。')
-  }
-  finally {
-    busy.value = false
-  }
+  if (!desktopAvailable || !current) return
+  pendingDraftUpdates.set(draftUpdateKey(current.batch.id, draft.id), {
+    batchId: current.batch.id,
+    draftId: draft.id,
+    subject,
+    tags,
+    note,
+    attempts: 0,
+  })
+  void flushDraftUpdates()
 }
 
 async function removeItem(itemId: string) {
@@ -665,6 +723,7 @@ onBeforeUnmount(() => {
   if (refreshTimer) clearTimeout(refreshTimer)
   if (lanPollTimer) clearInterval(lanPollTimer)
   unlisten?.()
+  pendingDraftUpdates.clear()
 })
 </script>
 

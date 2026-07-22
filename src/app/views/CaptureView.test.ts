@@ -14,6 +14,7 @@ const api = vi.hoisted(() => ({
   captureCardMerge: vi.fn(),
   captureDraftDelete: vi.fn(),
   captureItemMove: vi.fn(),
+  captureDraftUpdate: vi.fn(),
   captureBatchAssignSubject: vi.fn(),
   subjectPreferencesGet: vi.fn(),
 }))
@@ -46,6 +47,7 @@ vi.mock('../../modules/capture/components/CaptureWorkspace.vue', () => ({
         <button :disabled="busy" @click="$emit('deleteDraft', 'draft-1')">delete card</button>
         <button :disabled="busy" @click="$emit('moveItem', { itemId: 'item-1', targetDraftId: 'draft-1', targetRole: 'answer', targetPosition: 0 })">change role</button>
         <button :disabled="busy" @click="$emit('assignBatchSubject', '化学')">assign subject</button>
+        <button @click="$emit('updateDraft', { id: 'draft-1' }, '数学', ['标签'], '最新备注')">update draft</button>
         <span data-testid="subjects">{{ subjectOptions?.join('、') }}</span>
         <span data-testid="error">{{ errorMessage }}</span>
         <span data-testid="session">{{ lanSession?.sessionId ?? 'none' }}</span>
@@ -107,6 +109,7 @@ beforeEach(() => {
   api.captureCardMerge.mockResolvedValue(success(detail))
   api.captureDraftDelete.mockResolvedValue(success(detail))
   api.captureItemMove.mockResolvedValue(success(detail))
+  api.captureDraftUpdate.mockResolvedValue(success(detail))
   api.captureBatchAssignSubject.mockResolvedValue(success({ ...detail, batch: { ...batch, subject: '化学', revision: 2 } }))
   api.subjectPreferencesGet.mockResolvedValue(success({
     enabledSubjects: ['数学', '化学'], customSubjects: [], captureSoundEnabled: true,
@@ -114,6 +117,24 @@ beforeEach(() => {
 })
 
 describe('CaptureView one-time Windows LAN permission', () => {
+  it('queues the latest draft text while another draft save is still running', async () => {
+    let resolveFirst: (value: unknown) => void = () => undefined
+    api.captureDraftUpdate
+      .mockImplementationOnce(() => new Promise(resolve => { resolveFirst = resolve }))
+      .mockResolvedValueOnce(success(detail))
+    render(CaptureView)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'open batch' }))
+    await waitFor(() => expect(api.captureBatchDetail).toHaveBeenCalledWith('batch-1'))
+    await fireEvent.click(screen.getByRole('button', { name: 'update draft' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'update draft' }))
+
+    expect(api.captureDraftUpdate).toHaveBeenCalledTimes(1)
+    resolveFirst(success(detail))
+    await waitFor(() => expect(api.captureDraftUpdate).toHaveBeenCalledTimes(2))
+    expect(api.captureDraftUpdate.mock.calls[1]![0]).toMatchObject({ note: '最新备注' })
+  })
+
   it('persists card creation, in-card role changes, and reversible deletion', async () => {
     api.captureLanPreflight.mockResolvedValue(success(readyRule))
     render(CaptureView)
