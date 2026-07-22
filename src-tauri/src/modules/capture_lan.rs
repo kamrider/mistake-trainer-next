@@ -1383,6 +1383,8 @@ mod tests {
         assert!(MOBILE_PAGE.contains("已选中，正在处理图片"));
         assert!(MOBILE_PAGE.contains("item.status==='preparing'||item.status==='pending'"));
         assert!(MOBILE_PAGE.contains("const workerCount=Math.min(2,pendingFiles.length)"));
+        assert!(MOBILE_PAGE.contains("animation:item-enter"));
+        assert!(MOBILE_PAGE.contains("prefers-reduced-motion:reduce"));
 
         let decoder = runtime
             .block_on(
