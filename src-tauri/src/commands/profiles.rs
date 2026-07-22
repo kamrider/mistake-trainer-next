@@ -224,6 +224,7 @@ fn profile_error<T>(error: &ProfileUseCaseError) -> AppResult<T> {
         ProfileUseCaseError::InvalidName(_) => "profile_name_invalid",
         ProfileUseCaseError::DuplicateName => "profile_name_duplicate",
         ProfileUseCaseError::NotFound => "profile_not_found",
+        ProfileUseCaseError::LastProfile => "profile_last_cannot_delete",
         ProfileUseCaseError::Database(_) | ProfileUseCaseError::Serialization(_) => {
             "profile_operation_failed"
         }
@@ -239,6 +240,10 @@ fn profile_error_code<T>(code: &str, error: Option<&ProfileUseCaseError>) -> App
         ),
         "profile_name_duplicate" => ("已经有同名学习档案，请换一个名称。", false),
         "profile_not_found" => ("这个学习档案已不存在，请刷新后重新选择。", false),
+        "profile_last_cannot_delete" => (
+            "至少需要保留一个学习档案；请先新建另一个档案再删除。",
+            false,
+        ),
         "library_lock_poisoned" => ("本地题库暂时不可用，请重新打开应用后重试。", true),
         _ => (
             "学习档案没有完成这次操作，原有数据保持不变，请稍后重试。",
