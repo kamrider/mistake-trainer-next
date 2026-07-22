@@ -338,7 +338,10 @@ fn list_rejects_unbounded_or_malformed_inputs() {
             ..query()
         },
     );
-    assert!(padded_search.is_ok(), "search length is bounded after trimming");
+    assert!(
+        padded_search.is_ok(),
+        "search length is bounded after trimming"
+    );
 }
 
 #[test]

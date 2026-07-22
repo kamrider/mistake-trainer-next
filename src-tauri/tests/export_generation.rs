@@ -1,4 +1,7 @@
-use std::{fs::File, io::{Cursor, Read}};
+use std::{
+    fs::File,
+    io::{Cursor, Read},
+};
 
 use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
 use mistake_trainer_next_lib::{
@@ -127,8 +130,14 @@ fn generation_writes_original_images_and_word_documents_without_exposing_paths()
     .unwrap();
     assert!(!folder.output_name.contains([':', '/', '\\']));
     let folder_path = destination.path().join(&folder.output_name);
-    assert_eq!(std::fs::read(folder_path.join("001-question-01.png")).unwrap(), question);
-    assert_eq!(std::fs::read(folder_path.join("001-answer-01.png")).unwrap(), answer);
+    assert_eq!(
+        std::fs::read(folder_path.join("001-question-01.png")).unwrap(),
+        question
+    );
+    assert_eq!(
+        std::fs::read(folder_path.join("001-answer-01.png")).unwrap(),
+        answer
+    );
     assert!(folder_path.join("002-question-01.png").is_file());
     assert!(folder_path.join("002-answer-01.png").is_file());
 

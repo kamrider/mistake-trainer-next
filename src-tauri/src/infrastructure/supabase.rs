@@ -12,6 +12,8 @@ use thiserror::Error;
 use uuid::Uuid;
 
 const MAX_AUTH_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_PULL_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_REMOTE_ASSET_BYTES: usize = 25 * 1024 * 1024;
 const MAX_EMAIL_BYTES: usize = 320;
 const MIN_PASSWORD_BYTES: usize = 8;
 const MAX_PASSWORD_BYTES: usize = 1024;
@@ -239,10 +241,33 @@ pub enum ObjectUploadResult {
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PushAcknowledgement {
+    #[serde(alias = "operation_id")]
     pub operation_id: String,
+    #[serde(alias = "entity_type")]
     pub entity_type: String,
+    #[serde(alias = "entity_id")]
     pub entity_id: String,
+    #[serde(alias = "change_seq")]
     pub change_seq: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RemotePullChange {
+    #[serde(alias = "change_seq")]
+    pub change_seq: i64,
+    #[serde(alias = "entity_type")]
+    pub entity_type: String,
+    #[serde(alias = "entity_id")]
+    pub entity_id: String,
+    pub operation: String,
+    pub payload: serde_json::Value,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DownloadedRemoteAsset {
+    pub bytes: Vec<u8>,
+    pub media_type: String,
 }
 
 pub trait CloudPushTransport: Sync {
@@ -282,6 +307,20 @@ pub trait CloudPushTransport: Sync {
         access_token: &'a str,
         operations: &'a serde_json::Value,
     ) -> impl Future<Output = Result<Vec<PushAcknowledgement>, CloudError>> + Send + 'a;
+}
+
+pub trait CloudPullTransport: Sync {
+    fn pull_changes<'a>(
+        &'a self,
+        access_token: &'a str,
+        after: i64,
+        limit: usize,
+    ) -> impl Future<Output = Result<Vec<RemotePullChange>, CloudError>> + Send + 'a;
+    fn download_object<'a>(
+        &'a self,
+        access_token: &'a str,
+        storage_object: &'a str,
+    ) -> impl Future<Output = Result<DownloadedRemoteAsset, CloudError>> + Send + 'a;
 }
 
 impl AuthTransport for SupabaseClient {
@@ -602,6 +641,78 @@ impl CloudPushTransport for SupabaseClient {
             }
             let bytes = read_capped(response, MAX_AUTH_RESPONSE_BYTES).await?;
             serde_json::from_slice(&bytes).map_err(|_| CloudError::InvalidResponse)
+        }
+    }
+}
+
+impl CloudPullTransport for SupabaseClient {
+    fn pull_changes<'a>(
+        &'a self,
+        access_token: &'a str,
+        after: i64,
+        limit: usize,
+    ) -> impl Future<Output = Result<Vec<RemotePullChange>, CloudError>> + Send + 'a {
+        async move {
+            validate_access_token(access_token)?;
+            if after < 0 || !(1..=500).contains(&limit) {
+                return Err(CloudError::InvalidResponse);
+            }
+            let url = self
+                .config
+                .base_url
+                .join("/rest/v1/rpc/pull_account_changes")
+                .map_err(|_| CloudError::InvalidConfiguration)?;
+            let response = self
+                .http
+                .post(url)
+                .header("apikey", self.config.publishable_key.expose())
+                .header("accept", "application/json")
+                .bearer_auth(access_token)
+                .json(&serde_json::json!({
+                    "p_after": after,
+                    "p_limit": limit,
+                }))
+                .send()
+                .await
+                .map_err(map_request_error)?;
+            if !response.status().is_success() {
+                return Err(map_status(response.status()));
+            }
+            let bytes = read_capped(response, MAX_PULL_RESPONSE_BYTES).await?;
+            serde_json::from_slice(&bytes).map_err(|_| CloudError::InvalidResponse)
+        }
+    }
+
+    fn download_object<'a>(
+        &'a self,
+        access_token: &'a str,
+        storage_object: &'a str,
+    ) -> impl Future<Output = Result<DownloadedRemoteAsset, CloudError>> + Send + 'a {
+        async move {
+            validate_access_token(access_token)?;
+            let url = self.object_url(storage_object)?;
+            let response = self
+                .http
+                .get(url)
+                .header("apikey", self.config.publishable_key.expose())
+                .bearer_auth(access_token)
+                .send()
+                .await
+                .map_err(map_request_error)?;
+            if !response.status().is_success() {
+                return Err(map_status(response.status()));
+            }
+            let media_type = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.split(';').next())
+                .map(str::trim)
+                .filter(|value| matches!(*value, "image/jpeg" | "image/png" | "image/webp"))
+                .ok_or(CloudError::InvalidResponse)?
+                .to_owned();
+            let bytes = read_capped(response, MAX_REMOTE_ASSET_BYTES).await?;
+            Ok(DownloadedRemoteAsset { bytes, media_type })
         }
     }
 }

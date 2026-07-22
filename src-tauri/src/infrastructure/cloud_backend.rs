@@ -22,11 +22,9 @@ pub enum CloudBackendKind {
 
 /// The configuration/status exposed to the desktop settings UI.
 ///
-/// `configured` only means that the provider has the minimum endpoint and
-/// credential environment variables. It does not imply that a provider
-/// implementation is shipped in this build. `ready` is therefore false for
-/// the currently reserved remote providers, which makes an accidental sync
-/// attempt fail closed.
+/// `configured` means that the provider has the minimum build-time endpoint
+/// and public credential. Supabase is backed by the authenticated Tauri sync
+/// commands; Tencent remains a reserved provider in v1.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct CloudBackendStatus {
@@ -56,11 +54,9 @@ pub enum CloudBackendError {
     NotAvailable,
 }
 
-/// Provider-neutral boundary for future sync implementations.
-///
-/// The first implementation deliberately does not perform network I/O. This
-/// makes local-first behavior explicit while leaving one seam for Supabase and
-/// mainland-China providers to implement later.
+/// Provider-neutral boundary retained for legacy callers. The active Supabase
+/// loop is exposed through the typed auth/sync commands, which also own the
+/// local database and secret-store state.
 pub trait CloudBackend: Send + Sync {
     fn kind(&self) -> CloudBackendKind;
     fn push_pending(&self) -> Result<u32, CloudBackendError>;
@@ -91,9 +87,8 @@ pub fn backend_for(kind: CloudBackendKind) -> Result<Box<dyn CloudBackend>, Clou
             if !provider_is_configured(kind) {
                 Err(CloudBackendError::NotConfigured)
             } else {
-                // The provider ports are intentionally not implemented yet.
-                // Returning a typed error here is safer than silently falling
-                // back to local-only after a user selected a remote provider.
+                // Network work is performed by `sync_now`; this provider
+                // factory remains a compatibility boundary for older callers.
                 Err(CloudBackendError::NotAvailable)
             }
         }
@@ -101,21 +96,20 @@ pub fn backend_for(kind: CloudBackendKind) -> Result<Box<dyn CloudBackend>, Clou
 }
 
 fn provider_is_configured(kind: CloudBackendKind) -> bool {
-    let has_non_empty = |name: &str| {
-        std::env::var(name)
-            .map(|value| !value.trim().is_empty())
-            .unwrap_or(false)
-    };
-
     match kind {
         CloudBackendKind::LocalOnly => true,
         CloudBackendKind::Supabase => {
-            has_non_empty("MISTAKE_TRAINER_SUPABASE_URL")
-                && has_non_empty("MISTAKE_TRAINER_SUPABASE_ANON_KEY")
+            let url = option_env!("MISTAKE_TRAINER_SUPABASE_URL");
+            let key = option_env!("MISTAKE_TRAINER_SUPABASE_PUBLISHABLE_KEY")
+                .or(option_env!("MISTAKE_TRAINER_SUPABASE_ANON_KEY"));
+            url.is_some_and(|value| !value.trim().is_empty())
+                && key.is_some_and(|value| !value.trim().is_empty())
         }
         CloudBackendKind::Tencent => {
-            has_non_empty("MISTAKE_TRAINER_TENCENT_ENDPOINT")
-                && has_non_empty("MISTAKE_TRAINER_TENCENT_TOKEN")
+            std::env::var("MISTAKE_TRAINER_TENCENT_ENDPOINT")
+                .is_ok_and(|value| !value.trim().is_empty())
+                && std::env::var("MISTAKE_TRAINER_TENCENT_TOKEN")
+                    .is_ok_and(|value| !value.trim().is_empty())
         }
     }
 }
@@ -129,12 +123,20 @@ pub fn status_for(kind: CloudBackendKind) -> CloudBackendStatus {
             ready: true,
             sync_enabled: false,
         },
-        CloudBackendKind::Supabase | CloudBackendKind::Tencent => {
+        CloudBackendKind::Supabase => {
             let configured = provider_is_configured(kind);
             CloudBackendStatus {
                 kind,
                 configured,
-                // A provider adapter must be shipped before sync is enabled.
+                ready: configured,
+                sync_enabled: configured,
+            }
+        }
+        CloudBackendKind::Tencent => {
+            let configured = provider_is_configured(kind);
+            CloudBackendStatus {
+                kind,
+                configured,
                 ready: false,
                 sync_enabled: false,
             }

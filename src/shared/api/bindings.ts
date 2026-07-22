@@ -72,6 +72,12 @@ export const commands = {
 	captureLanStop: () => __TAURI_INVOKE<AppResult<boolean>>("capture_lan_stop"),
 	syncBackendStatus: () => __TAURI_INVOKE<AppResult<CloudBackendStatus>>("sync_backend_status"),
 	syncBackendSet: (request: SetBackendRequest) => __TAURI_INVOKE<AppResult<CloudBackendStatus>>("sync_backend_set", { request }),
+	authStatusCommand: () => __TAURI_INVOKE<AppResult<CloudAuthState>>("auth_status_command"),
+	authSignUp: (request: AuthCredentials) => typedError<AppResult<CloudAuthState>, null>(__TAURI_INVOKE("auth_sign_up", { request })),
+	authSignIn: (request: AuthCredentials) => typedError<AppResult<CloudAuthState>, null>(__TAURI_INVOKE("auth_sign_in", { request })),
+	authRestore: () => typedError<AppResult<CloudAuthState>, null>(__TAURI_INVOKE("auth_restore")),
+	authDisconnect: () => typedError<AppResult<CloudAuthState>, null>(__TAURI_INVOKE("auth_disconnect")),
+	syncNow: () => typedError<AppResult<SyncNowReport>, null>(__TAURI_INVOKE("sync_now")),
 };
 
 /* Types */
@@ -83,6 +89,18 @@ export type AppError = {
 };
 
 export type AppResult<T> = ({ ok: boolean; data: T }) & { error?: never } | ({ ok: boolean; error: AppError }) & { data?: never };
+
+export type AuthCredentials = {
+	email: string,
+	password: string,
+};
+
+export type AuthStatus = {
+	kind: AuthStatusKind,
+	emailHint: string | null,
+};
+
+export type AuthStatusKind = "unconfigured" | "signed_out" | "verification_required" | "connected" | "offline";
 
 export type BackupRestoreCandidate = {
 	id: string,
@@ -268,6 +286,11 @@ export type CaptureLayoutInput = {
 };
 
 export type CaptureLayoutMode = "alternating" | "split" | "questions_only" | "manual";
+
+export type CloudAuthState = {
+	configured: boolean,
+	status: AuthStatus,
+};
 
 /**
  *  The remote implementation used for optional synchronization.
@@ -657,6 +680,14 @@ export type SubjectPreferencesInput = {
 	enabledSubjects: string[],
 	customSubjects: string[],
 	captureSoundEnabled: boolean,
+};
+
+export type SyncNowReport = {
+	pushedOperationCount: number,
+	uploadedAssetCount: number,
+	pulledChangeCount: number,
+	downloadedAssetCount: number,
+	finalCursor: number | null,
 };
 
 export type SystemStatus = {

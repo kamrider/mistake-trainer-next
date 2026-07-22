@@ -341,10 +341,7 @@ fn failed_final_blob_move_leaves_no_database_rows_or_temporary_assets() {
 fn corrupt_image_aborts_without_importing_rows_or_leaving_staging_files() {
     let mut fixture = fixture();
     fs::write(
-        fixture
-            .source
-            .path()
-            .join("members/alice/files/answer.png"),
+        fixture.source.path().join("members/alice/files/answer.png"),
         b"not a decodable png",
     )
     .unwrap();

@@ -30,12 +30,17 @@ vi.mock('../../modules/capture/components/CaptureWorkspace.vue', () => ({
         { name: 'bad.png', arrayBuffer: async () => new Uint8Array([1]).buffer },
         { name: 'good.png', arrayBuffer: async () => new Uint8Array([2]).buffer },
       ])
-      return { emitFiles }
+      const emitOverflow = () => emit('importFiles', Array.from({ length: 151 }, (_, index) => ({
+        name: `image-${index + 1}.png`,
+        arrayBuffer: async () => new Uint8Array([index & 255]).buffer,
+      })))
+      return { emitFiles, emitOverflow }
     },
     template: `
       <div>
         <button @click="$emit('openBatch', 'batch-1')">open batch</button>
         <button @click="emitFiles">import files</button>
+        <button @click="emitOverflow">import overflow</button>
         <button :disabled="busy" @click="$emit('mobileCapture', '192.168.1.20')">scan</button>
         <button :disabled="busy" @click="$emit('mergeCard', ['item-1'], null, '数学')">merge card</button>
         <button :disabled="busy" @click="$emit('deleteDraft', 'draft-1')">delete card</button>
@@ -174,6 +179,17 @@ describe('CaptureView one-time Windows LAN permission', () => {
     await waitFor(() => expect(api.captureImportBytes).toHaveBeenCalledTimes(2))
     expect((api.captureImportBytes.mock.calls[0]![0] as { sourceName: string }).sourceName).toBe('bad.png')
     expect((api.captureImportBytes.mock.calls[1]![0] as { sourceName: string }).sourceName).toBe('good.png')
+  })
+
+  it('explains the 150-image batch limit instead of silently truncating', async () => {
+    render(CaptureView)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'open batch' }))
+    await waitFor(() => expect(api.captureBatchDetail).toHaveBeenCalledWith('batch-1'))
+    await fireEvent.click(screen.getByRole('button', { name: 'import overflow' }))
+
+    await waitFor(() => expect(api.captureImportBytes).toHaveBeenCalledTimes(150))
+    expect(screen.getByTestId('error')).toHaveTextContent('本批最多保存 150 张')
   })
 
   it('repairs once on the first scan and immediately starts the QR session', async () => {

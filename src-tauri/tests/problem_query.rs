@@ -207,7 +207,13 @@ fn list_search_matches_subject_or_note_without_treating_wildcards_as_patterns() 
     )
     .expect("literal wildcard search");
 
-    assert_eq!(by_note.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(), vec![math]);
+    assert_eq!(
+        by_note
+            .iter()
+            .map(|row| row.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![math]
+    );
     assert_eq!(literal_wildcard.len(), 1);
     assert_eq!(literal_wildcard[0].subject, "物理_实验");
 }

@@ -1,11 +1,16 @@
-use serde::Deserialize;
+use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
 use specta::Type;
+use tauri::State;
 
 use crate::{
     application::result::AppResult,
     infrastructure::cloud_backend::{
         self, CloudBackendError, CloudBackendKind, CloudBackendStatus,
     },
+    modules::auth_sync::{AuthStatus, AuthStatusKind, AuthSyncManager, CloudAuthRuntime},
+    modules::{sync_pull::pull_until_current, sync_push::push_once},
 };
 
 /// DTO used by the generated command client when changing the sync provider.
@@ -15,6 +20,30 @@ use crate::{
 #[serde(rename_all = "camelCase")]
 pub struct SetBackendRequest {
     pub kind: CloudBackendKind,
+}
+
+#[derive(Clone, Debug, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthCredentials {
+    pub email: String,
+    pub password: String,
+}
+
+#[derive(Clone, Debug, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudAuthState {
+    pub configured: bool,
+    pub status: AuthStatus,
+}
+
+#[derive(Clone, Debug, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncNowReport {
+    pub pushed_operation_count: u32,
+    pub uploaded_asset_count: u32,
+    pub pulled_change_count: u32,
+    pub downloaded_asset_count: u32,
+    pub final_cursor: f64,
 }
 
 pub fn backend_status() -> AppResult<CloudBackendStatus> {
@@ -31,6 +60,62 @@ pub fn set_backend(request: SetBackendRequest) -> AppResult<CloudBackendStatus> 
             "sync-backend-selection",
         ),
     }
+}
+
+pub fn auth_status(
+    manager: &AuthSyncManager,
+    runtime: &CloudAuthRuntime,
+) -> AppResult<CloudAuthState> {
+    let status = if runtime.configured {
+        manager.status()
+    } else {
+        AuthStatus {
+            kind: AuthStatusKind::Unconfigured,
+            email_hint: None,
+        }
+    };
+    AppResult::success(CloudAuthState {
+        configured: runtime.configured,
+        status,
+    })
+}
+
+fn auth_unconfigured() -> AppResult<CloudAuthState> {
+    AppResult::failure(
+        "AUTH_UNCONFIGURED",
+        "此版本未配置云端地址，应用仍可完全离线使用",
+        false,
+        "auth-unconfigured",
+    )
+}
+
+fn auth_failure(error: crate::infrastructure::supabase::CloudError) -> AppResult<CloudAuthState> {
+    let (code, message) = match error {
+        crate::infrastructure::supabase::CloudError::InvalidCredentialsInput => {
+            ("AUTH_INVALID_INPUT", "请输入有效邮箱和至少 8 位密码")
+        }
+        crate::infrastructure::supabase::CloudError::AuthenticationRejected => {
+            ("AUTH_REJECTED", "邮箱或密码不正确，或账户尚未允许登录")
+        }
+        crate::infrastructure::supabase::CloudError::EmailVerificationRequired => {
+            ("AUTH_VERIFICATION_REQUIRED", "请先完成邮箱验证，再登录")
+        }
+        crate::infrastructure::supabase::CloudError::LibraryBoundToAnotherAccount => {
+            ("AUTH_ACCOUNT_BOUND", "此本地库已经绑定另一个云端账户")
+        }
+        crate::infrastructure::supabase::CloudError::SecretStore => (
+            "AUTH_SECRET_STORE",
+            "Windows 凭据保存失败，请检查系统凭据服务",
+        ),
+        crate::infrastructure::supabase::CloudError::Timeout => {
+            ("AUTH_TIMEOUT", "云端请求超时，请稍后重试")
+        }
+        crate::infrastructure::supabase::CloudError::Network => {
+            ("AUTH_NETWORK", "无法连接云端，已保留本地离线模式")
+        }
+        _ => ("AUTH_REQUEST_FAILED", "云端登录暂时失败，请稍后重试"),
+    };
+    AppResult::failure(code, message, error.retryable(), "auth-request")
 }
 
 fn error_code(error: &CloudBackendError) -> &'static str {
@@ -61,8 +146,230 @@ pub fn sync_backend_set(request: SetBackendRequest) -> AppResult<CloudBackendSta
     set_backend(request)
 }
 
+#[tauri::command]
+#[specta::specta]
+pub fn auth_status_command(
+    manager: State<'_, AuthSyncManager>,
+    runtime: State<'_, CloudAuthRuntime>,
+) -> AppResult<CloudAuthState> {
+    auth_status(&manager, &runtime)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn auth_sign_up(
+    manager: State<'_, AuthSyncManager>,
+    runtime: State<'_, CloudAuthRuntime>,
+    request: AuthCredentials,
+) -> Result<AppResult<CloudAuthState>, ()> {
+    let Some(client) = runtime.client.as_ref() else {
+        return Ok(auth_unconfigured());
+    };
+    match manager
+        .sign_up(
+            client.as_ref(),
+            &runtime.secrets,
+            &request.email,
+            &request.password,
+        )
+        .await
+    {
+        Ok(status) => Ok(AppResult::success(CloudAuthState {
+            configured: true,
+            status,
+        })),
+        Err(error) => Ok(auth_failure(error)),
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn auth_sign_in(
+    manager: State<'_, AuthSyncManager>,
+    runtime: State<'_, CloudAuthRuntime>,
+    request: AuthCredentials,
+) -> Result<AppResult<CloudAuthState>, ()> {
+    let Some(client) = runtime.client.as_ref() else {
+        return Ok(auth_unconfigured());
+    };
+    match manager
+        .sign_in(
+            client.as_ref(),
+            &runtime.secrets,
+            &request.email,
+            &request.password,
+        )
+        .await
+    {
+        Ok(status) => Ok(AppResult::success(CloudAuthState {
+            configured: true,
+            status,
+        })),
+        Err(error) => Ok(auth_failure(error)),
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn auth_restore(
+    manager: State<'_, AuthSyncManager>,
+    runtime: State<'_, CloudAuthRuntime>,
+) -> Result<AppResult<CloudAuthState>, ()> {
+    let Some(client) = runtime.client.as_ref() else {
+        return Ok(AppResult::success(CloudAuthState {
+            configured: false,
+            status: AuthStatus {
+                kind: AuthStatusKind::Unconfigured,
+                email_hint: None,
+            },
+        }));
+    };
+    match manager.restore(client.as_ref(), &runtime.secrets).await {
+        Ok(status) => Ok(AppResult::success(CloudAuthState {
+            configured: true,
+            status,
+        })),
+        Err(error) => Ok(auth_failure(error)),
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn auth_disconnect(
+    manager: State<'_, AuthSyncManager>,
+    runtime: State<'_, CloudAuthRuntime>,
+) -> Result<AppResult<CloudAuthState>, ()> {
+    let Some(client) = runtime.client.as_ref() else {
+        return Ok(auth_unconfigured());
+    };
+    match manager.disconnect(client.as_ref(), &runtime.secrets).await {
+        Ok(status) => Ok(AppResult::success(CloudAuthState {
+            configured: true,
+            status,
+        })),
+        Err(error) => Ok(auth_failure(error)),
+    }
+}
+
+fn sync_is_retryable(code: &str) -> bool {
+    matches!(
+        code,
+        "cloud_timeout" | "cloud_network" | "cloud_rate_limited" | "cloud_unavailable"
+    )
+}
+
+fn current_utc_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn sync_now(
+    state: State<'_, crate::infrastructure::runtime::LibraryRuntime>,
+    manager: State<'_, AuthSyncManager>,
+    runtime: State<'_, CloudAuthRuntime>,
+) -> Result<AppResult<SyncNowReport>, ()> {
+    let Some(client) = runtime.client.as_ref().map(Arc::clone) else {
+        return Ok(AppResult::failure(
+            "SYNC_UNCONFIGURED",
+            "此版本未配置云端地址，当前仍使用本地离线模式",
+            false,
+            "sync-unconfigured",
+        ));
+    };
+    let Some((remote_user_id, access_token, expires_at_utc_ms)) = manager.session_snapshot() else {
+        return Ok(AppResult::failure(
+            "SYNC_SIGNED_OUT",
+            "请先登录云端账户，再开始同步",
+            false,
+            "sync-signed-out",
+        ));
+    };
+    if expires_at_utc_ms <= current_utc_millis() {
+        return Ok(AppResult::failure(
+            "SYNC_SESSION_EXPIRED",
+            "云端登录已过期，请重新登录",
+            true,
+            "sync-session-expired",
+        ));
+    }
+
+    let connection = Arc::clone(&state.connection);
+    let blob_root = state.blob_root.clone();
+    let asset_key = state.asset_key;
+    let account_id = state.account_id().to_owned();
+    drop(state);
+    let worker = tauri::async_runtime::spawn_blocking(move || {
+        let mut connection = connection.lock().map_err(|_| "sync_database_locked")?;
+        let runtime = tokio::runtime::Runtime::new().map_err(|_| "sync_runtime_failed")?;
+        let result = runtime.block_on(async {
+            let pushed = push_once(
+                &mut connection,
+                client.as_ref(),
+                &account_id,
+                &remote_user_id,
+                &access_token,
+                &blob_root,
+                &asset_key,
+                current_utc_millis(),
+            )
+            .await
+            .map_err(|error| error.stable_code())?;
+            let pulled = pull_until_current(
+                &mut connection,
+                client.as_ref(),
+                &account_id,
+                &remote_user_id,
+                &access_token,
+                &blob_root,
+                &asset_key,
+                current_utc_millis(),
+            )
+            .await
+            .map_err(|error| error.stable_code())?;
+            Ok::<_, &'static str>(SyncNowReport {
+                pushed_operation_count: u32::try_from(pushed.acknowledged_operation_ids.len())
+                    .unwrap_or(u32::MAX),
+                uploaded_asset_count: u32::try_from(pushed.uploaded_asset_ids.len())
+                    .unwrap_or(u32::MAX),
+                pulled_change_count: pulled.applied_count,
+                downloaded_asset_count: pulled.downloaded_asset_count,
+                final_cursor: pulled.final_cursor as f64,
+            })
+        });
+        result
+    });
+    match worker.await {
+        Ok(Ok(report)) => Ok(AppResult::success(report)),
+        Ok(Err(code)) => Ok(AppResult::failure(
+            code,
+            "同步未完成，本地数据保持不变；请稍后重试或查看诊断信息",
+            sync_is_retryable(code),
+            "sync-now",
+        )),
+        Err(_) => Ok(AppResult::failure(
+            "SYNC_WORKER_FAILED",
+            "同步任务意外中断，本地数据保持不变",
+            true,
+            "sync-worker",
+        )),
+    }
+}
+
 pub fn specta_commands<R: tauri::Runtime>() -> tauri_specta::Commands<R> {
-    tauri_specta::collect_commands![sync_backend_status, sync_backend_set]
+    tauri_specta::collect_commands![
+        sync_backend_status,
+        sync_backend_set,
+        auth_status_command,
+        auth_sign_up,
+        auth_sign_in,
+        auth_restore,
+        auth_disconnect,
+        sync_now
+    ]
 }
 
 #[cfg(test)]
@@ -95,5 +402,22 @@ mod tests {
             }
             AppResult::Success { .. } => panic!("unconfigured provider must fail closed"),
         }
+    }
+
+    #[test]
+    fn auth_status_fails_closed_when_supabase_is_not_configured() {
+        let manager = AuthSyncManager::default();
+        let runtime = CloudAuthRuntime {
+            client: None,
+            secrets: crate::infrastructure::runtime::KeyringSecretStore::new(
+                "com.mistaketrainer.next.test",
+            ),
+            configured: false,
+        };
+        let AppResult::Success { data, .. } = auth_status(&manager, &runtime) else {
+            panic!("status should always be available")
+        };
+        assert!(!data.configured);
+        assert_eq!(data.status.kind, AuthStatusKind::Unconfigured);
     }
 }

@@ -1,11 +1,16 @@
-use std::{fmt, sync::RwLock};
+use std::{
+    fmt,
+    sync::{Arc, RwLock},
+};
 
 use serde::Serialize;
 use specta::Type;
 
 use crate::infrastructure::{
-    runtime::SecretStore,
-    supabase::{AuthReply, AuthTransport, CloudError, redact_email},
+    runtime::{KeyringSecretStore, SecretStore},
+    supabase::{
+        AuthReply, AuthTransport, CloudError, SupabaseClient, SupabaseConfig, redact_email,
+    },
 };
 
 const CLOUD_REFRESH_TOKEN: &str = "cloud-refresh-token";
@@ -52,6 +57,29 @@ pub struct AuthSyncManager {
     session: RwLock<Option<ActiveCloudSession>>,
     verification_email: RwLock<Option<String>>,
     offline: RwLock<bool>,
+}
+
+/// Process-scoped cloud transport state.  The publishable key is compiled into
+/// the desktop build only; refresh tokens remain in the Windows credential
+/// manager and never cross the Tauri/Vue boundary.
+pub struct CloudAuthRuntime {
+    pub client: Option<Arc<SupabaseClient>>,
+    pub secrets: KeyringSecretStore,
+    pub configured: bool,
+}
+
+impl CloudAuthRuntime {
+    pub fn from_build_environment() -> Self {
+        let (client, configured) = match SupabaseConfig::from_build_environment() {
+            Ok(Some(config)) => (SupabaseClient::new(config).ok().map(Arc::new), true),
+            Ok(None) | Err(_) => (None, false),
+        };
+        Self {
+            client,
+            secrets: KeyringSecretStore::new("com.mistaketrainer.next.local-library"),
+            configured,
+        }
+    }
 }
 
 impl fmt::Debug for AuthSyncManager {

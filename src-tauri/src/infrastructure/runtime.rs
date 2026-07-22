@@ -20,7 +20,7 @@ const ASSET_KEY: &str = "asset-key";
 const ACCOUNT_ID: &str = "account-id";
 const DEVICE_ID: &str = "device-id";
 
-pub trait SecretStore {
+pub trait SecretStore: Send + Sync {
     fn get(&self, name: &str) -> Result<Option<String>, String>;
     fn set(&self, name: &str, value: &str) -> Result<(), String>;
 }

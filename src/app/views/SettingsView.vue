@@ -3,7 +3,7 @@ import { isTauri } from '@tauri-apps/api/core'
 import { Archive, ArchiveRestore, BookOpen, CloudOff, Database, FolderCheck, LockKeyhole, Plus, RotateCcw, ShieldCheck, Trash2, TriangleAlert, Volume2 } from '@lucide/vue'
 import { nextTick, onMounted, ref } from 'vue'
 import type { AppResult } from '../../shared/api/app-result'
-import { commands, type BackupRestoreCandidate, type BackupSummary, type CloudBackendKind, type CloudBackendStatus, type ReviewFocusPolicy, type ReviewPreferences, type SettingsOverview, type SubjectPreferences } from '../../shared/api/bindings'
+import { commands, type AuthStatusKind, type BackupRestoreCandidate, type BackupSummary, type CloudAuthState, type CloudBackendKind, type CloudBackendStatus, type ReviewFocusPolicy, type ReviewPreferences, type SettingsOverview, type SubjectPreferences } from '../../shared/api/bindings'
 import { normalizeAppResult } from '../../shared/api/normalize-result'
 import { backendKindLabel, backendStatusLabel, loadSyncBackendStatus, setSyncBackend } from '../../shared/api/sync-backend'
 import LegacyImportPanel from '../../modules/legacy/components/LegacyImportPanel.vue'
@@ -30,6 +30,14 @@ const reviewPreferenceMessage = ref('')
 const backendStatus = ref<AppResult<CloudBackendStatus>>()
 const backendBusy = ref(false)
 const backendMessage = ref('')
+const cloudAuth = ref<CloudAuthState>()
+const authEmail = ref('')
+const authPassword = ref('')
+const authMode = ref<'signIn' | 'signUp'>('signIn')
+const authBusy = ref(false)
+const authMessage = ref('')
+const syncBusy = ref(false)
+const syncMessage = ref('')
 const backendOptions: Array<{ kind: CloudBackendKind; title: string; hint: string }> = [
   { kind: 'local-only', title: '仅本地（推荐）', hint: '训练、采集和图片都保存在这台 Windows 设备，不需要网络。' },
   { kind: 'supabase', title: 'Supabase', hint: '适合海外或开发环境；需要先配置服务地址和匿名密钥。' },
@@ -213,6 +221,20 @@ async function load() {
   try {
     backendStatus.value = await loadSyncBackendStatus()
     if (!isTauri()) return
+    const authStatusCommand = (commands as unknown as { authStatusCommand?: () => Promise<unknown> }).authStatusCommand
+    const authRestoreCommand = (commands as unknown as { authRestore?: () => Promise<unknown> }).authRestore
+    if (typeof authRestoreCommand === 'function') {
+      const invocation = await authRestoreCommand() as Awaited<ReturnType<typeof commands.authRestore>>
+      if (invocation.status === 'ok') {
+        const restored = normalizeAppResult(invocation.data)
+        if (restored.ok) cloudAuth.value = restored.data
+      }
+    }
+    if (!cloudAuth.value && typeof authStatusCommand === 'function') {
+      const invocation = await authStatusCommand() as Awaited<ReturnType<typeof commands.authStatusCommand>>
+      const authResult = normalizeAppResult(invocation)
+      if (authResult.ok) cloudAuth.value = authResult.data
+    }
     const result = normalizeAppResult(await commands.settingsOverview())
     if (result.ok) overview.value = result.data
     else errorMessage.value = result.error.userMessage
@@ -228,6 +250,83 @@ async function load() {
   }
   finally {
     loading.value = false
+  }
+}
+
+function authStatusLabel(kind: AuthStatusKind) {
+  return {
+    unconfigured: '未配置云端',
+    signed_out: '未登录',
+    verification_required: '等待邮箱验证',
+    connected: '已连接',
+    offline: '离线模式',
+  }[kind]
+}
+
+async function signIn() {
+  if (authBusy.value || !authEmail.value.trim() || !authPassword.value) return
+  authBusy.value = true
+  authMessage.value = ''
+  try {
+    const invocation = authMode.value === 'signUp'
+      ? await commands.authSignUp({ email: authEmail.value.trim(), password: authPassword.value })
+      : await commands.authSignIn({ email: authEmail.value.trim(), password: authPassword.value })
+    if (invocation.status === 'error') throw new Error('auth command rejected')
+    const result = normalizeAppResult(invocation.data)
+    if (result.ok) {
+      cloudAuth.value = result.data
+      authMessage.value = result.data.status.kind === 'verification_required'
+        ? '注册成功，请先完成邮箱验证，再回来登录。'
+        : result.data.status.kind === 'connected' ? '已连接，之后可在本页手动同步。' : '登录状态已更新。'
+    }
+    else authMessage.value = result.error.userMessage
+  }
+  catch {
+    authMessage.value = '登录请求没有完成，本地数据不受影响。'
+  }
+  finally {
+    authBusy.value = false
+  }
+}
+
+async function disconnectCloud() {
+  if (authBusy.value) return
+  authBusy.value = true
+  authMessage.value = ''
+  try {
+    const invocation = await commands.authDisconnect()
+    if (invocation.status === 'error') throw new Error('auth command rejected')
+    const result = normalizeAppResult(invocation.data)
+    if (result.ok) cloudAuth.value = result.data
+    else authMessage.value = result.error.userMessage
+  }
+  catch {
+    authMessage.value = '退出云端账户没有完成。'
+  }
+  finally {
+    authBusy.value = false
+  }
+}
+
+async function syncNow() {
+  if (syncBusy.value) return
+  syncBusy.value = true
+  syncMessage.value = ''
+  try {
+    const invocation = await commands.syncNow()
+    if (invocation.status === 'error') throw new Error('sync command rejected')
+    const result = normalizeAppResult(invocation.data)
+    if (result.ok) {
+      syncMessage.value = `同步完成：上传 ${result.data.pushedOperationCount} 项，拉取 ${result.data.pulledChangeCount} 项。`
+      await load()
+    }
+    else syncMessage.value = result.error.userMessage
+  }
+  catch {
+    syncMessage.value = '同步请求没有完成，本地 outbox 会保留并等待下次重试。'
+  }
+  finally {
+    syncBusy.value = false
   }
 }
 
@@ -344,6 +443,111 @@ onMounted(load)
     </section>
 
     <section
+      v-if="cloudAuth"
+      class="cloud-auth-panel"
+      aria-labelledby="cloud-auth-title"
+    >
+      <header>
+        <div>
+          <p>账户与跨设备</p>
+          <h2 id="cloud-auth-title">
+            云端同步账户
+          </h2>
+          <span>登录只用于同步；题库仍先写入本机加密库。刷新、退出或网络中断都不会清空本地资料。</span>
+        </div>
+        <CloudOff :size="24" />
+      </header>
+      <div
+        class="cloud-auth-status"
+        role="status"
+        aria-live="polite"
+      >
+        <span
+          class="backend-status-dot"
+          :class="{ ready: cloudAuth.status.kind === 'connected' }"
+          aria-hidden="true"
+        />
+        <strong>{{ authStatusLabel(cloudAuth.status.kind) }}</strong>
+        <small v-if="cloudAuth.status.emailHint">{{ cloudAuth.status.emailHint }}</small>
+      </div>
+      <form
+        v-if="cloudAuth.configured && cloudAuth.status.kind !== 'connected'"
+        class="cloud-auth-form"
+        @submit.prevent="signIn"
+      >
+        <label>邮箱<input
+          v-model="authEmail"
+          type="email"
+          autocomplete="username"
+          placeholder="you@example.com"
+          required
+        ></label>
+        <label>密码<input
+          v-model="authPassword"
+          type="password"
+          autocomplete="current-password"
+          minlength="8"
+          required
+        ></label>
+        <button
+          type="submit"
+          class="primary-action"
+          :disabled="authBusy"
+        >
+          {{ authBusy ? '连接中…' : authMode === 'signUp' ? '注册并连接' : '登录并连接' }}
+        </button>
+      </form>
+      <button
+        v-if="cloudAuth.configured && cloudAuth.status.kind !== 'connected'"
+        type="button"
+        class="auth-mode-toggle"
+        @click="authMode = authMode === 'signIn' ? 'signUp' : 'signIn'"
+      >
+        {{ authMode === 'signIn' ? '还没有账户？注册' : '已有账户？返回登录' }}
+      </button>
+      <div
+        v-else-if="cloudAuth.status.kind === 'connected'"
+        class="cloud-auth-actions"
+      >
+        <button
+          type="button"
+          class="primary-action"
+          :disabled="syncBusy"
+          @click="syncNow"
+        >
+          {{ syncBusy ? '同步中…' : '立即同步' }}
+        </button>
+        <button
+          type="button"
+          :disabled="authBusy"
+          @click="disconnectCloud"
+        >
+          退出云端账户
+        </button>
+      </div>
+      <p
+        v-else
+        class="backend-message warning"
+      >
+        当前构建没有云端地址，仍可正常使用全部本地功能。
+      </p>
+      <p
+        v-if="authMessage"
+        class="backend-message"
+        role="status"
+      >
+        {{ authMessage }}
+      </p>
+      <p
+        v-if="syncMessage"
+        class="backend-message"
+        role="status"
+      >
+        {{ syncMessage }}
+      </p>
+    </section>
+
+    <section
       v-if="overview"
       class="settings-grid"
       :aria-busy="loading"
@@ -362,7 +566,7 @@ onMounted(load)
       <article class="setting-card">
         <div class="icon">
           <CloudOff :size="22" />
-        </div><div><p>云端同步</p><h2>{{ overview?.cloudSyncConfigured ? '已配置' : '尚未配置' }}</h2><span>本地 outbox 已记录 {{ overview?.pendingOperationCount ?? 0 }} 项变更；Supabase 凭据与远端 RPC 仍待接入。</span></div>
+        </div><div><p>云端同步</p><h2>{{ overview?.cloudSyncConfigured ? '已配置' : '尚未配置' }}</h2><span>本地 outbox 已记录 {{ overview?.pendingOperationCount ?? 0 }} 项变更；配置账户后可从上方手动同步。</span></div>
       </article>
       <article class="setting-card">
         <div class="icon">
@@ -593,6 +797,7 @@ h1, h2 { margin: 0; font-family: Georgia,'Microsoft YaHei',serif; color: var(--g
 button { display: inline-flex; gap: 7px; align-items: center; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper-raised); cursor: pointer; } button:disabled { opacity: .5; }
 .error-banner { padding: 12px; border-radius: 10px; background: rgba(185,88,63,.08); color: #843d2c; }
 .state-copy { padding: 28px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,253,247,.7); color: var(--ink-muted); text-align: center; }
+.cloud-auth-panel { margin-bottom: 16px; padding: 24px 26px; border: 1px solid rgba(185,88,63,.22); border-radius: 17px; background: linear-gradient(135deg,rgba(255,253,247,.96),rgba(247,235,220,.42)); box-shadow: 0 16px 48px rgba(34,48,43,.05); }.cloud-auth-panel>header { align-items: center; margin-bottom: 16px; }.cloud-auth-panel>header p { margin: 0 0 8px; color: var(--cinnabar); font-size: 12px; font-weight: 800; letter-spacing: .14em; }.cloud-auth-panel>header span { display: block; max-width: 680px; margin-top: 8px; color: var(--ink-muted); font-size: 12px; }.cloud-auth-status { display: flex; gap: 9px; align-items: center; margin-bottom: 13px; padding: 11px 13px; border-radius: 11px; background: rgba(33,51,45,.07); }.cloud-auth-status small { color: var(--ink-muted); }.cloud-auth-form { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; align-items: end; }.cloud-auth-form label { display: grid; gap: 5px; color: var(--ink-muted); font-size: 11px; }.cloud-auth-form input { min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }.primary-action { color: var(--paper); border-color: var(--green-deep); background: var(--green-deep); }.cloud-auth-actions { display: flex; gap: 9px; }.auth-mode-toggle { margin-top: 11px; padding: 0; border: 0; color: var(--green-deep); background: transparent; font-size: 11px; }.cloud-auth-panel .backend-message { margin-top: 12px; }
 .backend-panel { margin-bottom: 16px; padding: 24px 26px; border: 1px solid rgba(33,51,45,.22); border-radius: 17px; background: linear-gradient(135deg,rgba(255,253,247,.94),rgba(220,228,220,.34)); box-shadow: 0 16px 48px rgba(34,48,43,.05); }.backend-panel>header { align-items: center; margin-bottom: 16px; }.backend-panel>header>svg { color: var(--green-deep); }.backend-panel>header p { margin: 0 0 8px; color: var(--cinnabar); font-size: 12px; font-weight: 800; letter-spacing: .14em; }.backend-panel>header span { display: block; margin-top: 8px; color: var(--ink-muted); font-size: 12px; }.backend-current { display: flex; gap: 9px; align-items: center; margin-bottom: 13px; padding: 11px 13px; border-radius: 11px; background: rgba(33,51,45,.07); }.backend-current>span:last-child { display: grid; gap: 3px; }.backend-current strong { color: var(--green-deep); font-size: 13px; }.backend-current small { color: var(--ink-muted); font-size: 11px; }.backend-status-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--cinnabar); box-shadow: 0 0 0 4px rgba(185,88,63,.13); }.backend-status-dot.ready { background: #557263; box-shadow: 0 0 0 4px rgba(85,114,99,.14); }.backend-options { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; }.backend-option { display: grid; grid-template-columns: 17px 1fr; gap: 10px; align-items: start; min-height: 92px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,253,247,.65); cursor: pointer; text-align: left; transition: transform var(--motion-feedback) var(--ease-standard), border-color var(--motion-standard) var(--ease-standard), background var(--motion-standard) var(--ease-standard), box-shadow var(--motion-standard) var(--ease-standard); }.backend-option:hover:not(:disabled) { transform: translateY(-2px); border-color: rgba(33,51,45,.38); box-shadow: 0 10px 24px rgba(34,48,43,.08); }.backend-option.selected { border-color: var(--green-deep); background: var(--green-soft); box-shadow: inset 0 0 0 1px var(--green-deep); }.backend-option:disabled { cursor: wait; }.backend-option-mark { width: 15px; height: 15px; margin-top: 2px; border: 1px solid var(--sand-deep); border-radius: 50%; background: var(--paper-raised); box-shadow: inset 0 0 0 4px var(--paper-raised); }.backend-option.selected .backend-option-mark { border-color: var(--green-deep); background: var(--green-deep); }.backend-option>span:last-child { display: grid; gap: 5px; }.backend-option strong { color: var(--green-deep); font-size: 13px; }.backend-option small { color: var(--ink-muted); font-size: 10px; line-height: 1.55; }.backend-message { margin: 12px 0 0; color: #557263; font-size: 11px; }.backend-message.warning { color: #843d2c; font-weight: 700; }.settings-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 15px; }.setting-card, .roadmap-panel, .migration-panel, .backup-panel, .subject-panel, .review-rhythm-panel { border: 1px solid var(--line); border-radius: 17px; background: rgba(255,253,247,.78); box-shadow: 0 16px 48px rgba(34,48,43,.05); }
 .setting-card { position: relative; display: grid; grid-template-columns: 48px 1fr; gap: 14px; min-height: 150px; padding: 22px; }.setting-card .icon { display: grid; width: 44px; height: 44px; place-items: center; border-radius: 13px; background: var(--green-soft); color: var(--green-deep); }.setting-card p { margin: 1px 0 8px; color: var(--ink-muted); font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }.setting-card span { display: flex; gap: 5px; align-items: center; margin-top: 10px; color: var(--ink-muted); font-size: 12px; line-height: 1.7; }.setting-card > strong { position: absolute; right: 18px; bottom: 16px; display: flex; gap: 5px; align-items: center; color: #557263; font-size: 10px; }
 .encryption-card { border-color: rgba(33,51,45,.28); }.roadmap-panel { margin-top: 16px; padding: 26px; }.roadmap-panel ol { display: grid; grid-template-columns: repeat(3,1fr); gap: 12px; margin: 22px 0 0; padding: 0; list-style: none; }.roadmap-panel li { padding: 17px; border-radius: 12px; background: rgba(232,221,199,.34); }.roadmap-panel strong, .roadmap-panel span { display: block; }.roadmap-panel span { margin-top: 7px; color: var(--ink-muted); font-size: 12px; line-height: 1.65; }
@@ -604,6 +809,6 @@ button { display: inline-flex; gap: 7px; align-items: center; padding: 10px 14px
 .preflight-note.warning { color: #843d2c; font-weight: 700; }
 .builtin-subjects input { width: 1px; height: 1px; pointer-events: auto; }
 @media (max-width: 980px) { .migration-stats { grid-template-columns: repeat(3,minmax(0,1fr)); }.subject-controls { grid-template-columns: 1fr; } }
-@media (max-width: 760px) { .settings-page { padding: 24px 16px 92px; } .settings-grid { grid-template-columns: 1fr; } .backend-options { grid-template-columns: 1fr; } .roadmap-panel ol, .migration-stats, .backup-results, .rhythm-options { grid-template-columns: 1fr; } .migration-panel header, .backup-panel header { flex-direction: column; }.backup-actions { width: 100%; flex-direction: column; }.backup-actions button { justify-content: center; }.issue-list li { grid-template-columns: 1fr; gap: 4px; }.rhythm-actions { align-items: stretch; flex-direction: column; }.rhythm-actions button { justify-content: center; } }
+@media (max-width: 760px) { .settings-page { padding: 24px 16px 92px; } .settings-grid { grid-template-columns: 1fr; } .backend-options { grid-template-columns: 1fr; } .cloud-auth-form { grid-template-columns: 1fr; }.cloud-auth-actions { flex-direction: column; }.cloud-auth-actions button { justify-content: center; }.roadmap-panel ol, .migration-stats, .backup-results, .rhythm-options { grid-template-columns: 1fr; } .migration-panel header, .backup-panel header { flex-direction: column; }.backup-actions { width: 100%; flex-direction: column; }.backup-actions button { justify-content: center; }.issue-list li { grid-template-columns: 1fr; gap: 4px; }.rhythm-actions { align-items: stretch; flex-direction: column; }.rhythm-actions button { justify-content: center; } }
 @media (prefers-reduced-motion: reduce) { .backend-option { transition: none; }.backend-option:hover:not(:disabled) { transform: none; } }
 </style>

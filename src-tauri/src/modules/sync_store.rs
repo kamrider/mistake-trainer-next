@@ -344,6 +344,28 @@ pub fn record_pull_success(
     if cursor < 0 {
         return Err(SyncStoreError::BoundaryViolation);
     }
+    record_pull_success_inner(connection, account_id, cursor, now_utc_ms)
+}
+
+pub(crate) fn record_pull_success_tx(
+    transaction: &Transaction<'_>,
+    account_id: &str,
+    cursor: i64,
+    now_utc_ms: i64,
+) -> Result<(), SyncStoreError> {
+    validate_uuid(account_id)?;
+    if cursor < 0 {
+        return Err(SyncStoreError::BoundaryViolation);
+    }
+    record_pull_success_inner(transaction, account_id, cursor, now_utc_ms)
+}
+
+fn record_pull_success_inner(
+    connection: &Connection,
+    account_id: &str,
+    cursor: i64,
+    now_utc_ms: i64,
+) -> Result<(), SyncStoreError> {
     connection.execute(
         "INSERT INTO cloud_sync_state(account_id, pull_cursor, last_attempt_at_utc_ms, last_success_at_utc_ms, last_error_code)
          VALUES(?1, ?2, ?3, ?3, NULL)

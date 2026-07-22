@@ -149,8 +149,11 @@ async function importFiles(files: File[]) {
   busy.value = true
   errorMessage.value = ''
   try {
+    const maxBatchItems = 150
+    const skippedCount = Math.max(0, files.length - maxBatchItems)
+    const filesToImport = files.slice(0, maxBatchItems)
     const failedNames: string[] = []
-    for (const file of files.slice(0, 150)) {
+    for (const file of filesToImport) {
       try {
         const bytes = [...new Uint8Array(await file.arrayBuffer())]
         const result = normalizeAppResult(await commands.captureImportBytes({
@@ -170,11 +173,16 @@ async function importFiles(files: File[]) {
         failedNames.push(file.name || '未命名图片')
       }
     }
+    const notices: string[] = []
+    if (skippedCount) {
+      notices.push(`本批最多保存 ${maxBatchItems} 张，已跳过最后 ${skippedCount} 张图片。`)
+    }
     if (failedNames.length) {
       const preview = failedNames.slice(0, 3).join('、')
       const suffix = failedNames.length > 3 ? ` 等 ${failedNames.length} 张` : ''
-      showError(`${preview}${suffix} 未能加入采集箱，其余图片已继续导入。`)
+      notices.push(`${preview}${suffix} 未能加入采集箱，其余图片已继续导入。`)
     }
+    if (notices.length) showError(notices.join(' '))
     await loadDetail(batchId)
   }
   catch {

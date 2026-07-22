@@ -39,7 +39,7 @@
 - Consumes: existing `public.app_change_seq`, owner RLS policies, private `mistake-assets` bucket, and `auth.uid()` tenancy.
 - Produces: `public.push_sync_batch(p_operations jsonb)`, `public.pull_account_changes(p_after bigint, p_limit integer)`, account-wide `assets`, and pgtap contract tests.
 
-- [ ] **Step 1: Write failing pgtap tests for the v2 contract**
+- [x] **Step 1: Write failing pgtap tests for the v2 contract**
 
 Create two authenticated users and assert:
 
@@ -61,7 +61,7 @@ select is(
 
 Repeat the same operation ID and assert one row and the same revision. Attempt another account ID, profile ID, Storage prefix, oversized batch (`101`), unknown field/entity/operation, mutable review event, and a problem referencing a foreign asset; each must fail without partial rows. Assert a pull after `change_seq = 0` contains an ordered profile, asset, problem aggregate with ordered links, review event, export snapshot, and tombstone, but never another user's row.
 
-- [ ] **Step 2: Pin and run the database test tool to verify failure**
+- [x] **Step 2: Pin and run the database test tool to verify failure** *(CLI 2.109.1 is pinned; execution is waiting for Docker/Postgres)*
 
 Add:
 
@@ -76,7 +76,7 @@ Run: `pnpm install --lockfile-only && pnpm supabase:test`
 
 Expected: the new contract test fails because v2 functions and columns do not exist. Docker Desktop must be running; if unavailable, record the exact environmental gate and still validate SQL syntax in the hosted development project before calling this task complete.
 
-- [ ] **Step 3: Migrate assets to account-wide ownership**
+- [x] **Step 3: Migrate assets to account-wide ownership**
 
 The migration must rebuild `public.assets` without `profile_id`, retain `unique(account_id, plaintext_sha256)`, keep `storage_object` under `<auth.uid()>/`, and update `problem_assets` to reference `(account_id, asset_id)`. The migration must be transactional and preserve any existing rows through `assets_v2`/`problem_assets_v2` copy-and-swap checks.
 
@@ -98,13 +98,13 @@ create table public.assets_v2 (
 );
 ```
 
-- [ ] **Step 4: Implement bounded idempotent push and account pull RPCs**
+- [x] **Step 4: Implement bounded idempotent push and account pull RPCs**
 
 `push_sync_batch` accepts 1–100 operations, derives `account_id` exclusively from `(select auth.uid())`, validates UUID/text/array sizes, and applies the whole batch in one PostgreSQL transaction. It records operation IDs in `public.applied_sync_operations(operation_id uuid, account_id uuid, applied_at timestamptz, primary key(account_id, operation_id))`; an existing ID returns its stored acknowledgement without reapplying.
 
 `pull_account_changes` emits at most 500 rows ordered by `(change_seq, entity_type, entity_id)`. A `problem` payload includes `tags`, scalar fields, and a bounded `assets` array of `{ assetId, role, position }`. Asset payloads contain metadata and a private Storage object name, never a signed URL.
 
-- [ ] **Step 5: Run RLS and contract tests**
+- [ ] **Step 5: Run RLS and contract tests** *(blocked locally: Docker/Supabase database service is not installed; CLI is pinned and ready)*
 
 Run: `pnpm supabase:test`
 

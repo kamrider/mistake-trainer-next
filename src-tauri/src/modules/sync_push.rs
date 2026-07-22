@@ -43,7 +43,7 @@ pub enum SyncPushError {
 }
 
 impl SyncPushError {
-    fn stable_code(&self) -> &'static str {
+    pub(crate) fn stable_code(&self) -> &'static str {
         match self {
             Self::Store(_) => "sync_store_failed",
             Self::Database(_) => "sync_database_failed",

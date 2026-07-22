@@ -736,6 +736,78 @@ fn rebuild_schedule(events: &[StoredEvent]) -> Result<(MemoryState, i64), fsrs::
     Ok((state.memory, due_at))
 }
 
+/// Rebuild a problem's schedule from the append-only review history.
+///
+/// Pulling review events must use the exact same FSRS reducer as a local
+/// submission; otherwise two devices can silently disagree about the next
+/// due date.  Keeping this small transaction helper next to the local review
+/// implementation makes that invariant explicit.
+pub(crate) fn rebuild_schedule_for_problem(
+    transaction: &Transaction<'_>,
+    account_id: &str,
+    problem_id: &str,
+    rebuilt_at_utc_ms: i64,
+) -> Result<(), ReviewUseCaseError> {
+    let mut statement = transaction.prepare(
+        "SELECT id, rating, occurred_at_utc_ms
+         FROM review_events
+         WHERE account_id = ?1 AND problem_id = ?2
+         ORDER BY occurred_at_utc_ms, id",
+    )?;
+    let events = statement
+        .query_map(params![account_id, problem_id], |row| {
+            let label: String = row.get(1)?;
+            Ok(StoredEvent {
+                id: row.get(0)?,
+                rating: parse_rating(&label),
+                occurred_at_utc_ms: row.get(2)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if events.is_empty() {
+        transaction.execute(
+            "DELETE FROM schedule_states
+             WHERE problem_id = ?1
+               AND EXISTS (SELECT 1 FROM problems WHERE id = ?1 AND account_id = ?2)",
+            params![problem_id, account_id],
+        )?;
+        return Ok(());
+    }
+
+    let (state, due_at_utc_ms) = rebuild_schedule(&events)?;
+    let last_reviewed_at_utc_ms = events
+        .last()
+        .map(|event| event.occurred_at_utc_ms)
+        .expect("non-empty review events");
+    transaction.execute(
+        "INSERT INTO schedule_states(
+            problem_id, due_at_utc_ms, stability, difficulty,
+            last_reviewed_at_utc_ms, algorithm_version, parameter_version,
+            rebuilt_at_utc_ms
+         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(problem_id) DO UPDATE SET
+            due_at_utc_ms = excluded.due_at_utc_ms,
+            stability = excluded.stability,
+            difficulty = excluded.difficulty,
+            last_reviewed_at_utc_ms = excluded.last_reviewed_at_utc_ms,
+            algorithm_version = excluded.algorithm_version,
+            parameter_version = excluded.parameter_version,
+            rebuilt_at_utc_ms = excluded.rebuilt_at_utc_ms",
+        params![
+            problem_id,
+            due_at_utc_ms,
+            f64::from(state.stability),
+            f64::from(state.difficulty),
+            last_reviewed_at_utc_ms,
+            ALGORITHM_VERSION,
+            PARAMETER_VERSION,
+            rebuilt_at_utc_ms,
+        ],
+    )?;
+    Ok(())
+}
+
 const fn rating_label(rating: FsrsRating) -> &'static str {
     match rating {
         FsrsRating::Again => "again",

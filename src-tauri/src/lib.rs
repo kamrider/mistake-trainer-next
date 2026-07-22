@@ -30,6 +30,8 @@ pub fn run() {
                 current_utc_millis(),
             )?;
             app.manage(runtime);
+            app.manage(modules::auth_sync::AuthSyncManager::default());
+            app.manage(modules::auth_sync::CloudAuthRuntime::from_build_environment());
             app.manage(modules::capture_lan::CaptureLanManager::default());
             app.manage(modules::legacy::LegacyImportManager::default());
             specta.mount_events(app);
