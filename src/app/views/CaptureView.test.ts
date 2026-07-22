@@ -179,6 +179,8 @@ describe('CaptureView one-time Windows LAN permission', () => {
     await waitFor(() => expect(api.captureImportBytes).toHaveBeenCalledTimes(2))
     expect((api.captureImportBytes.mock.calls[0]![0] as { sourceName: string }).sourceName).toBe('bad.png')
     expect((api.captureImportBytes.mock.calls[1]![0] as { sourceName: string }).sourceName).toBe('good.png')
+    expect((api.captureImportBytes.mock.calls[0]![0] as { sourceSequence: number }).sourceSequence).toBe(0)
+    expect((api.captureImportBytes.mock.calls[1]![0] as { sourceSequence: number }).sourceSequence).toBe(1)
   })
 
   it('explains the 150-image batch limit instead of silently truncating', async () => {

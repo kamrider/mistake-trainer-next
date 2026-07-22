@@ -153,26 +153,32 @@ async function importFiles(files: File[]) {
     const skippedCount = Math.max(0, files.length - maxBatchItems)
     const filesToImport = files.slice(0, maxBatchItems)
     const failedNames: string[] = []
-    for (const file of filesToImport) {
+    let nextFileIndex = 0
+    const importOne = async (file: File, sourceSequence: number) => {
+      const sourceName = file.name || 'clipboard-image'
       try {
         const bytes = [...new Uint8Array(await file.arrayBuffer())]
         const result = normalizeAppResult(await commands.captureImportBytes({
           batchId,
           clientUploadId: crypto.randomUUID(),
-          sourceName: file.name || 'clipboard-image',
-          sourceSequence: null,
+          sourceName,
+          sourceSequence,
           bytes,
         }))
-        if (!result.ok) {
-          failedNames.push(file.name || '未命名图片')
-          showError(`${file.name || '图片'}：${result.error.userMessage}`)
-          continue
-        }
+        if (!result.ok) failedNames.push(sourceName)
       }
       catch {
-        failedNames.push(file.name || '未命名图片')
+        failedNames.push(sourceName)
       }
     }
+    const workerCount = Math.min(2, filesToImport.length)
+    await Promise.all(Array.from({ length: workerCount }, async () => {
+      while (nextFileIndex < filesToImport.length) {
+        const index = nextFileIndex
+        nextFileIndex += 1
+        await importOne(filesToImport[index]!, index)
+      }
+    }))
     const notices: string[] = []
     if (skippedCount) {
       notices.push(`本批最多保存 ${maxBatchItems} 张，已跳过最后 ${skippedCount} 张图片。`)
