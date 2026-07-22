@@ -205,7 +205,24 @@ function selectProfile(profileId: string) {
             v-else
             timeout="0"
           >
-            <component :is="Component" />
+            <template v-if="Component">
+              <component :is="Component" />
+            </template>
+            <section
+              v-else
+              class="route-error"
+              role="alert"
+            >
+              <ShieldAlert :size="28" />
+              <h1>页面组件暂时不可用</h1>
+              <p>这个页面没有留下空白状态。返回训练台后可以继续使用本地资料库。</p>
+              <button
+                type="button"
+                @click="router.push({ name: 'dashboard' })"
+              >
+                回到训练台
+              </button>
+            </section>
             <template #fallback>
               <div
                 class="route-loading"

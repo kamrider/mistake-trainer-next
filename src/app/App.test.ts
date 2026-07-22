@@ -88,4 +88,21 @@ describe('App', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: '回到训练台' }))
     await waitFor(() => expect(router.currentRoute.value.name).toBe('dashboard'))
   })
+
+  it('does not render a blank shell when a route has no component', async () => {
+    const router = createAppRouter(createMemoryHistory())
+    router.addRoute({
+      name: 'empty-route',
+      path: '/empty-route',
+      component: undefined as never,
+      meta: { shellPage: 'dashboard' },
+    })
+    await router.push('/empty-route')
+    await router.isReady()
+
+    const view = render(App, { global: { plugins: [router] } })
+
+    expect(await screen.findByRole('heading', { name: '页面组件暂时不可用' })).toBeVisible()
+    expect(view.container.querySelector('.route-page')?.textContent).toContain('返回训练台')
+  })
 })
