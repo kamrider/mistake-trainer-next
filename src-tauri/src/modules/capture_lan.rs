@@ -105,7 +105,7 @@ struct ActiveSession {
     shutdown: watch::Sender<bool>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct CaptureLanManager {
     active: Arc<Mutex<Option<ActiveSession>>>,
 }
@@ -121,6 +121,9 @@ impl std::fmt::Debug for CaptureLanManager {
 
 impl Drop for CaptureLanManager {
     fn drop(&mut self) {
+        if Arc::strong_count(&self.active) != 1 {
+            return;
+        }
         if let Ok(mut active) = self.active.lock() {
             if let Some(active) = active.take() {
                 let _ = active.shutdown.send(true);

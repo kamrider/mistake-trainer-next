@@ -10,7 +10,10 @@ use crate::{
         self, CloudBackendError, CloudBackendKind, CloudBackendStatus,
     },
     modules::auth_sync::{AuthStatus, AuthStatusKind, AuthSyncManager, CloudAuthRuntime},
-    modules::{profiles::list_profiles, sync_pull::pull_until_current, sync_push::push_once},
+    modules::{
+        capture_lan::CaptureLanManager, profiles::list_profiles, sync_pull::pull_until_current,
+        sync_push::push_once,
+    },
 };
 
 /// DTO used by the generated command client when changing the sync provider.
@@ -295,6 +298,7 @@ pub async fn sync_now(
     state: State<'_, crate::infrastructure::runtime::LibraryRuntime>,
     manager: State<'_, AuthSyncManager>,
     runtime: State<'_, CloudAuthRuntime>,
+    capture_lan: State<'_, CaptureLanManager>,
 ) -> Result<AppResult<SyncNowReport>, ()> {
     let Some(client) = runtime.client.as_ref().map(Arc::clone) else {
         return Ok(AppResult::failure(
@@ -322,10 +326,18 @@ pub async fn sync_now(
     }
 
     let connection = Arc::clone(&state.connection);
+    let profile_transition = state.profile_transition_lock();
+    let capture_lan = capture_lan.inner().clone();
     let blob_root = state.blob_root.clone();
     let asset_key = state.asset_key;
     let account_id = state.account_id().to_owned();
     let worker = tauri::async_runtime::spawn_blocking(move || {
+        let _profile_guard = profile_transition
+            .lock()
+            .map_err(|_| "sync_profile_transition_locked")?;
+        capture_lan
+            .stop()
+            .map_err(|_| "sync_capture_session_stop_failed")?;
         let mut connection = connection.lock().map_err(|_| "sync_database_locked")?;
         let runtime = tokio::runtime::Runtime::new().map_err(|_| "sync_runtime_failed")?;
         let result = runtime.block_on(async {

@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
 };
 
 use image::GenericImageView;
@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::{
     infrastructure::{
-        assets::{encrypt_asset, plaintext_sha256},
+        assets::{encrypt_asset, plaintext_sha256, remove_asset_blob},
         supabase::{CloudError, CloudPullTransport, DownloadedRemoteAsset, RemotePullChange},
     },
     modules::{
@@ -617,19 +617,16 @@ fn apply_profile_tombstone(
     if tombstone.profile_id.is_some() {
         return Err(SyncPullError::InvalidChange);
     }
-    let target_revision = tx
+    let target_exists = tx
         .query_row(
             "SELECT revision FROM learner_profiles WHERE id = ?1 AND account_id = ?2",
             params![tombstone.entity_id, account_id],
             |row| row.get::<_, i64>(0),
         )
         .optional()?;
-    let Some(target_revision) = target_revision else {
+    let Some(_) = target_exists else {
         return Ok(());
     };
-    if tombstone.deleted_revision < target_revision {
-        return Ok(());
-    }
     let replacement = tx
         .query_row(
             "SELECT id FROM learner_profiles
@@ -722,17 +719,8 @@ fn apply_asset_tombstone(
 }
 
 fn remove_orphan_blob(blob_root: &Path, relative_path: &str) {
-    let relative = Path::new(relative_path);
-    if relative.is_absolute()
-        || relative
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_)))
-    {
-        return;
-    }
-    match fs::remove_file(blob_root.join(relative)) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+    match remove_asset_blob(blob_root, relative_path) {
+        Ok(_) => {}
         Err(_) => {}
     }
 }

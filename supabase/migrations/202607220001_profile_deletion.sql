@@ -8,6 +8,32 @@ alter table public.tombstones
   drop constraint if exists tombstones_account_id_profile_id_entity_type_entity_id_key;
 alter table public.tombstones
   alter column profile_id drop not null;
+
+-- v2 allowed asset tombstones to retain the profile that first referenced the
+-- asset. Normalize retained rows before enforcing the account-scoped v3 shape.
+delete from public.tombstones target
+using (
+  select id
+  from (
+    select id, row_number() over (
+      partition by account_id, entity_type, entity_id
+      order by deleted_revision desc, change_seq desc, id
+    ) as ordinal
+    from public.tombstones
+    where entity_type in ('learner_profile', 'asset')
+  ) ranked
+  where ranked.ordinal > 1
+) duplicate
+where target.id = duplicate.id;
+
+update public.tombstones
+set profile_id = null
+where entity_type in ('learner_profile', 'asset') and profile_id is not null;
+
+alter table public.tombstones
+  drop constraint if exists tombstones_profile_scope;
+alter table public.tombstones
+  drop constraint if exists tombstones_entity_identity;
 alter table public.tombstones
   add constraint tombstones_profile_scope check (
     (entity_type in ('learner_profile', 'asset') and profile_id is null)
@@ -16,6 +42,48 @@ alter table public.tombstones
 alter table public.tombstones
   add constraint tombstones_entity_identity
   unique nulls not distinct (account_id, profile_id, entity_type, entity_id);
+
+-- Review events stay append-only to authenticated clients, while deletion of
+-- their owning problem/profile is an authorized database cascade.
+drop trigger if exists prevent_review_event_mutation on public.review_events;
+create trigger prevent_review_event_mutation
+before update on public.review_events
+for each row execute function public.prevent_review_event_mutation();
+
+alter table public.review_events
+  drop constraint if exists review_events_account_id_profile_id_problem_id_fkey;
+alter table public.review_events
+  add constraint review_events_account_id_profile_id_problem_id_fkey
+  foreign key (account_id, profile_id, problem_id)
+  references public.problems(account_id, profile_id, id) on delete cascade;
+
+create or replace function public.prevent_deleted_profile_resurrection()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if exists (
+    select 1
+    from public.tombstones t
+    where t.account_id = new.account_id
+      and t.profile_id is null
+      and t.entity_type = 'learner_profile'
+      and t.entity_id = new.id
+      and t.purge_after > now()
+  ) then
+    raise exception 'deleted learner profile cannot be restored by a stale upsert'
+      using errcode = '23514';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists prevent_deleted_profile_resurrection on public.learner_profiles;
+create trigger prevent_deleted_profile_resurrection
+before insert or update on public.learner_profiles
+for each row execute function public.prevent_deleted_profile_resurrection();
 
 create or replace function public.apply_delete_tombstone()
 returns trigger
@@ -32,6 +100,14 @@ begin
     if new.profile_id is not null then
       raise exception 'profile tombstones must be account scoped' using errcode = '22023';
     end if;
+    -- Serialize deletions for this account before checking the last-profile
+    -- invariant. Without row locks, two concurrent deletes could both observe
+    -- two profiles and leave the account with none.
+    perform 1
+    from public.learner_profiles p
+    where p.account_id = new.account_id
+    order by p.id
+    for update;
     if exists (
       select 1 from public.learner_profiles p
       where p.id = new.entity_id and p.account_id = new.account_id
@@ -89,4 +165,3 @@ drop trigger if exists apply_delete_tombstone on public.tombstones;
 create trigger apply_delete_tombstone
 after insert or update on public.tombstones
 for each row execute function public.apply_delete_tombstone();
-

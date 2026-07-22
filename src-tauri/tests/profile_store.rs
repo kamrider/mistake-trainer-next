@@ -305,6 +305,43 @@ fn deleting_the_active_profile_cascades_private_data_and_preserves_shared_assets
          ('018f0000-0000-7000-8000-000000000012', '018f0000-0000-7000-8000-000000000002', 'answer', 0)",
         [],
     ).unwrap();
+    connection
+        .execute(
+            "INSERT INTO review_events(
+           id, account_id, profile_id, problem_id, device_id, rating, duration_ms,
+           occurred_at_utc_ms, algorithm_version, parameter_version
+         ) VALUES(
+           '018f0000-0000-7000-8000-000000000031', 'account-1', ?1,
+           '018f0000-0000-7000-8000-000000000012',
+           '018f0000-0000-7000-8000-000000000032', 'good', 1200, 40, 'fsrs-6', 'default-1'
+         )",
+            [&second.id],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO schedule_states(
+           problem_id, due_at_utc_ms, stability, difficulty, last_reviewed_at_utc_ms,
+           algorithm_version, parameter_version, rebuilt_at_utc_ms
+         ) VALUES(
+           '018f0000-0000-7000-8000-000000000012', 100, 1, 5, 40,
+           'fsrs-6', 'default-1', 40
+         )",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO export_snapshots(
+           id, account_id, profile_id, title, problem_ids_json, configuration_json,
+           created_at_utc_ms, revision
+         ) VALUES(
+           '018f0000-0000-7000-8000-000000000033', 'account-1', ?1,
+           '待删除导出', '[\"018f0000-0000-7000-8000-000000000012\"]', '{}', 40, 1
+         )",
+            [&second.id],
+        )
+        .unwrap();
     connection.execute(
         "INSERT INTO capture_batches(id, account_id, profile_id, subject, state, created_at_utc_ms, updated_at_utc_ms, revision)
          VALUES('018f0000-0000-7000-8000-000000000021', 'account-1', ?1, '物理', 'organizing', 40, 40, 1)",
@@ -317,11 +354,27 @@ fn deleting_the_active_profile_cascades_private_data_and_preserves_shared_assets
         [],
     ).unwrap();
 
+    let mismatch = delete_profile(
+        &mut connection,
+        DeleteProfile {
+            account_id: "account-1".to_owned(),
+            profile_id: second.id.clone(),
+            confirmation_name: "竞赛".to_owned(),
+            now_utc_ms: 49,
+        },
+    )
+    .expect_err("confirmation is checked inside the deletion transaction");
+    assert!(matches!(
+        mismatch,
+        ProfileUseCaseError::ConfirmationMismatch
+    ));
+
     let receipt = delete_profile(
         &mut connection,
         DeleteProfile {
             account_id: "account-1".to_owned(),
             profile_id: second.id.clone(),
+            confirmation_name: second.name.clone(),
             now_utc_ms: 50,
         },
     )
@@ -359,7 +412,37 @@ fn deleting_the_active_profile_cascades_private_data_and_preserves_shared_assets
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!((deleted_profile_rows, deleted_problem_rows), (0, 0));
+    let deleted_review_rows: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM review_events WHERE profile_id = ?1",
+            [&receipt.deleted_profile_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let deleted_schedule_rows: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM schedule_states WHERE problem_id = '018f0000-0000-7000-8000-000000000012'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let deleted_export_rows: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM export_snapshots WHERE profile_id = ?1",
+            [&receipt.deleted_profile_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        (
+            deleted_profile_rows,
+            deleted_problem_rows,
+            deleted_review_rows,
+            deleted_schedule_rows,
+            deleted_export_rows,
+        ),
+        (0, 0, 0, 0, 0)
+    );
     let remaining_assets: Vec<String> = {
         let mut statement = connection
             .prepare("SELECT encrypted_path FROM assets ORDER BY encrypted_path")
@@ -425,6 +508,7 @@ fn deleting_the_last_or_a_foreign_profile_is_rejected_without_mutation() {
         DeleteProfile {
             account_id: "account-1".to_owned(),
             profile_id: only.id.clone(),
+            confirmation_name: only.name.clone(),
             now_utc_ms: 30,
         },
     )
@@ -435,6 +519,7 @@ fn deleting_the_last_or_a_foreign_profile_is_rejected_without_mutation() {
         DeleteProfile {
             account_id: "account-1".to_owned(),
             profile_id: foreign.id,
+            confirmation_name: foreign.name,
             now_utc_ms: 40,
         },
     )

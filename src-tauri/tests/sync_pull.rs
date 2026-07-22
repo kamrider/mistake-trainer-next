@@ -331,9 +331,21 @@ fn profile_and_orphan_asset_tombstones_delete_locally_and_select_a_replacement()
     let mut connection = database();
     connection.execute(
         "INSERT INTO learner_profiles(id, account_id, name, created_at_utc_ms, updated_at_utc_ms, revision)
-         VALUES(?1, ?2, '待删除', 10, 10, 1), (?3, ?2, '保留档案', 20, 20, 1)",
+         VALUES(?1, ?2, '待删除', 10, 10, 99), (?3, ?2, '保留档案', 20, 20, 1)",
         rusqlite::params![PROFILE_ID, ACCOUNT_ID, REPLACEMENT_PROFILE_ID],
     ).unwrap();
+    connection
+        .execute(
+            "INSERT INTO sync_operations(
+           id, account_id, profile_id, entity_type, entity_id, operation,
+           payload_json, status, attempt_count, created_at_utc_ms, next_attempt_at_utc_ms
+         ) VALUES(
+           '0191365e-2f2f-7b89-b3b0-666666666666', ?1, ?2, 'learner_profile', ?2,
+           'upsert', '{}', 'pending', 0, 90, 90
+         )",
+            rusqlite::params![ACCOUNT_ID, PROFILE_ID],
+        )
+        .unwrap();
     connection
         .execute(
             "INSERT INTO account_preferences(account_id, active_profile_id, updated_at_utc_ms)
@@ -420,6 +432,17 @@ fn profile_and_orphan_asset_tombstones_delete_locally_and_select_a_replacement()
             )
             .unwrap(),
         0
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sync_operations WHERE entity_type = 'learner_profile' AND entity_id = ?1",
+                [PROFILE_ID],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0,
+        "an authoritative profile tombstone must discard a stale high-revision upsert"
     );
     assert_eq!(
         connection

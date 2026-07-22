@@ -31,25 +31,25 @@
 - Consumes: `learner_profiles`, `account_preferences`, cascaded profile-owned tables, account-wide `assets`.
 - Produces: `DeleteProfile { account_id, profile_id, now_utc_ms }`, `DeleteProfileReceipt { deleted_profile_id, replacement_profile, orphan_assets }`, and `delete_profile(&mut Connection, DeleteProfile)`.
 
-- [ ] **Step 1: Write failing store tests**
+- [x] **Step 1: Write failing store tests**
 
   Cover deletion of an inactive profile, deletion of the active profile with deterministic oldest replacement, refusal to delete the last profile, forged-account refusal, cascading problems/reviews/drafts/exports, and preservation of a deduplicated asset still referenced by another profile. Assert that a `learner_profile/delete` outbox row and account-scoped tombstone are committed together.
 
-- [ ] **Step 2: Run the focused Rust test**
+- [x] **Step 2: Run the focused Rust test**
 
   Run: `.\scripts\cargo-msvc.cmd test --manifest-path src-tauri\Cargo.toml --test profile_store`
   Expected: FAIL because `DeleteProfile`, `DeleteProfileReceipt`, and `delete_profile` do not exist.
 
-- [ ] **Step 3: Implement the transaction**
+- [x] **Step 3: Implement the transaction**
 
   Add `ProfileUseCaseError::LastProfile`, `DeleteProfile`, `OrphanAsset`, and `DeleteProfileReceipt`. In `delete_profile`, load the owned target and all owned profiles, reject a missing/last target, select the oldest other profile, update `account_preferences`, collect candidate asset IDs/paths, delete stale target-profile sync operations/conflicts, delete the target profile, insert a tombstone with `profile_id = NULL`, insert the learner-profile delete outbox row, then delete only candidate asset rows for which neither link table contains a reference. Return deleted orphan paths only after `transaction.commit()`.
 
-- [ ] **Step 4: Run store tests and format**
+- [x] **Step 4: Run store tests and format**
 
   Run the focused test above, then `.\scripts\cargo-msvc.cmd fmt --manifest-path src-tauri\Cargo.toml -- --check`.
   Expected: PASS.
 
-- [ ] **Step 5: Commit the store slice**
+- [x] **Step 5: Commit the store slice**
 
   Commit message: `feat: delete learner profiles atomically`.
 
@@ -66,28 +66,28 @@
 **Interfaces:**
 - Produces: `ProfileDeleteInput { profile_id: String, confirmation_name: String }` and `profile_delete(input) -> AppResult<ProfileOverview>`.
 
-- [ ] **Step 1: Write failing command tests**
+- [x] **Step 1: Write failing command tests**
 
   Assert exact-name confirmation, last-profile rejection, LAN stop before mutation, active replacement in both database and `LibraryRuntime`, encrypted orphan file cleanup after commit, and stable errors `profile_delete_confirmation_mismatch`, `profile_last_cannot_delete`, and `profile_not_found`.
 
-- [ ] **Step 2: Run focused command/contract tests**
+- [x] **Step 2: Run focused command/contract tests**
 
   Run: `.\scripts\cargo-msvc.cmd test --manifest-path src-tauri\Cargo.toml --test profile_command --test command_contract`.
   Expected: FAIL because `profile_delete` is not registered.
 
-- [ ] **Step 3: Implement orchestration**
+- [x] **Step 3: Implement orchestration**
 
   Under `runtime.lock_profile_transition()`, validate the exact current name, stop `CaptureLanManager`, call `delete_profile`, remove returned blob paths only when `safe_asset_path` keeps them below `blob_root`, then replace the in-memory active profile with the receipt's replacement. File removal failures are logged with a diagnostic ID but do not roll back the already-safe database transaction.
 
-- [ ] **Step 4: Register and generate bindings**
+- [x] **Step 4: Register and generate bindings**
 
   Add `profile_delete` to Tauri invoke registration and specta export, then run `pnpm bindings:generate`.
 
-- [ ] **Step 5: Run focused tests**
+- [x] **Step 5: Run focused tests**
 
   Expected: all profile and command contract tests PASS.
 
-- [ ] **Step 6: Commit the command slice**
+- [x] **Step 6: Commit the command slice**
 
   Commit message: `feat: expose safe profile deletion command`.
 
@@ -104,28 +104,28 @@
 - Consumes: `WireTombstone { profile_id: Option<String>, entity_type: "learner_profile" }`.
 - Produces: account-scoped profile tombstones that survive profile-row cascade and pull-side profile deletion with deterministic replacement.
 
-- [ ] **Step 1: Add failing pgtap and Rust pull tests**
+- [x] **Step 1: Add failing pgtap and Rust pull tests**
 
   Prove that deleting one of two profiles cascades its cloud children, retains a tombstone, refuses deletion of the last cloud profile, is idempotent, rejects cross-account IDs, and makes a second local device replace its active profile without deleting shared assets.
 
-- [ ] **Step 2: Run Supabase and focused Rust tests**
+- [ ] **Step 2: Run Supabase and focused Rust tests** *(Rust passes; Supabase is blocked locally because Docker Engine is unavailable)*
 
   Run: `pnpm supabase:test` and `.\scripts\cargo-msvc.cmd test --manifest-path src-tauri\Cargo.toml --test sync_pull`.
   Expected: FAIL on learner-profile tombstone handling.
 
-- [ ] **Step 3: Add the database migration**
+- [x] **Step 3: Add the database migration**
 
   Drop the tombstone profile foreign key, allow `profile_id NULL` for learner-profile tombstones, enforce a check that only `learner_profile` tombstones may have a null profile, and replace `push_sync_batch` so learner-profile delete inserts the account-scoped tombstone before deleting the owned profile. Lock the account's profile rows and reject deletion when only one remains. Repeated operation IDs return their prior acknowledgement.
 
-- [ ] **Step 4: Apply pull deletion locally**
+- [x] **Step 4: Apply pull deletion locally**
 
   Extend `apply_tombstone` to update `account_preferences`, cascade-delete the target profile only when another owned profile exists, and report the replacement ID. After pull commit, refresh `LibraryRuntime` from the persisted preference so Vue never observes a deleted active ID.
 
-- [ ] **Step 5: Run sync tests**
+- [ ] **Step 5: Run sync tests** *(Rust sync tests pass; pgtap remains an external environment gate)*
 
   Expected: Supabase contract, sync store, sync push, and sync pull tests PASS.
 
-- [ ] **Step 6: Commit the sync slice**
+- [x] **Step 6: Commit the sync slice**
 
   Commit message: `feat: synchronize learner profile deletion`.
 
@@ -142,32 +142,32 @@
 - Consumes: generated `commands.profileDelete({ profileId, confirmationName })`.
 - Produces: `delete(profileId, confirmationName)` component event and a closed, refreshed shell after success.
 
-- [ ] **Step 1: Write failing Vue tests**
+- [x] **Step 1: Write failing Vue tests**
 
   Assert that each non-last profile exposes a labelled delete action, the last profile does not, the confirmation view lists removed data, Save/Delete stays disabled until the exact name is typed, Escape cancels and restores focus, busy state prevents duplicates, and success returns to the dashboard with the replacement profile.
 
-- [ ] **Step 2: Run focused Vue tests**
+- [x] **Step 2: Run focused Vue tests**
 
   Run: `pnpm test -- src/modules/profiles/components/ProfileSwitcher.test.ts src/app/App.profile.test.ts`.
   Expected: FAIL because no delete event or command exists.
 
-- [ ] **Step 3: Implement the confirmation flow**
+- [x] **Step 3: Implement the confirmation flow**
 
   Add `Trash2` beside rename, a `delete` mode with the profile name rendered in a copyable chip, an exact-name input, irreversible warning, Cancel and “永久删除” actions, and `aria-describedby` wiring. Keep the popover open on command failure and close it only after a successful overview is applied.
 
-- [ ] **Step 4: Add restrained motion**
+- [x] **Step 4: Add restrained motion**
 
   Transition list-to-confirmation with 180 ms opacity plus horizontal transform; animate row removal with 180 ms opacity/scale; use cinnabar only for the destructive action. Under reduced motion, remove transform and set transitions to 1 ms.
 
-- [ ] **Step 5: Wire shell orchestration**
+- [x] **Step 5: Wire shell orchestration**
 
   Propagate the delete event through `AppShell`; in `App.vue`, call `mutateProfile(() => commands.profileDelete(...), true)` and return to the dashboard after success.
 
-- [ ] **Step 6: Run focused Vue tests**
+- [x] **Step 6: Run focused Vue tests**
 
   Expected: PASS.
 
-- [ ] **Step 7: Commit the UI slice**
+- [x] **Step 7: Commit the UI slice**
 
   Commit message: `feat: add guided profile deletion`.
 
@@ -178,7 +178,7 @@
 - Modify: `docs/plans/foundation.md`
 - Create: `docs/windows-profile-deletion-acceptance.md`
 
-- [ ] **Step 1: Document invariants and manual matrix**
+- [x] **Step 1: Document invariants and manual matrix**
 
   Include inactive deletion, active deletion, drafts, shared image dedupe, LAN session, offline outbox, two-device pull, last-profile refusal, incorrect confirmation, restart, and backup/restore cases.
 
@@ -194,4 +194,3 @@
 - [ ] **Step 4: Commit the verified feature**
 
   Commit message: `docs: verify learner profile deletion`.
-

@@ -27,6 +27,7 @@ pub struct RenameProfile {
 pub struct DeleteProfile {
     pub account_id: String,
     pub profile_id: String,
+    pub confirmation_name: String,
     pub now_utc_ms: i64,
 }
 
@@ -64,6 +65,8 @@ pub enum ProfileUseCaseError {
     NotFound,
     #[error("the last profile cannot be deleted")]
     LastProfile,
+    #[error("profile deletion confirmation did not match")]
+    ConfirmationMismatch,
     #[error("profile persistence failed")]
     Database(#[from] rusqlite::Error),
     #[error("profile outbox serialization failed")]
@@ -190,6 +193,9 @@ pub fn delete_profile(
         )
         .optional()?
         .ok_or(ProfileUseCaseError::NotFound)?;
+    if target.name != input.confirmation_name {
+        return Err(ProfileUseCaseError::ConfirmationMismatch);
+    }
     let remaining_profiles = {
         let mut statement = transaction.prepare(
             "SELECT id, account_id, name, created_at_utc_ms, updated_at_utc_ms, revision

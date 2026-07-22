@@ -244,6 +244,26 @@ conflict. Deletes create tombstones retained for 30 days.
   messages are fixed and diagnostic-ID based; source paths, SQL text, encryption keys, account
   identity, and image filenames never enter page state or serialized errors.
 
+## Learner profile deletion
+
+- An account always retains at least one learner profile. Deleting any other profile requires
+  typing its exact current name; forged IDs and stale names fail without changing the library.
+- The SQLite transaction selects the oldest remaining profile as a deterministic fallback,
+  switches `account_preferences` only when necessary, cascades profile-owned data, records an
+  account-scoped 30-day tombstone, and queues deletion before orphan-asset operations.
+- Assets are account-wide and deduplicated. Profile deletion removes only assets no longer
+  referenced by `problem_assets` or `capture_items`; encrypted blob removal happens after commit
+  through a validated relative path and is safe to retry.
+- The profile transition lock serializes deletion with profile switching and LAN capture. An
+  active phone session is stopped before mutation, and `LibraryRuntime` changes its active
+  profile only after the database transaction commits.
+- Supabase profile tombstones have no profile foreign key, so they survive remote cascade. The
+  database rejects deletion of the final remote profile, preserves shared assets, creates asset
+  tombstones for new orphans, and exposes every tombstone through the ordered account feed.
+- Pull applies the same last-profile and ownership invariants locally, advances the cursor in the
+  same transaction, removes committed orphan blobs afterward, and refreshes the in-memory active
+  profile before reporting sync success.
+
 ## Performance budgets
 
 - Initial JavaScript: at most 300 KB gzip.

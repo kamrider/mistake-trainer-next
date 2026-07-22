@@ -1,13 +1,13 @@
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::path::{Component, Path};
+use std::path::Path;
 use tauri::State;
 use uuid::Uuid;
 
 use crate::{
     application::result::AppResult,
     domain::profile::ProfileName,
-    infrastructure::runtime::LibraryRuntime,
+    infrastructure::{assets::remove_asset_blob, runtime::LibraryRuntime},
     modules::{
         capture_lan::CaptureLanManager,
         profiles::{
@@ -181,14 +181,11 @@ pub fn profile_delete_for(
             Ok(profiles) => profiles,
             Err(error) => return profile_error(&error),
         };
-        let Some(profile) = profiles
+        if !profiles
             .iter()
-            .find(|profile| profile.id == input.profile_id)
-        else {
+            .any(|profile| profile.id == input.profile_id)
+        {
             return profile_error(&ProfileUseCaseError::NotFound);
-        };
-        if profile.name != input.confirmation_name {
-            return profile_error_code("profile_delete_confirmation_mismatch", None);
         }
         if profiles.len() <= 1 {
             return profile_error(&ProfileUseCaseError::LastProfile);
@@ -207,6 +204,7 @@ pub fn profile_delete_for(
             DeleteProfile {
                 account_id: runtime.account_id().to_owned(),
                 profile_id: input.profile_id,
+                confirmation_name: input.confirmation_name,
                 now_utc_ms,
             },
         ) {
@@ -299,6 +297,7 @@ fn profile_error<T>(error: &ProfileUseCaseError) -> AppResult<T> {
         ProfileUseCaseError::DuplicateName => "profile_name_duplicate",
         ProfileUseCaseError::NotFound => "profile_not_found",
         ProfileUseCaseError::LastProfile => "profile_last_cannot_delete",
+        ProfileUseCaseError::ConfirmationMismatch => "profile_delete_confirmation_mismatch",
         ProfileUseCaseError::Database(_) | ProfileUseCaseError::Serialization(_) => {
             "profile_operation_failed"
         }
@@ -353,22 +352,8 @@ fn current_utc_millis() -> i64 {
 }
 
 fn remove_orphan_blob(blob_root: &Path, encrypted_path: &str) {
-    let relative = Path::new(encrypted_path);
-    if relative.as_os_str().is_empty()
-        || relative
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_)))
-    {
-        eprintln!(
-            "profile orphan cleanup [{}] rejected an unsafe encrypted asset path",
-            Uuid::now_v7()
-        );
-        return;
-    }
-    let path = blob_root.join(relative);
-    match std::fs::remove_file(path) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+    match remove_asset_blob(blob_root, encrypted_path) {
+        Ok(_) => {}
         Err(error) => eprintln!(
             "profile orphan cleanup [{}] could not remove an unreferenced blob: {error}",
             Uuid::now_v7()

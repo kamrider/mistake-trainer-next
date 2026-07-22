@@ -302,10 +302,11 @@ onBeforeUnmount(() => {
               <span><ShieldAlert :size="18" /></span>
               <div>
                 <strong>永久删除“{{ editingProfile?.name }}”？</strong>
-                <small>该档案的错题、采集草稿和训练记录都会从本机删除，无法撤销。</small>
+                <small id="profile-delete-impact">该档案的错题、采集草稿、训练记录和导出快照都会删除，无法撤销。</small>
               </div>
             </div>
-            <label for="profile-delete-confirmation">输入“{{ editingProfile?.name }}”确认删除</label>
+            <label for="profile-delete-confirmation">输入下方档案名确认删除</label>
+            <code class="confirmation-chip">{{ editingProfile?.name }}</code>
             <input
               id="profile-delete-confirmation"
               ref="nameInput"
@@ -313,6 +314,7 @@ onBeforeUnmount(() => {
               autocomplete="off"
               spellcheck="false"
               :aria-label="`输入“${editingProfile?.name ?? ''}”确认删除`"
+              aria-describedby="profile-delete-impact"
               :disabled="busy"
             >
             <p
@@ -407,6 +409,7 @@ onBeforeUnmount(() => {
 .danger-heading strong, .danger-heading small { display: block; }
 .danger-heading strong { font-size: 13px; }
 .danger-heading small { margin-top: 4px; color: var(--ink-muted); font-size: 10px; line-height: 1.55; }
+.confirmation-chip { justify-self: start; max-width: 100%; overflow: hidden; padding: 5px 8px; color: var(--cinnabar); border-radius: 7px; background: rgba(185,88,63,.08); font-family: inherit; font-size: 12px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .profile-error { margin: 0; color: var(--cinnabar); font-size: 11px; line-height: 1.55; }
 .panel-error { padding: 0 16px 14px; }
 .retry-button { min-height: 34px; margin: 0 16px 14px; padding: 0 12px; color: var(--green-deep); border: 1px solid rgba(33,51,45,.24); border-radius: 9px; background: var(--green-soft); cursor: pointer; font-weight: 700; }
