@@ -88,7 +88,7 @@ const filters: Array<{ value: ProblemStatusFilter; label: string }> = [
         <input
           type="search"
           :value="search"
-          placeholder="搜索科目或复盘笔记"
+          placeholder="搜索科目、标签或复盘笔记"
           @input="$emit('searchChange', ($event.target as HTMLInputElement).value)"
         >
       </label>
@@ -268,6 +268,17 @@ const filters: Array<{ value: ProblemStatusFilter; label: string }> = [
           </span>
           <small>点击题图进入题卡</small>
         </button>
+        <div
+          v-if="problem.tags?.length"
+          class="problem-tags"
+          :aria-label="`${problem.subject || '未分类'} 标签`"
+        >
+          <span
+            v-for="tag in (problem.tags ?? []).slice(0, 3)"
+            :key="tag"
+          >{{ tag }}</span>
+          <span v-if="(problem.tags?.length ?? 0) > 3">+{{ (problem.tags?.length ?? 0) - 3 }}</span>
+        </div>
         <p class="problem-note">
           {{ problem.note || '这道题还没有补充笔记。' }}
         </p>
@@ -380,6 +391,8 @@ h1 { margin: 0; font-size: clamp(42px,5vw,64px); letter-spacing: -.055em; line-h
 .problem-preview img { width: 100%; height: 100%; min-height: 190px; object-fit: contain; background: #fff; }
 .problem-preview > span { display: grid; gap: 8px; place-items: center; padding: 24px; font-size: 12px; }
 .problem-preview small { position: absolute; right: 9px; bottom: 8px; padding: 5px 8px; color: var(--paper); border-radius: 999px; background: rgba(33,51,45,.76); font-size: 10px; font-weight: 720; }
+.problem-tags { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 14px; }
+.problem-tags span { max-width: 150px; padding: 5px 9px; overflow: hidden; color: var(--green-deep); border: 1px solid rgba(33,51,45,.12); border-radius: 999px; background: var(--green-soft); font-size: 11px; font-weight: 720; text-overflow: ellipsis; white-space: nowrap; animation: tag-rise var(--motion-standard) var(--ease-standard); }
 .problem-note { min-height: 48px; margin: 20px 0; font-size: 16px; line-height: 1.55; }
 .asset-counts { color: var(--ink-muted); font-size: 12px; }
 .asset-counts span { display: inline-flex; gap: 5px; align-items: center; }
@@ -393,7 +406,8 @@ h1 { margin: 0; font-size: clamp(42px,5vw,64px); letter-spacing: -.055em; line-h
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
 @keyframes pulse { from { opacity: .45; } to { opacity: .8; } }
 @keyframes spin { to { transform: rotate(360deg); } }
+@keyframes tag-rise { from { opacity: 0; transform: translateY(3px); } }
 @media (max-width: 980px) { .batch-bar { align-items: flex-start; flex-direction: column; } .batch-actions { width: 100%; flex-wrap: wrap; } }
 @media (max-width: 820px) { .library-workspace { padding: 34px 22px 110px; } .library-header { align-items: flex-start; flex-direction: column; } .library-toolbar { align-items: stretch; flex-direction: column; } .search-field { min-width: 0; } .select-all-action { justify-content: center; } .problem-grid { grid-template-columns: 1fr; } .problem-preview, .problem-preview img { min-height: 220px; } .batch-actions .start-review-action, .batch-actions .start-exam-action { flex: 1 0 calc(50% - 4px); justify-content: center; } }
-@media (prefers-reduced-motion: reduce) { .loading-state span, .spin { animation: none; } .primary-action, .batch-bar button, .deck-dock-enter-active, .deck-dock-leave-active, .problem-card, .problem-preview { transition: none; } .deck-dock-enter-from, .deck-dock-leave-to { transform: none; } .problem-preview:hover { transform: none; } }
+@media (prefers-reduced-motion: reduce) { .loading-state span, .spin, .problem-tags span { animation: none; } .primary-action, .batch-bar button, .deck-dock-enter-active, .deck-dock-leave-active, .problem-card, .problem-preview { transition: none; } .deck-dock-enter-from, .deck-dock-leave-to { transform: none; } .problem-preview:hover { transform: none; } }
 </style>

@@ -102,6 +102,7 @@ pub struct ProblemSummary {
     pub id: String,
     pub subject: String,
     pub note: String,
+    pub tags: Vec<String>,
     pub status: String,
     pub question_asset_count: i32,
     pub answer_asset_count: i32,
@@ -132,6 +133,7 @@ pub struct ProblemDetail {
     pub id: String,
     pub subject: String,
     pub note: String,
+    pub tags: Vec<String>,
     pub status: String,
     pub time_limit_seconds: Option<i32>,
     pub updated_at_utc_ms: f64,
@@ -145,6 +147,7 @@ pub struct UpdateProblem {
     pub problem_id: String,
     pub subject: String,
     pub note: String,
+    pub tags: Vec<String>,
     pub time_limit_seconds: Option<i32>,
     pub now_utc_ms: i64,
 }
@@ -176,6 +179,8 @@ pub enum ProblemUseCaseError {
     InvalidAssetImage,
     #[error("problem text is too long")]
     InvalidText,
+    #[error("problem tags exceed the allowed count or length")]
+    InvalidTags,
     #[error("problem time limit must be between 1 and 86400 seconds")]
     InvalidTimeLimit,
     #[error("at least one problem must be selected")]
@@ -213,6 +218,7 @@ fn list_problem_summaries_internal(
         id: String,
         subject: String,
         note: String,
+        tags_json: String,
         status: String,
         question_asset_count: i32,
         answer_asset_count: i32,
@@ -231,7 +237,7 @@ fn list_problem_summaries_internal(
         .replace('%', "\\%")
         .replace('_', "\\_");
     let mut statement = connection.prepare(
-        "SELECT p.id, p.subject, p.note, p.status,
+        "SELECT p.id, p.subject, p.note, p.tags_json, p.status,
                 SUM(CASE WHEN pa.role = 'question' THEN 1 ELSE 0 END),
                 SUM(CASE WHEN pa.role = 'answer' THEN 1 ELSE 0 END),
                 p.updated_at_utc_ms,
@@ -255,7 +261,11 @@ fn list_problem_summaries_internal(
          LEFT JOIN problem_assets pa ON pa.problem_id = p.id
          WHERE p.account_id = ?1 AND p.profile_id = ?2 AND p.status = ?3
            AND (?4 = '' OR p.subject LIKE '%' || ?4 || '%' ESCAPE '\\'
-                        OR p.note LIKE '%' || ?4 || '%' ESCAPE '\\')
+                        OR p.note LIKE '%' || ?4 || '%' ESCAPE '\\'
+                        OR EXISTS (
+                            SELECT 1 FROM json_each(p.tags_json) tag
+                            WHERE CAST(tag.value AS TEXT) LIKE '%' || ?4 || '%' ESCAPE '\\'
+                        ))
          GROUP BY p.id
          ORDER BY p.updated_at_utc_ms DESC, p.id DESC",
     )?;
@@ -271,12 +281,13 @@ fn list_problem_summaries_internal(
                 id: row.get(0)?,
                 subject: row.get(1)?,
                 note: row.get(2)?,
-                status: row.get(3)?,
-                question_asset_count: row.get(4)?,
-                answer_asset_count: row.get(5)?,
-                updated_at_utc_ms: row.get(6)?,
-                question_asset_path: row.get(7)?,
-                question_asset_media_type: row.get(8)?,
+                tags_json: row.get(3)?,
+                status: row.get(4)?,
+                question_asset_count: row.get(5)?,
+                answer_asset_count: row.get(6)?,
+                updated_at_utc_ms: row.get(7)?,
+                question_asset_path: row.get(8)?,
+                question_asset_media_type: row.get(9)?,
             })
         },
     )?;
@@ -284,6 +295,7 @@ fn list_problem_summaries_internal(
     rows.collect::<Result<Vec<_>, _>>()?
         .into_iter()
         .map(|row| {
+            let tags = serde_json::from_str::<Vec<String>>(&row.tags_json)?;
             let question_preview_data_url = preview_store.and_then(|(blob_root, key)| {
                 let encrypted_path = row.question_asset_path.as_deref()?;
                 let media_type = row.question_asset_media_type.as_deref()?;
@@ -300,6 +312,7 @@ fn list_problem_summaries_internal(
                 id: row.id,
                 subject: row.subject,
                 note: row.note,
+                tags,
                 status: row.status,
                 question_asset_count: row.question_asset_count,
                 answer_asset_count: row.answer_asset_count,
@@ -316,26 +329,36 @@ pub fn get_problem_detail(
     key: &[u8; 32],
     query: ProblemDetailQuery,
 ) -> Result<ProblemDetail, ProblemUseCaseError> {
-    let mut detail = connection
+    let detail_row = connection
         .query_row(
-            "SELECT id, subject, note, status, time_limit_seconds, updated_at_utc_ms
+            "SELECT id, subject, note, tags_json, status, time_limit_seconds, updated_at_utc_ms
              FROM problems
              WHERE id = ?1 AND account_id = ?2 AND profile_id = ?3",
             params![query.problem_id, query.account_id, query.profile_id],
             |row| {
-                Ok(ProblemDetail {
-                    id: row.get(0)?,
-                    subject: row.get(1)?,
-                    note: row.get(2)?,
-                    status: row.get(3)?,
-                    time_limit_seconds: row.get(4)?,
-                    updated_at_utc_ms: row.get(5)?,
-                    assets: Vec::new(),
-                })
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<i32>>(5)?,
+                    row.get::<_, f64>(6)?,
+                ))
             },
         )
         .optional()?
         .ok_or(ProblemUseCaseError::ProblemNotFound)?;
+    let mut detail = ProblemDetail {
+        id: detail_row.0,
+        subject: detail_row.1,
+        note: detail_row.2,
+        tags: serde_json::from_str(&detail_row.3)?,
+        status: detail_row.4,
+        time_limit_seconds: detail_row.5,
+        updated_at_utc_ms: detail_row.6,
+        assets: Vec::new(),
+    };
 
     let mut statement = connection.prepare(
         "SELECT a.id, pa.role, pa.position, a.media_type, a.encrypted_path
@@ -459,6 +482,27 @@ pub fn update_problem(
     if subject.chars().count() > 40 || note.chars().count() > 2_000 {
         return Err(ProblemUseCaseError::InvalidText);
     }
+    if input.tags.len() > 20 {
+        return Err(ProblemUseCaseError::InvalidTags);
+    }
+    let mut seen = BTreeSet::new();
+    let tags = input
+        .tags
+        .into_iter()
+        .map(|tag| tag.trim().to_owned())
+        .filter(|tag| !tag.is_empty())
+        .map(|tag| {
+            if tag.chars().count() > 30 {
+                Err(ProblemUseCaseError::InvalidTags)
+            } else {
+                Ok(tag)
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|tag| seen.insert(tag.clone()))
+        .collect::<Vec<_>>();
+    let tags_json = serde_json::to_string(&tags)?;
     if input
         .time_limit_seconds
         .is_some_and(|seconds| !(1..=86_400).contains(&seconds))
@@ -477,11 +521,12 @@ pub fn update_problem(
     let new_revision = base_revision + 1;
     let changed = transaction.execute(
         "UPDATE problems
-         SET subject = ?1, note = ?2, time_limit_seconds = ?3, updated_at_utc_ms = ?4, revision = ?5
-         WHERE id = ?6 AND account_id = ?7 AND profile_id = ?8 AND revision = ?9",
+         SET subject = ?1, note = ?2, tags_json = ?3, time_limit_seconds = ?4, updated_at_utc_ms = ?5, revision = ?6
+         WHERE id = ?7 AND account_id = ?8 AND profile_id = ?9 AND revision = ?10",
         params![
             subject,
             note,
+            tags_json,
             input.time_limit_seconds,
             input.now_utc_ms,
             new_revision,
@@ -498,6 +543,7 @@ pub fn update_problem(
         "id": input.problem_id,
         "subject": subject,
         "note": note,
+        "tags": tags,
         "timeLimitSeconds": input.time_limit_seconds,
         "baseRevision": base_revision,
         "revision": new_revision,

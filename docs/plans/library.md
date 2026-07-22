@@ -13,6 +13,9 @@
 5. Guided legacy migration with bounded read-only preflight, 30-minute opaque candidates,
    pair-aware parsing, atomic encrypted import, progress events, import history, and
    ownership-safe rollback with sync deletion compensation.
+6. End-to-end mistake tags: normalized 20-tag/30-character validation, subject/note/tag
+   search, compact card chips, accessible keyboard editing, detail display, and atomic
+   revision/outbox persistence.
 
 ## Remaining release acceptance
 

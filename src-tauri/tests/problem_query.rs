@@ -127,7 +127,7 @@ fn list_status_filter_separates_active_and_archived_problems() {
         &connection,
         ProblemListQuery {
             account_id: "account-1".to_owned(),
-            profile_id: profile.id,
+            profile_id: profile.id.clone(),
             status: ProblemStatusFilter::Archived,
             search: None,
         },
@@ -176,7 +176,7 @@ fn list_search_matches_subject_or_note_without_treating_wildcards_as_patterns() 
     );
     connection
         .execute(
-            "UPDATE problems SET note = '奇函数定义域' WHERE id = ?1",
+            "UPDATE problems SET note = '奇函数定义域', tags_json = '[\"函数\",\"粗心\"]' WHERE id = ?1",
             [&math],
         )
         .expect("note fixture");
@@ -203,22 +203,35 @@ fn list_search_matches_subject_or_note_without_treating_wildcards_as_patterns() 
         &connection,
         ProblemListQuery {
             account_id: "account-1".to_owned(),
-            profile_id: profile.id,
+            profile_id: profile.id.clone(),
             status: ProblemStatusFilter::Active,
             search: Some("_".to_owned()),
         },
     )
     .expect("literal wildcard search");
+    let by_tag = list_problem_summaries(
+        &connection,
+        ProblemListQuery {
+            account_id: "account-1".to_owned(),
+            profile_id: profile.id,
+            status: ProblemStatusFilter::Active,
+            search: Some("粗心".to_owned()),
+        },
+    )
+    .expect("search by tag");
 
     assert_eq!(
         by_note
             .iter()
             .map(|row| row.id.as_str())
             .collect::<Vec<_>>(),
-        vec![math]
+        vec![math.clone()]
     );
     assert_eq!(literal_wildcard.len(), 1);
     assert_eq!(literal_wildcard[0].subject, "物理_实验");
+    assert_eq!(by_tag.len(), 1);
+    assert_eq!(by_tag[0].id, math);
+    assert_eq!(by_tag[0].tags, vec!["函数", "粗心"]);
 }
 
 #[test]

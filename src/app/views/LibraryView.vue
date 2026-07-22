@@ -29,10 +29,10 @@ const detailSaving = ref(false)
 function loadDevelopmentPreview() {
   profileName.value = '本机学习档案'
   problems.value = [
-    { id: 'preview-math', subject: '数学', note: '圆锥曲线：先确认长轴方向，再写焦点关系。', status: 'active', questionAssetCount: 2, answerAssetCount: 1, questionPreviewDataUrl: null, updatedAtUtcMs: Date.now() },
-    { id: 'preview-physics', subject: '物理', note: '受力分析遗漏了接触面的支持力。', status: 'active', questionAssetCount: 1, answerAssetCount: 2, questionPreviewDataUrl: null, updatedAtUtcMs: Date.now() - 1 },
-    { id: 'preview-chemistry', subject: '化学', note: '平衡移动方向与转化率变化需要分开判断。', status: 'active', questionAssetCount: 1, answerAssetCount: 1, questionPreviewDataUrl: null, updatedAtUtcMs: Date.now() - 2 },
-    { id: 'preview-english', subject: '英语', note: '长难句先切分从句，再确认非谓语逻辑主语。', status: 'active', questionAssetCount: 2, answerAssetCount: 2, questionPreviewDataUrl: null, updatedAtUtcMs: Date.now() - 3 },
+    { id: 'preview-math', subject: '数学', note: '圆锥曲线：先确认长轴方向，再写焦点关系。', tags: ['圆锥曲线', '粗心'], status: 'active', questionAssetCount: 2, answerAssetCount: 1, questionPreviewDataUrl: null, updatedAtUtcMs: Date.now() },
+    { id: 'preview-physics', subject: '物理', note: '受力分析遗漏了接触面的支持力。', tags: ['力学'], status: 'active', questionAssetCount: 1, answerAssetCount: 2, questionPreviewDataUrl: null, updatedAtUtcMs: Date.now() - 1 },
+    { id: 'preview-chemistry', subject: '化学', note: '平衡移动方向与转化率变化需要分开判断。', tags: ['化学平衡'], status: 'active', questionAssetCount: 1, answerAssetCount: 1, questionPreviewDataUrl: null, updatedAtUtcMs: Date.now() - 2 },
+    { id: 'preview-english', subject: '英语', note: '长难句先切分从句，再确认非谓语逻辑主语。', tags: ['长难句'], status: 'active', questionAssetCount: 2, answerAssetCount: 2, questionPreviewDataUrl: null, updatedAtUtcMs: Date.now() - 3 },
   ]
 }
 
@@ -113,7 +113,7 @@ async function trainProblem(problemId: string) {
   await startReview([problemId], true, 'review')
 }
 
-async function updateProblem(input: { problemId: string; subject: string; note: string; timeLimitSeconds: number | null }) {
+async function updateProblem(input: { problemId: string; subject: string; note: string; tags: string[]; timeLimitSeconds: number | null }) {
   detailSaving.value = true
   detailError.value = ''
   try {

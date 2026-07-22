@@ -2,6 +2,7 @@
 import { Archive, BookOpenCheck, Image, LoaderCircle, Pencil, Play, RotateCcw, Save, Trash2, X } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ProblemDetail } from '../../../shared/api/bindings'
+import ProblemTagEditor from './ProblemTagEditor.vue'
 
 const props = defineProps<{
   detail: ProblemDetail | undefined
@@ -13,7 +14,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: []
   train: [problemId: string]
-  update: [input: { problemId: string; subject: string; note: string; timeLimitSeconds: number | null }]
+  update: [input: { problemId: string; subject: string; note: string; tags: string[]; timeLimitSeconds: number | null }]
   status: [problemId: string, status: 'active' | 'archived' | 'trashed']
 }>()
 
@@ -22,12 +23,14 @@ const answerAssets = computed(() => props.detail?.assets.filter(asset => asset.r
 const editing = ref(false)
 const editSubject = ref('')
 const editNote = ref('')
+const editTags = ref<string[]>([])
 const editTimeLimit = ref('')
 const drawer = ref<HTMLElement>()
 let previouslyFocused: HTMLElement | null = null
 const dirty = computed(() => Boolean(props.detail && editing.value
   && (editSubject.value !== props.detail.subject
     || editNote.value !== props.detail.note
+    || JSON.stringify(editTags.value) !== JSON.stringify(props.detail.tags)
     || editTimeLimit.value !== String(props.detail.timeLimitSeconds ?? ''))))
 const timeLimitError = computed(() => {
   if (editTimeLimit.value === '') return ''
@@ -40,6 +43,7 @@ const timeLimitError = computed(() => {
 watch(() => props.detail, (detail) => {
   editSubject.value = detail?.subject ?? ''
   editNote.value = detail?.note ?? ''
+  editTags.value = [...(detail?.tags ?? [])]
   editTimeLimit.value = String(detail?.timeLimitSeconds ?? '')
   editing.value = false
 }, { immediate: true })
@@ -62,6 +66,7 @@ function saveChanges() {
     problemId: props.detail.id,
     subject: editSubject.value,
     note: editNote.value,
+    tags: editTags.value,
     timeLimitSeconds: editTimeLimit.value === '' ? null : Number(editTimeLimit.value),
   })
 }
@@ -168,6 +173,10 @@ onBeforeUnmount(() => previouslyFocused?.focus())
             maxlength="2000"
             rows="5"
           /></label>
+          <div class="edit-tags-field">
+            <span>标签</span>
+            <ProblemTagEditor v-model="editTags" />
+          </div>
           <label>答题时限（秒）<input
             v-model="editTimeLimit"
             type="number"
@@ -192,6 +201,16 @@ onBeforeUnmount(() => previouslyFocused?.focus())
         >
           <span>复盘笔记</span>
           <p>{{ detail.note || '这道题还没有补充笔记。' }}</p>
+          <div
+            v-if="detail.tags.length"
+            class="detail-tags"
+            aria-label="题目标签"
+          >
+            <span
+              v-for="tag in detail.tags"
+              :key="tag"
+            >{{ tag }}</span>
+          </div>
           <small class="time-limit-copy">
             {{ detail.timeLimitSeconds ? `建议 ${detail.timeLimitSeconds} 秒内完成` : '不限制答题时间' }}
           </small>
@@ -323,6 +342,9 @@ onBeforeUnmount(() => previouslyFocused?.focus())
 .text-button { display: inline-flex; gap: 6px; align-items: center; margin-top: 14px; padding: 0; color: var(--green-deep); border: 0; background: transparent; cursor: pointer; font-weight: 700; }
 .edit-paper { display: grid; gap: 14px; margin: 24px 0 30px; padding: 18px 20px; border-radius: 3px 14px 14px 14px; background: var(--green-soft); }
 .edit-paper label { display: grid; gap: 7px; color: #567064; font-size: 11px; font-weight: 760; letter-spacing: .08em; }
+.edit-tags-field { display: grid; gap: 7px; color: #567064; font-size: 11px; font-weight: 760; letter-spacing: .08em; }
+.detail-tags { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 13px; }
+.detail-tags span { padding: 5px 9px; color: var(--green-deep); border: 1px solid rgba(33,51,45,.12); border-radius: 999px; background: rgba(255,253,247,.62); font-size: 11px; font-weight: 720; letter-spacing: 0; }
 .field-error { color: #8d3f2f; font-size: 12px; letter-spacing: 0; }
 .edit-paper input, .edit-paper textarea { width: 100%; padding: 10px 12px; color: var(--ink); border: 1px solid rgba(33,51,45,.18); border-radius: 9px; outline: none; background: rgba(255,253,247,.8); font: inherit; font-size: 14px; font-weight: 500; letter-spacing: 0; resize: vertical; }
 .asset-section { margin-top: 28px; }

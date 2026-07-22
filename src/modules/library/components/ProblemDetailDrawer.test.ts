@@ -13,6 +13,7 @@ describe('ProblemDetailDrawer', () => {
           id: 'problem-1',
           subject: '数学',
           note: '先看定义域',
+          tags: ['函数', '粗心'],
           status: 'active',
           timeLimitSeconds: null,
           updatedAtUtcMs: 1_700_000_000_000,
@@ -43,7 +44,7 @@ describe('ProblemDetailDrawer', () => {
       props: {
         loading: false,
         detail: {
-          id: 'problem-1', subject: '数学', note: '', status: 'active', timeLimitSeconds: null, updatedAtUtcMs: null, assets: [],
+          id: 'problem-1', subject: '数学', note: '', tags: [], status: 'active', timeLimitSeconds: null, updatedAtUtcMs: null, assets: [],
         },
       },
     })
@@ -70,7 +71,7 @@ describe('ProblemDetailDrawer', () => {
       props: {
         loading: false,
         detail: {
-          id: 'problem-1', subject: '数学', note: '', status: 'active', timeLimitSeconds: null, updatedAtUtcMs: null, assets: [],
+          id: 'problem-1', subject: '数学', note: '', tags: [], status: 'active', timeLimitSeconds: null, updatedAtUtcMs: null, assets: [],
         },
       },
     })
@@ -93,7 +94,7 @@ describe('ProblemDetailDrawer', () => {
       props: {
         loading: false,
         detail: {
-          id: 'problem-1', subject: '物理', note: '', status: 'active', timeLimitSeconds: 60, updatedAtUtcMs: null, assets: [],
+          id: 'problem-1', subject: '物理', note: '', tags: ['力学'], status: 'active', timeLimitSeconds: 60, updatedAtUtcMs: null, assets: [],
         },
       },
     })
@@ -102,10 +103,11 @@ describe('ProblemDetailDrawer', () => {
     const input = screen.getByRole('spinbutton', { name: '答题时限（秒）' })
     await user.clear(input)
     await user.type(input, '180')
+    await user.type(screen.getByRole('textbox', { name: '标签' }), '受力{Enter}')
     await user.click(screen.getByRole('button', { name: '保存修改' }))
 
     expect(view.emitted('update')).toEqual([[
-      { problemId: 'problem-1', subject: '物理', note: '', timeLimitSeconds: 180 },
+      { problemId: 'problem-1', subject: '物理', note: '', tags: ['力学', '受力'], timeLimitSeconds: 180 },
     ]])
   })
 
@@ -115,7 +117,7 @@ describe('ProblemDetailDrawer', () => {
       props: {
         loading: false,
         detail: {
-          id: 'problem-1', subject: '物理', note: '', status: 'active', timeLimitSeconds: null, updatedAtUtcMs: null, assets: [],
+          id: 'problem-1', subject: '物理', note: '', tags: [], status: 'active', timeLimitSeconds: null, updatedAtUtcMs: null, assets: [],
         },
       },
     })

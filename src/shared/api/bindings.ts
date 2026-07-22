@@ -457,6 +457,7 @@ export type ProblemDetail = {
 	id: string,
 	subject: string,
 	note: string,
+	tags: string[],
 	status: string,
 	timeLimitSeconds: number | null,
 	updatedAtUtcMs: number | null,
@@ -474,6 +475,7 @@ export type ProblemSummary = {
 	id: string,
 	subject: string,
 	note: string,
+	tags: string[],
 	status: string,
 	questionAssetCount: number,
 	answerAssetCount: number,
@@ -485,6 +487,7 @@ export type ProblemUpdateInput = {
 	problemId: string,
 	subject: string,
 	note: string,
+	tags: string[],
 	timeLimitSeconds: number | null,
 };
 

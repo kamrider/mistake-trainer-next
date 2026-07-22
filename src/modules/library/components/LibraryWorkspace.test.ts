@@ -17,6 +17,7 @@ describe('LibraryWorkspace', () => {
             id: 'problem-1',
             subject: '数学',
             note: '奇函数定义域容易漏掉零点。',
+            tags: ['函数', '粗心', '定义域', '基础'],
             status: 'active',
             questionAssetCount: 2,
             answerAssetCount: 1,
@@ -31,6 +32,9 @@ describe('LibraryWorkspace', () => {
     expect(screen.getByText('数学')).toBeVisible()
     expect(screen.getByText('2 张题图')).toBeVisible()
     expect(screen.getByText('1 张答案')).toBeVisible()
+    expect(screen.getByText('函数')).toBeVisible()
+    expect(screen.getByText('粗心')).toBeVisible()
+    expect(screen.getByText('+1')).toBeVisible()
     expect(screen.getByRole('img', { name: '数学 题图预览' })).toHaveAttribute('src', 'data:image/png;base64,preview')
     expect(screen.queryByText('查看详情')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '打开 数学 错题详情' }))
@@ -78,11 +82,11 @@ describe('LibraryWorkspace', () => {
     const user = userEvent.setup()
     const problems = [
       {
-        id: 'problem-1', subject: '数学', note: '', status: 'active' as const,
+        id: 'problem-1', subject: '数学', note: '', tags: [], status: 'active' as const,
         questionAssetCount: 1, answerAssetCount: 1, questionPreviewDataUrl: null, updatedAtUtcMs: 1,
       },
       {
-        id: 'problem-2', subject: '物理', note: '', status: 'active' as const,
+        id: 'problem-2', subject: '物理', note: '', tags: [], status: 'active' as const,
         questionAssetCount: 1, answerAssetCount: 1, questionPreviewDataUrl: null, updatedAtUtcMs: 2,
       },
     ]

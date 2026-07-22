@@ -102,6 +102,7 @@ function loadDevelopmentPreview() {
     id: 'development-preview-problem',
     subject: '数学 · 圆锥曲线',
     note: '先独立写出焦点关系，再检查长短轴是否混淆。',
+    tags: ['圆锥曲线', '解析几何'],
     status: 'active',
     timeLimitSeconds: 75,
     updatedAtUtcMs: Date.now(),
@@ -111,7 +112,7 @@ function loadDevelopmentPreview() {
       { id: 'preview-a1', role: 'answer', position: 0, mediaType: 'image/svg+xml', dataUrl: previewImage('答案 · 焦点 (±√3, 0)，e = √3 / 2', '#21332d') },
     ],
   }
-  clock.reset(currentProblem.value.timeLimitSeconds)
+  clock.reset(currentProblem.value?.timeLimitSeconds ?? null)
   clock.start()
   if (previewMode === 'exam-complete') {
     examCorrectCount.value = 4

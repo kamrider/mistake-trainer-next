@@ -27,6 +27,7 @@ pub struct ProblemUpdateInput {
     problem_id: String,
     subject: String,
     note: String,
+    tags: Vec<String>,
     time_limit_seconds: Option<i32>,
 }
 
@@ -114,6 +115,7 @@ pub fn problem_update_for(
             problem_id: input.problem_id,
             subject: input.subject,
             note: input.note,
+            tags: input.tags,
             time_limit_seconds: input.time_limit_seconds,
             now_utc_ms,
         },
@@ -122,6 +124,12 @@ pub fn problem_update_for(
         Err(crate::modules::problems::ProblemUseCaseError::InvalidTimeLimit) => AppResult::failure(
             "problem_time_limit_invalid",
             "答题时限需要填写 1 到 86400 秒，留空表示不限时。",
+            false,
+            Uuid::now_v7().to_string(),
+        ),
+        Err(crate::modules::problems::ProblemUseCaseError::InvalidTags) => AppResult::failure(
+            "problem_tags_invalid",
+            "标签最多 20 个，每个标签最多 30 个字。",
             false,
             Uuid::now_v7().to_string(),
         ),
