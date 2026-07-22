@@ -13,6 +13,7 @@ export const commands = {
 	profileCreate: (input: ProfileNameInput) => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_create", { input }),
 	profileRename: (input: ProfileRenameInput) => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_rename", { input }),
 	profileSelect: (profileId: string) => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_select", { profileId }),
+	profileDelete: (input: ProfileDeleteInput) => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_delete", { input }),
 	libraryContext: () => __TAURI_INVOKE<AppResult<LibraryContext>>("library_context"),
 	problemDetail: (problemId: string) => __TAURI_INVOKE<AppResult<ProblemDetail>>("problem_detail", { problemId }),
 	problemChangeStatus: (input: ProblemStatusInput) => __TAURI_INVOKE<AppResult<number>>("problem_change_status", { input }),
@@ -485,6 +486,11 @@ export type ProblemUpdateInput = {
 	subject: string,
 	note: string,
 	timeLimitSeconds: number | null,
+};
+
+export type ProfileDeleteInput = {
+	profileId: string,
+	confirmationName: string,
 };
 
 export type ProfileNameInput = {

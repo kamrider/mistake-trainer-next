@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use specta::Type;
+use std::path::{Component, Path};
 use tauri::State;
 use uuid::Uuid;
 
@@ -10,8 +11,8 @@ use crate::{
     modules::{
         capture_lan::CaptureLanManager,
         profiles::{
-            CreateProfile, LearnerProfile, ProfileUseCaseError, RenameProfile, create_profile,
-            list_profiles, rename_profile,
+            CreateProfile, DeleteProfile, LearnerProfile, ProfileUseCaseError, RenameProfile,
+            create_profile, delete_profile, list_profiles, rename_profile,
         },
     },
 };
@@ -44,6 +45,13 @@ pub struct ProfileNameInput {
 pub struct ProfileRenameInput {
     pub profile_id: String,
     pub name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileDeleteInput {
+    pub profile_id: String,
+    pub confirmation_name: String,
 }
 
 pub fn profile_list_for(runtime: &LibraryRuntime) -> AppResult<ProfileOverview> {
@@ -157,6 +165,62 @@ pub fn profile_select_for(
     overview_for(runtime)
 }
 
+pub fn profile_delete_for(
+    runtime: &LibraryRuntime,
+    manager: &CaptureLanManager,
+    input: ProfileDeleteInput,
+    now_utc_ms: i64,
+) -> AppResult<ProfileOverview> {
+    let _transition = runtime.lock_profile_transition();
+    {
+        let connection = match runtime.connection.lock() {
+            Ok(connection) => connection,
+            Err(_) => return profile_error_code("library_lock_poisoned", None),
+        };
+        let profiles = match list_profiles(&connection, runtime.account_id()) {
+            Ok(profiles) => profiles,
+            Err(error) => return profile_error(&error),
+        };
+        let Some(profile) = profiles
+            .iter()
+            .find(|profile| profile.id == input.profile_id)
+        else {
+            return profile_error(&ProfileUseCaseError::NotFound);
+        };
+        if profile.name != input.confirmation_name {
+            return profile_error_code("profile_delete_confirmation_mismatch", None);
+        }
+        if profiles.len() <= 1 {
+            return profile_error(&ProfileUseCaseError::LastProfile);
+        }
+    }
+    if let Err(error) = manager.stop() {
+        return profile_lan_error(&error);
+    }
+    let receipt = {
+        let mut connection = match runtime.connection.lock() {
+            Ok(connection) => connection,
+            Err(_) => return profile_error_code("library_lock_poisoned", None),
+        };
+        match delete_profile(
+            &mut connection,
+            DeleteProfile {
+                account_id: runtime.account_id().to_owned(),
+                profile_id: input.profile_id,
+                now_utc_ms,
+            },
+        ) {
+            Ok(receipt) => receipt,
+            Err(error) => return profile_error(&error),
+        }
+    };
+    runtime.replace_active_profile(&receipt.active_profile);
+    for orphan in &receipt.orphan_assets {
+        remove_orphan_blob(&runtime.blob_root, &orphan.encrypted_path);
+    }
+    overview_for(runtime)
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn profile_list(state: State<'_, LibraryRuntime>) -> AppResult<ProfileOverview> {
@@ -190,6 +254,16 @@ pub fn profile_select(
     profile_id: String,
 ) -> AppResult<ProfileOverview> {
     profile_select_for(&state, &manager, profile_id, current_utc_millis())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn profile_delete(
+    state: State<'_, LibraryRuntime>,
+    manager: State<'_, CaptureLanManager>,
+    input: ProfileDeleteInput,
+) -> AppResult<ProfileOverview> {
+    profile_delete_for(&state, &manager, input, current_utc_millis())
 }
 
 fn overview_for(runtime: &LibraryRuntime) -> AppResult<ProfileOverview> {
@@ -244,6 +318,9 @@ fn profile_error_code<T>(code: &str, error: Option<&ProfileUseCaseError>) -> App
             "至少需要保留一个学习档案；请先新建另一个档案再删除。",
             false,
         ),
+        "profile_delete_confirmation_mismatch" => {
+            ("输入的档案名称不一致；没有删除任何资料。", false)
+        }
         "library_lock_poisoned" => ("本地题库暂时不可用，请重新打开应用后重试。", true),
         _ => (
             "学习档案没有完成这次操作，原有数据保持不变，请稍后重试。",
@@ -273,4 +350,28 @@ fn current_utc_millis() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
         .unwrap_or_default()
+}
+
+fn remove_orphan_blob(blob_root: &Path, encrypted_path: &str) {
+    let relative = Path::new(encrypted_path);
+    if relative.as_os_str().is_empty()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        eprintln!(
+            "profile orphan cleanup [{}] rejected an unsafe encrypted asset path",
+            Uuid::now_v7()
+        );
+        return;
+    }
+    let path = blob_root.join(relative);
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => eprintln!(
+            "profile orphan cleanup [{}] could not remove an unreferenced blob: {error}",
+            Uuid::now_v7()
+        ),
+    }
 }

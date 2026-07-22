@@ -16,6 +16,7 @@ pub fn builder() -> Builder<tauri::Wry> {
         commands::profiles::profile_create,
         commands::profiles::profile_rename,
         commands::profiles::profile_select,
+        commands::profiles::profile_delete,
         commands::library::library_context,
         commands::library::problem_detail,
         commands::library::problem_change_status,

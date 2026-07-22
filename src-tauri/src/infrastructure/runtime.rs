@@ -150,6 +150,13 @@ impl LibraryRuntime {
         }
     }
 
+    pub fn replace_active_profile(&self, profile: &LearnerProfile) {
+        *self
+            .active_profile
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = ActiveProfile::from(profile);
+    }
+
     pub fn database_key(&self) -> &str {
         &self.database_key
     }
