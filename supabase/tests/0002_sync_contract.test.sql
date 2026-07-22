@@ -1,9 +1,12 @@
 begin;
 
-select plan(8);
+select plan(9);
 
 insert into auth.users (id, email, aud, role)
 values ('33333333-3333-4333-8333-333333333333', 'contract@example.test', 'authenticated', 'authenticated');
+
+insert into auth.users (id, email, aud, role)
+values ('11111111-1111-4111-8111-111111111111', 'foreign@example.test', 'authenticated', 'authenticated');
 
 set local role authenticated;
 set local "request.jwt.claim.sub" = '33333333-3333-4333-8333-333333333333';
@@ -49,6 +52,11 @@ select results_eq(
   'the account feed never exposes another account'
 );
 
+insert into public.learner_profiles (id, account_id, name)
+values ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '11111111-1111-4111-8111-111111111111', 'foreign profile');
+
+set local "request.jwt.claim.sub" = '33333333-3333-4333-8333-333333333333';
+
 select is(
   (select count(*)::bigint from public.push_sync_batch(jsonb_build_array(
     jsonb_build_object(
@@ -87,6 +95,27 @@ select is(
   (select name from public.learner_profiles where id = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'),
   '契约档案更新',
   'replaying an operation does not rewrite the canonical row'
+);
+
+select is(
+  (select count(*)::bigint from public.push_sync_batch(jsonb_build_array(
+    jsonb_build_object(
+      'operationId', 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      'entityType', 'problem',
+      'entityId', 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      'operation', 'delete',
+      'payload', jsonb_build_object(
+        'tombstoneId', 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        'profileId', 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        'entityType', 'problem',
+        'entityId', 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        'deletedRevision', 1,
+        'purgeAfterUtcMs', 31536000000
+      )
+    )
+  ))),
+  1::bigint,
+  'problem tombstones use the account/profile composite conflict key'
 );
 
 select throws_ok(
