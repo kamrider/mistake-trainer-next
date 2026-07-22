@@ -127,6 +127,20 @@ describe('CaptureWorkspace Next', () => {
     expect(screen.queryByText(/双击/)).not.toBeInTheDocument()
   })
 
+  it('plays a settled role-change cue after the role save succeeds', async () => {
+    const user = userEvent.setup()
+    const detail = organizingDetail()
+    const view = renderWorkspace(detail)
+    const loose = screen.getByLabelText('待配对图片：待配对超长文件名图片.png')
+
+    await user.click(within(loose).getByLabelText('待配对超长文件名图片.png'))
+    await view.rerender({ saveState: 'saving' })
+    detail.items[4] = { ...detail.items[4]!, stagedRole: 'answer' }
+    await view.rerender({ detail, saveState: 'saved' })
+
+    await waitFor(() => expect(screen.getByLabelText('待配对图片：待配对超长文件名图片.png')).toHaveClass('is-role-changed'))
+  })
+
   it('applies a configured subject to the whole organizing batch from the top', async () => {
     const user = userEvent.setup()
     const view = renderWorkspace(organizingDetail())

@@ -80,8 +80,11 @@ const draftSubject = ref('')
 const draftTags = ref('')
 const draftNote = ref('')
 const settledDraftId = ref('')
+const roleChangedItemId = ref('')
 let settleTimer: ReturnType<typeof setTimeout> | undefined
+let roleChangeTimer: ReturnType<typeof setTimeout> | undefined
 let pendingCardDrop: { itemId: string, role: CaptureFeedbackRole, targetDraftId: string | null } | undefined
+let pendingRoleChange: { itemId: string, role: CaptureFeedbackRole } | undefined
 
 const itemById = computed(() => new Map(props.detail?.items.map(item => [item.id, item]) ?? []))
 const activeBatches = computed(() => props.batches.filter(batch => batch.state !== 'completed'))
@@ -247,9 +250,23 @@ const feedback = useCaptureFeedback(() => props.captureSoundEnabled)
 watch(() => props.saveState, (state) => {
   if (state === 'error') {
     pendingCardDrop = undefined
+    pendingRoleChange = undefined
     return
   }
-  if (state !== 'saved' || !pendingCardDrop) return
+  if (state !== 'saved') return
+
+  if (pendingRoleChange) {
+    const pending = pendingRoleChange
+    pendingRoleChange = undefined
+    roleChangedItemId.value = pending.itemId
+    if (roleChangeTimer) clearTimeout(roleChangeTimer)
+    roleChangeTimer = setTimeout(() => {
+      if (roleChangedItemId.value === pending.itemId) roleChangedItemId.value = ''
+    }, 280)
+    feedback.playDrop(pending.role)
+  }
+
+  if (!pendingCardDrop) return
   const pending = pendingCardDrop
   pendingCardDrop = undefined
   const targetDraftId = pending.targetDraftId
@@ -267,11 +284,14 @@ watch(() => props.saveState, (state) => {
 
 onBeforeUnmount(() => {
   if (settleTimer) clearTimeout(settleTimer)
+  if (roleChangeTimer) clearTimeout(roleChangeTimer)
 })
 
 function toggleItemRole(item: CaptureItemSummary) {
   if (pointerDrag.consumeSuppressedClick() || props.busy) return
-  emit('stageItemRole', item.id, item.stagedRole === 'question' ? 'answer' : 'question')
+  const role = item.stagedRole === 'question' ? 'answer' : 'question'
+  pendingRoleChange = { itemId: item.id, role }
+  emit('stageItemRole', item.id, role)
 }
 
 function saveSelectedDraft() {
@@ -816,7 +836,7 @@ function statusLabel(batch: CaptureBatchSummary) {
                 v-for="item in unassignedItems"
                 :key="item.id"
                 class="unassigned-item"
-                :class="`is-${item.stagedRole}`"
+                :class="[`is-${item.stagedRole}`, { 'is-role-changed': roleChangedItemId === item.id }]"
                 :aria-label="`待配对图片：${item.sourceName}`"
               >
                 <CaptureThumbnail
@@ -990,11 +1010,13 @@ input, textarea, select { box-sizing: border-box; padding: 10px 12px; color: var
 .organizer-grid { display:grid; grid-template-columns:minmax(290px,340px) minmax(0,1fr); gap:20px; align-items:start; margin-top:18px; }
 .unassigned-strip { position:sticky; top:18px; max-height:calc(100vh - 120px); padding:17px; overflow:auto; border:1px dashed rgba(33,51,45,.22); border-radius:16px; background:rgba(232,221,199,.24); box-shadow:0 12px 32px rgba(34,48,43,.06); }
 .strip-heading { display:flex; justify-content:space-between; align-items:center; }.strip-heading div { display:grid; gap:2px; }.strip-heading p { margin:0; font-weight:780; }.strip-heading span { color:var(--ink-muted); font-size:10px; }.strip-heading strong { color:var(--cinnabar); font-family:serif; font-size:20px; }
-.unassigned-gallery { display:grid; gap:12px; margin-top:13px; }.unassigned-item { min-width:0; padding:8px; border:2px solid rgba(33,51,45,.22); border-radius:14px; background:rgba(255,253,247,.72); transition:transform var(--motion-feedback) var(--ease-standard),border-color var(--motion-feedback),background var(--motion-feedback); }.unassigned-item:hover { transform:translateY(-2px); }.unassigned-item.is-question { border-color:rgba(33,51,45,.52); background:rgba(225,235,229,.7); }.unassigned-item.is-answer { border-color:rgba(185,88,63,.58); background:rgba(247,225,216,.68); }.role-chip { display:flex; justify-content:space-between; gap:8px; align-items:center; margin-top:7px; }.role-chip span { padding:5px 8px; color:var(--paper); border-radius:999px; background:var(--green-deep); font-size:9px; font-weight:850; }.is-answer .role-chip span { background:var(--cinnabar); }.role-chip small { color:var(--ink-muted); font-size:9px; }.strip-empty { display:flex; gap:7px; align-items:center; margin:15px 0 2px; color:#537064; font-size:11px; }
+.unassigned-gallery { display:grid; gap:12px; margin-top:13px; }.unassigned-item { min-width:0; padding:8px; border:2px solid rgba(33,51,45,.22); border-radius:14px; background:rgba(255,253,247,.72); transition:transform var(--motion-feedback) var(--ease-standard),border-color var(--motion-feedback),background var(--motion-feedback),box-shadow var(--motion-feedback); }.unassigned-item:hover { transform:translateY(-2px); }.unassigned-item.is-question { border-color:rgba(33,51,45,.52); background:rgba(225,235,229,.7); }.unassigned-item.is-answer { border-color:rgba(185,88,63,.58); background:rgba(247,225,216,.68); }.unassigned-item.is-role-changed { animation: capture-role-toggle 280ms var(--ease-standard); }.role-chip { display:flex; justify-content:space-between; gap:8px; align-items:center; margin-top:7px; }.role-chip span { padding:5px 8px; color:var(--paper); border-radius:999px; background:var(--green-deep); font-size:9px; font-weight:850; }.is-answer .role-chip span { background:var(--cinnabar); }.role-chip small { color:var(--ink-muted); font-size:9px; }.strip-empty { display:flex; gap:7px; align-items:center; margin:15px 0 2px; color:#537064; font-size:11px; }
 .draft-stack { min-width:0; }.card-stack-heading { display:flex; justify-content:space-between; gap:18px; align-items:end; margin:0 2px 12px; }.card-stack-heading p,.card-stack-heading h2 { margin:0; }.card-stack-heading p { color:var(--cinnabar); font-size:10px; font-weight:800; letter-spacing:.12em; }.card-stack-heading h2 { margin-top:3px; font-size:20px; }.card-stack-heading>span { max-width:240px; color:var(--ink-muted); font-size:10px; text-align:right; }.draft-cards { display:grid; gap:18px; }
 .new-card-drop { display:grid; min-height:110px; margin-top:14px; padding:18px; place-content:center; justify-items:center; gap:5px; color:var(--green-deep); border:2px dashed rgba(33,51,45,.3); border-radius:16px; background:rgba(232,221,199,.17); text-align:center; transition:transform var(--motion-feedback),border-color var(--motion-feedback),background var(--motion-feedback); }.new-card-drop strong { font-size:13px; }.new-card-drop span { color:var(--ink-muted); font-size:10px; }.capture-pointer-dragging .new-card-drop { border-color:var(--cinnabar); background:rgba(185,88,63,.08); transform:scale(1.01); }.card-inspector { margin-top:16px; padding:17px; border:1px solid var(--line); border-radius:16px; background:rgba(255,253,247,.72); }.card-inspector header { display:flex; justify-content:space-between; gap:18px; align-items:end; }.card-inspector header p,.card-inspector header h3 { margin:0; }.card-inspector header p { color:var(--cinnabar); font-size:9px; font-weight:850; letter-spacing:.12em; }.card-inspector header h3 { margin-top:3px; font-size:16px; }.card-inspector header>span { color:var(--ink-muted); font-size:9px; }.inspector-fields { display:grid; grid-template-columns:.8fr 1.6fr; gap:9px; margin-top:12px; }.inspector-fields label { display:grid; gap:5px; color:var(--ink-muted); font-size:9px; font-weight:760; }.inspector-fields input,.inspector-fields textarea { width:100%; }.inspector-fields textarea { resize:vertical; }.capture-drag-ghost { position:fixed; z-index:200; top:0; left:0; display:grid; width:112px; height:88px; overflow:hidden; pointer-events:none; place-items:center; border:2px solid var(--cinnabar); border-radius:13px; color:var(--paper); background:var(--green-deep); box-shadow:0 18px 45px rgba(20,28,25,.3); will-change:transform; }.capture-drag-ghost img { width:100%; height:100%; object-fit:cover; opacity:.86; }.capture-drag-ghost span { position:absolute; right:6px; bottom:6px; padding:4px 7px; border-radius:999px; background:rgba(33,51,45,.86); font-size:9px; font-weight:800; }
 .capture-pointer-dragging .new-card-drop:not(.is-drop-question):not(.is-drop-answer){border-color:rgba(33,51,45,.36);background:rgba(232,221,199,.22);transform:none}.new-card-drop.is-drop-question{color:var(--green-deep);border-color:rgba(33,51,45,.72);background:rgba(225,235,229,.82);transform:scale(1.012)}.new-card-drop.is-drop-answer{color:var(--cinnabar);border-color:rgba(185,88,63,.72);background:rgba(247,225,216,.82);transform:scale(1.012)}.capture-drag-ghost{transition:opacity var(--motion-feedback) var(--ease-standard);animation:capture-card-lift var(--motion-feedback) var(--ease-standard)}.capture-drag-ghost.is-question{border-color:rgba(33,51,45,.78);background:var(--green-deep)}.capture-drag-ghost.is-answer{border-color:rgba(185,88,63,.9);background:var(--cinnabar)}.capture-drag-ghost.is-answer span{background:rgba(125,55,39,.9)}
 @keyframes capture-card-lift{from{opacity:0}}
+@keyframes capture-role-toggle{0%{transform:scale(.98);box-shadow:0 0 0 0 var(--role-ring)}45%{transform:scale(1.018);box-shadow:0 0 0 5px var(--role-ring)}100%{transform:scale(1);box-shadow:0 0 0 0 var(--role-ring)}}
+.unassigned-item.is-question.is-role-changed{--role-ring:rgba(33,51,45,.18)}.unassigned-item.is-answer.is-role-changed{--role-ring:rgba(185,88,63,.18)}
 .organizer-move-move,.organizer-move-enter-active,.organizer-move-leave-active { transition:transform var(--motion-page) var(--ease-standard),opacity var(--motion-standard) var(--ease-standard); }.organizer-move-enter-from,.organizer-move-leave-to { opacity:0; transform:translateY(10px) scale(.985); }.organizer-move-leave-active { position:absolute; }
 .commit-dock { position: sticky; z-index: 12; bottom: 14px; display: flex; justify-content: space-between; gap: 20px; align-items: center; margin-top: 22px; padding: 15px 17px; border: 1px solid rgba(33,51,45,.15); border-radius: 15px; background: rgba(246,241,231,.94); box-shadow: 0 16px 45px rgba(34,48,43,.18); backdrop-filter: blur(16px); }.commit-dock div { display: grid; grid-template-columns: auto auto; gap: 2px 9px; }.commit-dock p,.commit-dock strong,.commit-dock span { margin: 0; }.commit-dock p { color: var(--cinnabar); font-size: 9px; font-weight: 800; letter-spacing: .1em; }.commit-dock strong { font-size: 16px; }.commit-dock span { grid-column: 1/-1; color: var(--ink-muted); font-size: 10px; }
 .completed-panel { display: grid; min-height: 420px; place-content: center; justify-items: center; text-align: center; }.completed-panel h2 { margin: 14px 0 5px; }.completed-panel p { margin: 0; color: var(--ink-muted); }.completed-panel button { margin-top: 18px; padding: 10px 16px; color: var(--paper); border: 0; border-radius: 999px; background: var(--green-deep); }
@@ -1002,5 +1024,5 @@ input, textarea, select { box-sizing: border-box; padding: 10px 12px; color: var
 @media (max-width: 900px) { .organizer-grid { grid-template-columns:1fr; }.unassigned-strip { position:static; max-height:none; }.unassigned-gallery { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media (max-width: 720px) { .capture-next { padding: 30px 20px 110px; }.inbox-hero,.workbench-header,.new-batch-card { align-items: stretch; flex-direction: column; }.new-batch-card form,.capture-toolbar { grid-template-columns: 1fr; flex-direction: column; }.new-batch-card select { width: 100%; }.batch-grid { grid-template-columns: 1fr; }.capture-toolbar { display: grid; }.workbench-stats { align-self: stretch; }.workbench-stats span { flex: 1; }.layout-bar select { min-width: 100%; }.commit-dock { align-items: stretch; flex-direction: column; }.commit-dock button { width: 100%; }.lan-dialog { padding: 28px 20px; }.lan-dialog h2 { font-size: 28px; }.lan-actions>* { width: 100%; } }
 @media (max-width: 560px) { .unassigned-gallery { grid-template-columns:1fr; }.card-stack-heading { align-items:start; flex-direction:column; }.card-stack-heading>span { text-align:left; } }
-@media (prefers-reduced-motion: reduce) { .batch-card,.external-drop,.batch-subject-options button,.capture-drag-ghost,.new-card-drop,.organizer-move-move,.organizer-move-enter-active,.organizer-move-leave-active { transition: none; animation:none; }.lan-progress span { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .batch-card,.external-drop,.batch-subject-options button,.capture-drag-ghost,.new-card-drop,.organizer-move-move,.organizer-move-enter-active,.organizer-move-leave-active,.unassigned-item.is-role-changed { transition: none; animation:none; }.lan-progress span { animation: none; } }
 </style>
