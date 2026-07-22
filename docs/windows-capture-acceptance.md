@@ -67,7 +67,9 @@ on an untrusted shared network.
 ## Phone session
 
 1. On iPhone Safari and Android Chrome, test **连续拍照** and **相册多选**. Every selected
-   image must appear in the queue immediately with a local preview and status.
+   image must appear in the queue immediately with a local preview and status. During
+   normalization or upload the summary must say **处理中**, the finish button must remain
+   disabled, and no item may be marked complete before its own upload succeeds.
 2. Upload an image whose Unicode filename is at least 200 characters. Confirm the filename
    is ellipsized, the item remains inside the viewport, and the page never gains horizontal
    scrolling. Force a long failure message and confirm it wraps inside the same row.
