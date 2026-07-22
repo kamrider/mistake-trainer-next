@@ -7,6 +7,7 @@ import DashboardView from './views/DashboardView.vue'
 import CaptureView from './views/CaptureView.vue'
 import LibraryView from './views/LibraryView.vue'
 import ReviewView from './views/ReviewView.vue'
+import NotFoundView from './views/NotFoundView.vue'
 
 export function createAppRouter(history: RouterHistory = createWebHashHistory()) {
   return createRouter({
@@ -39,6 +40,12 @@ export function createAppRouter(history: RouterHistory = createWebHashHistory())
         path: '/settings',
         name: 'settings',
         component: () => import('./views/SettingsView.vue'),
+      },
+      {
+        path: '/:pathMatch(.*)*',
+        name: 'not-found',
+        component: NotFoundView,
+        meta: { shellPage: 'dashboard' },
       },
     ],
   })

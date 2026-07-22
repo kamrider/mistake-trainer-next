@@ -74,4 +74,18 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: '回到训练台' })).toBeVisible()
     error.mockRestore()
   })
+
+  it('renders a recovery page for an unknown route', async () => {
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/old-page-that-no-longer-exists')
+    await router.isReady()
+
+    const view = render(App, { global: { plugins: [router] } })
+
+    expect(await screen.findByRole('heading', { name: '这条路径已经失效' })).toBeVisible()
+    expect(view.container.querySelector('.route-page')?.childElementCount).toBeGreaterThan(0)
+
+    await userEvent.setup().click(screen.getByRole('button', { name: '回到训练台' }))
+    await waitFor(() => expect(router.currentRoute.value.name).toBe('dashboard'))
+  })
 })
