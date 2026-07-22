@@ -153,6 +153,7 @@ async function importFiles(files: File[]) {
     const skippedCount = Math.max(0, files.length - maxBatchItems)
     const filesToImport = files.slice(0, maxBatchItems)
     const failedNames: string[] = []
+    const sequenceOffset = detail.value?.items.length ?? 0
     let nextFileIndex = 0
     const importOne = async (file: File, sourceSequence: number) => {
       const sourceName = file.name || 'clipboard-image'
@@ -176,7 +177,7 @@ async function importFiles(files: File[]) {
       while (nextFileIndex < filesToImport.length) {
         const index = nextFileIndex
         nextFileIndex += 1
-        await importOne(filesToImport[index]!, index)
+        await importOne(filesToImport[index]!, sequenceOffset + index)
       }
     }))
     const notices: string[] = []
