@@ -26,3 +26,5 @@ environment automatically; no global Perl installation is required.
 See [docs/architecture.md](docs/architecture.md) for boundaries and invariants.
 See [docs/windows-capture-acceptance.md](docs/windows-capture-acceptance.md) for the
 phone and desktop acceptance walkthrough.
+See [docs/cloud-regional-deployment.md](docs/cloud-regional-deployment.md) for the
+mainland network and cloud-provider boundary.

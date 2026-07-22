@@ -7,6 +7,7 @@ const api = vi.hoisted(() => ({
   settingsOverview: vi.fn(),
   syncBackendStatus: vi.fn(),
   syncBackendSet: vi.fn(),
+  authStatusCommand: vi.fn(),
   legacyScan: vi.fn(),
   legacyImport: vi.fn(),
   legacyImportList: vi.fn(),
@@ -31,6 +32,9 @@ describe('SettingsView', () => {
     } })
     api.syncBackendSet.mockResolvedValue({ ok: true, data: {
       kind: 'local-only', configured: true, ready: true, syncEnabled: false,
+    } })
+    api.authStatusCommand.mockResolvedValue({ ok: true, data: {
+      configured: false, status: { kind: 'unconfigured', emailHint: null },
     } })
     api.subjectPreferencesGet.mockResolvedValue({ ok: true, data: {
       enabledSubjects: ['语文', '数学', '英语'],
@@ -119,6 +123,25 @@ describe('SettingsView', () => {
     expect(screen.getByText('8 道活动题')).toBeVisible()
     expect(screen.getByText('尚未配置')).toBeVisible()
     expect(screen.getByText(/本地 outbox 已记录 11 项变更/)).toBeVisible()
+  })
+
+  it('explains regional cloud limits while keeping local-first recovery visible', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 2, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 3, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: true,
+    } })
+    api.syncBackendStatus.mockResolvedValue({ ok: true, data: {
+      kind: 'supabase', configured: true, ready: true, syncEnabled: true,
+    } })
+    api.authStatusCommand.mockResolvedValue({ ok: true, data: {
+      configured: true, status: { kind: 'offline', emailHint: 'u***@example.com' },
+    } })
+    render(SettingsView)
+
+    expect(await screen.findByText('国内网络提示')).toBeVisible()
+    expect(screen.getByText(/Supabase 在中国大陆可能出现连接超时/)).toBeVisible()
+    expect(screen.getByText('离线模式')).toBeVisible()
   })
 
   it('keeps local mode selected when a remote backend is not configured', async () => {
