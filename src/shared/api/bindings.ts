@@ -303,11 +303,9 @@ export type CloudBackendKind = "local-only" | "supabase" | "tencent";
 /**
  *  The configuration/status exposed to the desktop settings UI.
  * 
- *  `configured` only means that the provider has the minimum endpoint and
- *  credential environment variables. It does not imply that a provider
- *  implementation is shipped in this build. `ready` is therefore false for
- *  the currently reserved remote providers, which makes an accidental sync
- *  attempt fail closed.
+ *  `configured` means that the provider has the minimum build-time endpoint
+ *  and public credential. Supabase is backed by the authenticated Tauri sync
+ *  commands; Tencent remains a reserved provider in v1.
  */
 export type CloudBackendStatus = {
 	kind: CloudBackendKind,

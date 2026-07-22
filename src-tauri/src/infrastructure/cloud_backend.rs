@@ -44,6 +44,17 @@ impl fmt::Display for CloudBackendKind {
     }
 }
 
+impl CloudBackendKind {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "local-only" => Some(Self::LocalOnly),
+            "supabase" => Some(Self::Supabase),
+            "tencent" => Some(Self::Tencent),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum CloudBackendError {
     #[error("remote synchronization is disabled in local-only mode")]
@@ -165,9 +176,9 @@ pub fn selected_status() -> CloudBackendStatus {
 ///
 /// Selection is deliberately rejected when a remote provider is not fully
 /// configured. This prevents a half-filled settings form from changing the
-/// sync mode or causing network requests. The config is process-local until
-/// the settings persistence layer is introduced; local-only remains the safe
-/// default after restart.
+/// sync mode or causing network requests. The caller persists the selected
+/// value in the Windows credential store so a restart does not silently switch
+/// back to local-only mode.
 pub fn select(kind: CloudBackendKind) -> Result<CloudBackendStatus, CloudBackendError> {
     let status = status_for(kind);
     if kind != CloudBackendKind::LocalOnly && !status.configured {
@@ -191,6 +202,23 @@ mod tests {
     fn defaults_to_local_only() {
         assert_eq!(CloudBackendKind::default(), CloudBackendKind::LocalOnly);
         assert_eq!(CloudBackendKind::LocalOnly.to_string(), "local-only");
+    }
+
+    #[test]
+    fn parses_only_the_persisted_backend_values() {
+        assert_eq!(
+            CloudBackendKind::parse("local-only"),
+            Some(CloudBackendKind::LocalOnly)
+        );
+        assert_eq!(
+            CloudBackendKind::parse(" supabase "),
+            Some(CloudBackendKind::Supabase)
+        );
+        assert_eq!(
+            CloudBackendKind::parse("tencent"),
+            Some(CloudBackendKind::Tencent)
+        );
+        assert_eq!(CloudBackendKind::parse("https://example.invalid"), None);
     }
 
     #[test]

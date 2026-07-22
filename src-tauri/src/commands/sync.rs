@@ -62,6 +62,27 @@ pub fn set_backend(request: SetBackendRequest) -> AppResult<CloudBackendStatus> 
     }
 }
 
+pub fn set_backend_persisted(
+    runtime: &CloudAuthRuntime,
+    request: SetBackendRequest,
+) -> AppResult<CloudBackendStatus> {
+    let previous = cloud_backend::selected_kind();
+    let result = set_backend(request.clone());
+    if matches!(result, AppResult::Failure { .. }) {
+        return result;
+    }
+    if runtime.persist_backend_selection(request.kind).is_err() {
+        let _ = cloud_backend::select(previous);
+        return AppResult::failure(
+            "SYNC_BACKEND_PERSIST_FAILED",
+            "同步设置没有保存成功，已恢复到之前的模式；本地数据不受影响",
+            true,
+            "sync-backend-persist",
+        );
+    }
+    result
+}
+
 pub fn auth_status(
     manager: &AuthSyncManager,
     runtime: &CloudAuthRuntime,
@@ -142,8 +163,11 @@ pub fn sync_backend_status() -> AppResult<CloudBackendStatus> {
 
 #[tauri::command]
 #[specta::specta]
-pub fn sync_backend_set(request: SetBackendRequest) -> AppResult<CloudBackendStatus> {
-    set_backend(request)
+pub fn sync_backend_set(
+    runtime: State<'_, CloudAuthRuntime>,
+    request: SetBackendRequest,
+) -> AppResult<CloudBackendStatus> {
+    set_backend_persisted(&runtime, request)
 }
 
 #[tauri::command]

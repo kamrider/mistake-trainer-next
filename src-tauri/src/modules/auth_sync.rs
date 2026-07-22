@@ -7,6 +7,7 @@ use serde::Serialize;
 use specta::Type;
 
 use crate::infrastructure::{
+    cloud_backend::{self, CloudBackendKind},
     runtime::{KeyringSecretStore, SecretStore},
     supabase::{
         AuthReply, AuthTransport, CloudError, SupabaseClient, SupabaseConfig, redact_email,
@@ -15,6 +16,7 @@ use crate::infrastructure::{
 
 const CLOUD_REFRESH_TOKEN: &str = "cloud-refresh-token";
 const CLOUD_USER_ID: &str = "cloud-user-id";
+pub(crate) const CLOUD_BACKEND_KIND: &str = "cloud-backend-kind";
 
 struct ActiveCloudSession {
     remote_user_id: String,
@@ -74,11 +76,31 @@ impl CloudAuthRuntime {
             Ok(Some(config)) => (SupabaseClient::new(config).ok().map(Arc::new), true),
             Ok(None) | Err(_) => (None, false),
         };
-        Self {
+        let runtime = Self {
             client,
             secrets: KeyringSecretStore::new("com.mistaketrainer.next.local-library"),
             configured,
+        };
+        runtime.restore_backend_selection();
+        runtime
+    }
+
+    fn restore_backend_selection(&self) {
+        let Ok(Some(raw_kind)) = self.secrets.get(CLOUD_BACKEND_KIND) else {
+            return;
+        };
+        let Some(kind) = CloudBackendKind::parse(&raw_kind) else {
+            return;
+        };
+        // A provider can be remembered before its build-time credentials are
+        // present. Fail closed to local-only until the provider is configured.
+        if kind == CloudBackendKind::LocalOnly || cloud_backend::status_for(kind).configured {
+            let _ = cloud_backend::select(kind);
         }
+    }
+
+    pub(crate) fn persist_backend_selection(&self, kind: CloudBackendKind) -> Result<(), String> {
+        self.secrets.set(CLOUD_BACKEND_KIND, &kind.to_string())
     }
 }
 
