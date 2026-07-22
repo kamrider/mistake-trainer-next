@@ -1,6 +1,6 @@
 begin;
 
-select plan(9);
+select plan(10);
 
 insert into auth.users (id, email, aud, role)
 values ('33333333-3333-4333-8333-333333333333', 'contract@example.test', 'authenticated', 'authenticated');
@@ -116,6 +116,13 @@ select is(
   ))),
   1::bigint,
   'problem tombstones use the account/profile composite conflict key'
+);
+
+select throws_ok(
+  $$select * from public.push_sync_batch(null::jsonb)$$,
+  '22023',
+  'operation batch must contain between 1 and 100 items',
+  'null batches are rejected instead of being treated as empty'
 );
 
 select throws_ok(

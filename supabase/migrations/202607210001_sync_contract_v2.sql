@@ -191,7 +191,8 @@ begin
   if v_account is null then
     raise exception 'authentication required' using errcode = '42501';
   end if;
-  if jsonb_typeof(p_operations) <> 'array'
+  if p_operations is null
+     or jsonb_typeof(p_operations) <> 'array'
      or jsonb_array_length(p_operations) < 1
      or jsonb_array_length(p_operations) > 100 then
     raise exception 'operation batch must contain between 1 and 100 items' using errcode = '22023';
