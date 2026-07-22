@@ -98,6 +98,13 @@ function handleCardKeydown(event: KeyboardEvent) {
 function handleThumbnailKeydown(role: CardRole, index: number, item: CaptureItemSummary, event: KeyboardEvent) {
   if (event.currentTarget !== event.target) return
   const items = role === 'question' ? questionItems.value : answerItems.value
+  if (event.shiftKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+    event.preventDefault()
+    const delta = event.key === 'ArrowLeft' ? -1 : 1
+    const targetPosition = Math.min(items.length - 1, Math.max(0, index + delta))
+    if (targetPosition !== index) emit('changeItemRole', item.id, role, targetPosition)
+    return
+  }
   if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
     event.preventDefault()
     selectImage(role, Math.max(0, index - 1))

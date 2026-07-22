@@ -78,6 +78,17 @@ describe('CaptureDraftCard', () => {
     expect(view.emitted('changeItemRole')).toContainEqual(['q-2', 'answer', 1])
   })
 
+  it('reorders multiple images with shift plus the arrow keys', async () => {
+    const user = userEvent.setup()
+    const view = renderCard()
+    const secondQuestion = screen.getByLabelText('题目下半部分.png')
+
+    secondQuestion.focus()
+    await user.keyboard('{Shift>}{ArrowLeft}{/Shift}')
+
+    expect(view.emitted('changeItemRole')).toContainEqual(['q-2', 'question', 0])
+  })
+
   it('moves between adjacent cards with ctrl or command arrows', async () => {
     const user = userEvent.setup()
     const view = renderCard()

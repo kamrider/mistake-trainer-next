@@ -867,7 +867,7 @@ function statusLabel(batch: CaptureBatchSummary) {
           <section class="draft-stack">
             <header class="card-stack-heading">
               <div><p>问答卡</p><h2>一题一张卡，翻面核对答案</h2></div>
-              <span>拖到已有卡上会融合；拖到下方空白区会直接创建新题。聚焦缩略图后可用 ←/→ 切换，A/Q 改答案或题面</span>
+              <span>拖到已有卡上会融合；拖到下方空白区会直接创建新题。聚焦缩略图后 ←/→ 切换，Shift+←/→ 调整顺序，A/Q 改答案或题面</span>
             </header>
             <TransitionGroup
               name="organizer-move"
