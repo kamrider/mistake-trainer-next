@@ -1387,8 +1387,14 @@ mod tests {
         assert!(MOBILE_PAGE.contains("item.status==='preparing'||item.status==='pending'"));
         assert!(MOBILE_PAGE.contains("const workerCount=Math.min(2,pendingFiles.length)"));
         assert!(MOBILE_PAGE.contains("state.cameraLoop"));
-        assert!(MOBILE_PAGE.contains("拍完一张后会自动打开下一张"));
+        assert!(MOBILE_PAGE.contains("const canCapture="));
+        assert!(MOBILE_PAGE.contains("state.session.state==='collecting'"));
+        assert!(!MOBILE_PAGE.contains("if(finish.disabled)return"));
+        assert!(!MOBILE_PAGE.contains("state.cameraLoop&&!finish.disabled"));
+        assert!(MOBILE_PAGE.contains("正在打开下一张；压缩和上传会在后台继续"));
         assert!(MOBILE_PAGE.contains("cameraInput.click()"));
+        assert!(MOBILE_PAGE.contains("id=\"nextCamera\""));
+        assert!(MOBILE_PAGE.contains("手机没有自动打开相机"));
         assert!(MOBILE_PAGE.contains("结束连拍"));
         assert!(MOBILE_PAGE.contains("animation:item-enter"));
         assert!(MOBILE_PAGE.contains("prefers-reduced-motion:reduce"));
