@@ -12,7 +12,6 @@ import numpy as np
 from question_bakeoff.cli import main
 from question_bakeoff.engine import resolve_engine
 from question_bakeoff.opencv_baseline import analyze_image
-from question_bakeoff.rapidocr_engine import analyze_image as analyze_with_rapidocr
 from question_bakeoff.report import OUTPUT_MARKER_VALUE
 
 
@@ -66,12 +65,24 @@ class CliReportTests(unittest.TestCase):
         self.assertEqual(report["onnxruntime"], "1.27.0")
         self.assertEqual(
             report["availableEngines"],
-            ["opencv-whitespace", "rapidocr-anchor"],
+            [
+                "opencv-whitespace",
+                "ppocrv6-small-anchor",
+                "ppocrv6-medium-anchor",
+            ],
         )
 
     def test_resolve_engine_rejects_unknown_name(self) -> None:
         self.assertIs(resolve_engine("opencv-whitespace"), analyze_image)
-        self.assertIs(resolve_engine("rapidocr-anchor"), analyze_with_rapidocr)
+        self.assertEqual(
+            resolve_engine("ppocrv6-small-anchor").model_type,
+            "small",
+        )
+        self.assertEqual(
+            resolve_engine("ppocrv6-medium-anchor").model_type,
+            "medium",
+        )
+        self.assertEqual(resolve_engine("rapidocr-anchor").model_type, "small")
         with self.assertRaisesRegex(ValueError, "unsupported question-region engine"):
             resolve_engine("chat-model")
 

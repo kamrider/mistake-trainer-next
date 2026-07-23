@@ -12,8 +12,12 @@ Analyzer = Callable[[Path], Analysis]
 def resolve_engine(name: str) -> Analyzer:
     if name == "opencv-whitespace":
         return analyze_image
-    if name == "rapidocr-anchor":
-        from .rapidocr_engine import analyze_image as analyze_with_rapidocr
+    if name in {"rapidocr-anchor", "ppocrv6-small-anchor"}:
+        from .rapidocr_engine import make_analyzer
 
-        return analyze_with_rapidocr
+        return make_analyzer("small")
+    if name == "ppocrv6-medium-anchor":
+        from .rapidocr_engine import make_analyzer
+
+        return make_analyzer("medium")
     raise ValueError(f"unsupported question-region engine: {name}")

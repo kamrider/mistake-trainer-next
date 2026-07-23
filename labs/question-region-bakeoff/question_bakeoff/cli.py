@@ -51,7 +51,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "engineVersion": ENGINE_VERSION,
                         "availableEngines": [
                             "opencv-whitespace",
-                            "rapidocr-anchor",
+                            "ppocrv6-small-anchor",
+                            "ppocrv6-medium-anchor",
                         ],
                     },
                     ensure_ascii=False,
