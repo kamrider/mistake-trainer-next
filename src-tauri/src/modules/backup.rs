@@ -20,7 +20,7 @@ use crate::infrastructure::{
 };
 
 const FORMAT_VERSION: i32 = 1;
-const CURRENT_SCHEMA_VERSION: i64 = 11;
+const CURRENT_SCHEMA_VERSION: i64 = 12;
 const DATABASE_FILE: &str = "library.db";
 const MANIFEST_FILE: &str = "manifest.json";
 const ASSETS_DIRECTORY: &str = "assets";
@@ -1074,6 +1074,78 @@ fn ensure_single_account(
     account_id: &str,
     schema_version: i64,
 ) -> Result<(), BackupError> {
+    let derivation_tables = ["asset_derivations", "capture_source_retention"];
+    let derivation_table_count = derivation_tables
+        .iter()
+        .map(|table| table_exists(connection, table))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|exists| *exists)
+        .count();
+    let has_superseded_column =
+        column_exists(connection, "capture_items", "superseded_by_derivation_id")?;
+    if (schema_version < 12 && (derivation_table_count != 0 || has_superseded_column))
+        || (schema_version >= 12
+            && (derivation_table_count != derivation_tables.len() || !has_superseded_column))
+    {
+        return Err(BackupError::Integrity);
+    }
+    if schema_version >= 12
+        && (!table_columns_match(
+            connection,
+            "asset_derivations",
+            &[
+                "id",
+                "operation_id",
+                "account_id",
+                "batch_id",
+                "source_asset_id",
+                "derived_asset_id",
+                "source_capture_item_id",
+                "derived_capture_item_id",
+                "position",
+                "kind",
+                "recipe_json",
+                "engine",
+                "engine_version",
+                "confidence",
+                "created_at_utc_ms",
+            ],
+        )? || !table_columns_match(
+            connection,
+            "capture_source_retention",
+            &[
+                "batch_id",
+                "source_asset_id",
+                "retain_until_utc_ms",
+                "reason",
+                "created_at_utc_ms",
+            ],
+        )? || !index_columns_match(
+            connection,
+            "capture_items_active_sequence_idx",
+            &[
+                "batch_id",
+                "superseded_by_derivation_id",
+                "source_sequence",
+                "id",
+            ],
+        )?)
+    {
+        return Err(BackupError::Integrity);
+    }
+    if schema_version >= 12 {
+        let has_foreign_derivation: i64 = connection.query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM asset_derivations WHERE account_id <> ?1 LIMIT 1
+             )",
+            [account_id],
+            |row| row.get(0),
+        )?;
+        if has_foreign_derivation != 0 {
+            return Err(BackupError::ForeignAccountData);
+        }
+    }
     let cloud_tables = ["cloud_sync_state", "cloud_asset_transfers"];
     let cloud_table_count = cloud_tables
         .iter()

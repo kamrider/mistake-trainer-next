@@ -49,7 +49,7 @@ pub fn open_encrypted_database_read_only(
     Ok(connection)
 }
 
-pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> {
+fn run_migrations_to_v11(connection: &mut Connection) -> Result<(), DatabaseError> {
     let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
     match version {
         0 => {
@@ -266,4 +266,22 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
         11 => Ok(()),
         newer => Err(DatabaseError::UnsupportedSchema(newer)),
     }
+}
+
+pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> {
+    let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version > 12 {
+        return Err(DatabaseError::UnsupportedSchema(version));
+    }
+    if version < 11 {
+        run_migrations_to_v11(connection)?;
+    }
+    let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version == 11 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(include_str!("../../migrations/0012_asset_derivations.sql"))?;
+        transaction.pragma_update(None, "user_version", 12)?;
+        transaction.commit()?;
+    }
+    Ok(())
 }

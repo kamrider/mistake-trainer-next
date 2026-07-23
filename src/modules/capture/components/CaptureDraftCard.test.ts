@@ -16,9 +16,9 @@ const draft: CaptureDraftSummary = {
 }
 
 const items: CaptureItemSummary[] = [
-  { id: 'q-1', sourceName: '题目上半部分.png', sourceSequence: 0, mediaType: 'image/png', byteLength: 1, width: 1200, height: 900, stagedRole: 'question', draftId: draft.id, role: 'question', position: 0 },
-  { id: 'q-2', sourceName: '题目下半部分.png', sourceSequence: 1, mediaType: 'image/png', byteLength: 1, width: 1200, height: 900, stagedRole: 'question', draftId: draft.id, role: 'question', position: 1 },
-  { id: 'a-1', sourceName: '完整答案.png', sourceSequence: 2, mediaType: 'image/png', byteLength: 1, width: 1200, height: 900, stagedRole: 'answer', draftId: draft.id, role: 'answer', position: 0 },
+  { id: 'q-1', sourceName: '题目上半部分.png', sourceSequence: 0, mediaType: 'image/png', byteLength: 1, width: 1200, height: 900, stagedRole: 'question', draftId: draft.id, role: 'question', position: 0, cropDerivationId: null, cropSourceItemId: null },
+  { id: 'q-2', sourceName: '题目下半部分.png', sourceSequence: 1, mediaType: 'image/png', byteLength: 1, width: 1200, height: 900, stagedRole: 'question', draftId: draft.id, role: 'question', position: 1, cropDerivationId: null, cropSourceItemId: null },
+  { id: 'a-1', sourceName: '完整答案.png', sourceSequence: 2, mediaType: 'image/png', byteLength: 1, width: 1200, height: 900, stagedRole: 'answer', draftId: draft.id, role: 'answer', position: 0, cropDerivationId: null, cropSourceItemId: null },
 ]
 
 function renderCard(card = draft, cardItems = items) {

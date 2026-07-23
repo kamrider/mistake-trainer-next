@@ -56,6 +56,8 @@ const emit = defineEmits<{
   removeItem: [itemId: string]
   commitReady: []
   preview: [itemId: string]
+  crop: [itemId: string]
+  revertCrop: [derivationId: string]
   mobileCapture: [selectedAddress: string | null]
   refreshLanAddresses: []
   refreshLanPreflight: []
@@ -843,9 +845,12 @@ function statusLabel(batch: CaptureBatchSummary) {
                   :item="item"
                   :data-url="previews[item.id]"
                   variant="gallery"
-                  removable
+                  :removable="!item.cropDerivationId"
                   :disabled="busy"
+                  :cropable="detail.batch.state === 'organizing'"
                   @preview="emit('preview', $event)"
+                  @crop="emit('crop', $event)"
+                  @revert-crop="emit('revertCrop', $event)"
                   @remove="emit('removeItem', $event)"
                   @activate="toggleItemRole(item)"
                   @pointer-start="pointerDrag.start"
@@ -889,6 +894,8 @@ function statusLabel(batch: CaptureBatchSummary) {
                 @select="selectedDraftId = $event"
                 @navigate-draft="navigateDraft"
                 @preview="emit('preview', $event)"
+                @crop="emit('crop', $event)"
+                @revert-crop="emit('revertCrop', $event)"
                 @pointer-start="pointerDrag.start"
                 @return-item="itemId => emit('moveItem', { itemId, targetDraftId: null, targetRole: null, targetPosition: 0 })"
                 @change-item-role="(itemId, targetRole, targetPosition) => emit('moveItem', { itemId, targetDraftId: draft.id, targetRole, targetPosition })"

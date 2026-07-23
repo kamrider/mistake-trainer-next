@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { GripVertical, Image as ImageIcon, Trash2 } from '@lucide/vue'
+import { Crop, GripVertical, Image as ImageIcon, RotateCcw, Trash2 } from '@lucide/vue'
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import type { CaptureItemSummary } from '../../../shared/api/bindings'
 
@@ -10,6 +10,7 @@ const props = defineProps<{
   removable?: boolean
   variant?: 'compact' | 'gallery' | 'filmstrip'
   active?: boolean
+  cropable?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -17,6 +18,8 @@ const emit = defineEmits<{
   remove: [itemId: string]
   activate: [itemId: string]
   pointerStart: [itemId: string, event: PointerEvent]
+  crop: [itemId: string]
+  revertCrop: [derivationId: string]
 }>()
 
 const root = ref<HTMLElement>()
@@ -70,7 +73,31 @@ onBeforeUnmount(() => observer?.disconnect())
     <div class="thumb-copy">
       <strong :title="item.sourceName">{{ item.sourceName }}</strong>
       <small>{{ item.width }} × {{ item.height }}</small>
+      <small
+        v-if="item.cropDerivationId"
+        class="crop-origin"
+      >由原图裁剪</small>
     </div>
+    <button
+      v-if="cropable"
+      type="button"
+      class="crop-button"
+      :aria-label="item.cropDerivationId ? '恢复裁剪前原图' : `裁剪 ${item.sourceName}`"
+      :disabled="disabled"
+      @pointerdown.stop
+      @click.stop="item.cropDerivationId ? emit('revertCrop', item.cropDerivationId) : emit('crop', item.id)"
+    >
+      <RotateCcw
+        v-if="item.cropDerivationId"
+        :size="14"
+        aria-hidden="true"
+      />
+      <Crop
+        v-else
+        :size="14"
+        aria-hidden="true"
+      />
+    </button>
     <button
       v-if="removable"
       type="button"
@@ -88,7 +115,7 @@ onBeforeUnmount(() => observer?.disconnect())
 </template>
 
 <style scoped>
-.capture-thumbnail { position: relative; display: grid; grid-template-columns: 74px minmax(0,1fr) auto; gap: 10px; align-items: center; min-width: 0; padding: 7px; border: 1px solid rgba(33,51,45,.12); border-radius: 12px; background: rgba(255,253,247,.82); cursor: grab; user-select:none; -webkit-user-drag:none; transition: transform var(--motion-feedback) var(--ease-standard), border-color var(--motion-feedback), box-shadow var(--motion-feedback); }
+.capture-thumbnail { position: relative; display: grid; grid-template-columns: 74px minmax(0,1fr) auto auto; gap: 10px; align-items: center; min-width: 0; padding: 7px; border: 1px solid rgba(33,51,45,.12); border-radius: 12px; background: rgba(255,253,247,.82); cursor: grab; user-select:none; -webkit-user-drag:none; transition: transform var(--motion-feedback) var(--ease-standard), border-color var(--motion-feedback), box-shadow var(--motion-feedback); }
 .capture-thumbnail:hover, .capture-thumbnail:focus-visible { border-color: rgba(33,51,45,.3); box-shadow: 0 8px 22px rgba(34,48,43,.08); outline: none; transform: translateY(-1px); }
 .capture-thumbnail:active { cursor: grabbing; }
 .capture-thumbnail.is-disabled { cursor: default; opacity: .72; }
@@ -100,7 +127,10 @@ onBeforeUnmount(() => observer?.disconnect())
 .thumb-copy small { color: var(--ink-muted); font-size: 10px; }
 .remove-button { display: grid; width: 29px; height: 29px; place-items: center; color: var(--ink-muted); border: 0; border-radius: 50%; background: transparent; cursor: pointer; }
 .remove-button:hover { color: var(--cinnabar); background: rgba(185,88,63,.1); }
-.capture-thumbnail.is-gallery { display:block; padding:8px; }.is-gallery .thumb-media { height:180px; }.is-gallery .thumb-media img { object-fit:contain; }.is-gallery .thumb-copy { margin-top:8px; }.is-gallery .remove-button { position:absolute; top:12px; right:12px; color:var(--paper); background:rgba(33,51,45,.72); }
-.capture-thumbnail.is-filmstrip { flex:0 0 88px; display:block; padding:4px; border-radius:10px; }.is-filmstrip .thumb-media { height:66px; }.is-filmstrip .thumb-media img { object-fit:cover; }.is-filmstrip .thumb-copy { display:none; }.is-filmstrip .drag-mark { display:none; }.capture-thumbnail.is-filmstrip.is-active { border-color:var(--cinnabar); box-shadow:0 0 0 2px rgba(185,88,63,.18); transform:translateY(-1px); }
+.crop-button { display:grid;width:29px;height:29px;place-items:center;color:var(--deep-green);border:1px solid rgba(33,51,45,.12);border-radius:50%;background:rgba(246,241,231,.9);cursor:pointer;transition:transform var(--motion-feedback),color var(--motion-feedback),border-color var(--motion-feedback); }
+.crop-button:hover { color:var(--cinnabar);border-color:rgba(185,88,63,.35);transform:scale(1.06); }
+.crop-origin { color:var(--cinnabar)!important;font-weight:700; }
+.capture-thumbnail.is-gallery { display:block; padding:8px; }.is-gallery .thumb-media { height:180px; }.is-gallery .thumb-media img { object-fit:contain; }.is-gallery .thumb-copy { margin-top:8px; }.is-gallery .remove-button { position:absolute; top:12px; right:12px; color:var(--paper); background:rgba(33,51,45,.72); }.is-gallery .crop-button{position:absolute;top:12px;left:12px;z-index:2}
+.capture-thumbnail.is-filmstrip { flex:0 0 88px; display:block; padding:4px; border-radius:10px; }.is-filmstrip .thumb-media { height:66px; }.is-filmstrip .thumb-media img { object-fit:cover; }.is-filmstrip .thumb-copy { display:none; }.is-filmstrip .drag-mark { display:none; }.is-filmstrip .crop-button{position:absolute;left:7px;bottom:7px;z-index:2;width:25px;height:25px}.capture-thumbnail.is-filmstrip.is-active { border-color:var(--cinnabar); box-shadow:0 0 0 2px rgba(185,88,63,.18); transform:translateY(-1px); }
 @media (prefers-reduced-motion: reduce) { .capture-thumbnail { transition: none; } }
 </style>

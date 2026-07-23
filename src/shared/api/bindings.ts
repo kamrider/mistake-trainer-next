@@ -57,6 +57,9 @@ export const commands = {
 	captureImportSelect: (batchId: string) => __TAURI_INVOKE<AppResult<CaptureImportReport>>("capture_import_select", { batchId }),
 	captureImportBytes: (input: CaptureImportBytesInput) => __TAURI_INVOKE<AppResult<CaptureItemSummary>>("capture_import_bytes", { input }),
 	captureItemPreview: (batchId: string, itemId: string) => __TAURI_INVOKE<AppResult<CaptureItemPreview>>("capture_item_preview", { batchId, itemId }),
+	captureCropSourcePreview: (batchId: string, itemId: string) => __TAURI_INVOKE<AppResult<CaptureItemPreview>>("capture_crop_source_preview", { batchId, itemId }),
+	captureCropApply: (input: CaptureCropApplyInput) => __TAURI_INVOKE<AppResult<CaptureCropApplyReport>>("capture_crop_apply", { input }),
+	captureCropRevert: (input: CaptureCropRevertInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_crop_revert", { input }),
 	captureItemRemove: (batchId: string, expectedRevision: number, itemId: string) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_item_remove", { batchId, expectedRevision, itemId }),
 	captureLayoutApply: (input: CaptureLayoutInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_layout_apply", { input }),
 	captureItemMove: (input: CaptureItemMoveInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_item_move", { input }),
@@ -175,6 +178,35 @@ export type CaptureCommitReport = {
 	remainingDraftCount: number,
 };
 
+export type CaptureCropApplyInput = {
+	batchId: string,
+	expectedRevision: number,
+	itemId: string,
+	recipes: CaptureCropRecipe[],
+};
+
+export type CaptureCropApplyReport = {
+	detail: CaptureBatchDetail,
+	operationId: string,
+	sourceItemId: string,
+	derivedItemIds: string[],
+	derivationIds: string[],
+};
+
+export type CaptureCropRecipe = {
+	rect: NormalizedCropRect,
+	rotationDegrees: number,
+	outputMediaType: string,
+	maxEdge: number,
+	jpegQuality: number,
+};
+
+export type CaptureCropRevertInput = {
+	batchId: string,
+	expectedRevision: number,
+	derivationId: string,
+};
+
 export type CaptureDraftSummary = {
 	id: string,
 	position: number,
@@ -242,6 +274,8 @@ export type CaptureItemSummary = {
 	draftId: string | null,
 	role: string | null,
 	position: number | null,
+	cropDerivationId: string | null,
+	cropSourceItemId: string | null,
 };
 
 export type CaptureLanAddress = {
@@ -443,6 +477,13 @@ export type LibraryContext = {
 	profileId: string,
 	profileName: string,
 	storage: string,
+};
+
+export type NormalizedCropRect = {
+	x: number | null,
+	y: number | null,
+	width: number | null,
+	height: number | null,
 };
 
 export type ProblemAssetPreview = {

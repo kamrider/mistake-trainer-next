@@ -113,6 +113,17 @@ fn remove_v11_cloud_schema(database: &Connection) {
         .unwrap();
 }
 
+fn remove_v12_derivation_schema(database: &Connection) {
+    database
+        .execute_batch(
+            "DROP INDEX capture_items_active_sequence_idx;
+         DROP TABLE asset_derivations;
+         DROP TABLE capture_source_retention;
+         ALTER TABLE capture_items DROP COLUMN superseded_by_derivation_id;",
+        )
+        .unwrap();
+}
+
 #[test]
 fn schema_v11_backup_preserves_cloud_progress_and_requires_the_complete_shape() {
     let fixture = fixture();
@@ -140,7 +151,7 @@ fn schema_v11_backup_preserves_cloud_progress_and_requires_the_complete_shape() 
     let (_, package) = created_package(&fixture);
     let manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(package.join("manifest.json")).unwrap()).unwrap();
-    assert_eq!(manifest["schemaVersion"], 11);
+    assert_eq!(manifest["schemaVersion"], 12);
     validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID).unwrap();
     {
         let database =
@@ -488,6 +499,7 @@ fn validation_requires_review_sessions_exactly_when_the_schema_requires_it() {
 
     {
         let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        remove_v12_derivation_schema(&database);
         remove_v11_cloud_schema(&database);
         database
             .execute("DROP TABLE legacy_import_entities", [])
@@ -660,6 +672,7 @@ fn validation_requires_review_history_index_only_for_schema_v9() {
 
     {
         let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        remove_v12_derivation_schema(&database);
         remove_v11_cloud_schema(&database);
         database
             .execute("DROP TABLE legacy_import_entities", [])
@@ -698,6 +711,7 @@ fn validation_requires_legacy_import_ledger_only_for_schema_v10() {
 
     {
         let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        remove_v12_derivation_schema(&database);
         remove_v11_cloud_schema(&database);
         database
             .execute("DROP TABLE legacy_import_entities", [])

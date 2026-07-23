@@ -3,6 +3,7 @@ import { isTauri } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import CaptureWorkspace from '../../modules/capture/components/CaptureWorkspace.vue'
+import CaptureCropEditor from '../../modules/capture/components/CaptureCropEditor.vue'
 import {
   commands,
   type CaptureBatchDetail,
@@ -12,6 +13,7 @@ import {
   type CaptureLanPreflight,
   type CaptureLanSession,
   type CaptureLayoutMode,
+  type CaptureCropRecipe,
   type SubjectPreferences,
 } from '../../shared/api/bindings'
 import { normalizeAppResult } from '../../shared/api/normalize-result'
@@ -23,6 +25,7 @@ const errorMessage = ref('')
 const saveState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
 const commitMessage = ref('')
 const previews = reactive<Record<string, string>>({})
+const cropEditor = ref<{ itemId: string, itemName: string, dataUrl: string }>()
 const lanAddresses = ref<CaptureLanAddress[]>([])
 const lanPreflight = ref<CaptureLanPreflight>()
 const lanPreflightBusy = ref(false)
@@ -558,6 +561,84 @@ async function loadPreview(itemId: string) {
   }
 }
 
+async function openCropEditor(itemId: string) {
+  const current = detail.value
+  if (!desktopAvailable || !current || current.batch.state !== 'organizing' || busy.value) return
+  const item = current.items.find(value => value.id === itemId)
+  if (!item || item.cropDerivationId) return
+  busy.value = true
+  errorMessage.value = ''
+  try {
+    const result = normalizeAppResult(await commands.captureCropSourcePreview(current.batch.id, itemId))
+    if (result.ok) cropEditor.value = { itemId, itemName: item.sourceName, dataUrl: result.data.dataUrl }
+    else showError(result.error.userMessage)
+  }
+  catch {
+    showError('没有读取到裁剪大图，原图仍然安全保留，请重试。')
+  }
+  finally {
+    busy.value = false
+  }
+}
+
+async function applyCrop(recipes: CaptureCropRecipe[]) {
+  const current = detail.value
+  const editor = cropEditor.value
+  if (!desktopAvailable || !current || !editor || busy.value) return
+  busy.value = true
+  errorMessage.value = ''
+  try {
+    const result = normalizeAppResult(await commands.captureCropApply({
+      batchId: current.batch.id,
+      expectedRevision: current.batch.revision,
+      itemId: editor.itemId,
+      recipes,
+    }))
+    if (result.ok) {
+      detail.value = result.data.detail
+      delete previews[editor.itemId]
+      cropEditor.value = undefined
+      saveState.value = 'saved'
+      await loadBatches()
+    }
+    else showError(result.error.userMessage)
+  }
+  catch {
+    showError('裁剪没有保存，原图和当前分组均未改变，请重试。')
+  }
+  finally {
+    busy.value = false
+  }
+}
+
+async function revertCrop(derivationId: string) {
+  const current = detail.value
+  if (!desktopAvailable || !current || busy.value) return
+  if (!window.confirm('恢复裁剪前的原图？这次裁出的所有区域会从采集工作台移除，但原图会回到原来的位置。')) return
+  busy.value = true
+  errorMessage.value = ''
+  try {
+    const result = normalizeAppResult(await commands.captureCropRevert({
+      batchId: current.batch.id,
+      expectedRevision: current.batch.revision,
+      derivationId,
+    }))
+    if (result.ok) {
+      for (const item of current.items.filter(value => value.cropDerivationId)) delete previews[item.id]
+      detail.value = result.data
+      saveState.value = 'saved'
+      await loadBatches()
+    }
+    else showError(result.error.userMessage)
+  }
+  catch {
+    showError('没有恢复成功，现有图片保持不变。')
+  }
+  finally {
+    busy.value = false
+  }
+}
+
 async function requestLanPreflight(): Promise<LanPreflightCommandResult> {
   if (lanPreflightRequest) return lanPreflightRequest
   const request = commands.captureLanPreflight()
@@ -760,9 +841,19 @@ onBeforeUnmount(() => {
     @remove-item="removeItem"
     @commit-ready="commitReady"
     @preview="loadPreview"
+    @crop="openCropEditor"
+    @revert-crop="revertCrop"
     @mobile-capture="startMobileCapture"
     @refresh-lan-addresses="loadLanAddresses"
     @refresh-lan-preflight="loadLanPreflight"
     @stop-mobile-capture="stopMobileCapture()"
+  />
+  <CaptureCropEditor
+    v-if="cropEditor"
+    :data-url="cropEditor.dataUrl"
+    :item-name="cropEditor.itemName"
+    :busy="busy"
+    @close="cropEditor = undefined"
+    @apply="applyCrop"
   />
 </template>

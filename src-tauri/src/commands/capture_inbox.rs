@@ -9,14 +9,16 @@ use crate::{
     modules::{
         capture::{CaptureFileReadError, read_capture_file},
         capture_inbox::{
-            ApplyCaptureLayout, CaptureBatchDetail, CaptureBatchState, CaptureBatchSummary,
-            CaptureCommitReport, CaptureInboxError, CaptureItemPreview, CaptureItemSummary,
-            CaptureLayoutMode, CreateCaptureBatch, IngestCaptureItem, MergeCaptureCard,
-            MoveCaptureItem, StageCaptureItemRole, UpdateCaptureDraft, apply_capture_layout,
-            assign_capture_batch_subject, commit_ready_capture_drafts, create_capture_batch,
-            delete_capture_draft, discard_capture_batch, get_capture_batch_detail,
-            get_capture_item_preview, ingest_capture_item, list_capture_batches,
-            merge_capture_card, move_capture_item, remove_capture_item, stage_capture_item_role,
+            ApplyCaptureCrop, ApplyCaptureLayout, CaptureBatchDetail, CaptureBatchState,
+            CaptureBatchSummary, CaptureCommitReport, CaptureCropApplyReport, CaptureCropRecipe,
+            CaptureInboxError, CaptureItemPreview, CaptureItemSummary, CaptureLayoutMode,
+            CreateCaptureBatch, IngestCaptureItem, MergeCaptureCard, MoveCaptureItem,
+            RevertCaptureCrop, StageCaptureItemRole, UpdateCaptureDraft, apply_capture_crop,
+            apply_capture_layout, assign_capture_batch_subject, commit_ready_capture_drafts,
+            create_capture_batch, delete_capture_draft, discard_capture_batch,
+            get_capture_batch_detail, get_capture_crop_source_preview, get_capture_item_preview,
+            ingest_capture_item, list_capture_batches, merge_capture_card, move_capture_item,
+            remove_capture_item, revert_capture_crop, stage_capture_item_role,
             update_capture_batch, update_capture_draft,
         },
     },
@@ -84,6 +86,23 @@ pub struct CaptureItemStageRoleInput {
     pub expected_revision: u32,
     pub item_id: String,
     pub staged_role: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureCropApplyInput {
+    pub batch_id: String,
+    pub expected_revision: u32,
+    pub item_id: String,
+    pub recipes: Vec<CaptureCropRecipe>,
+}
+
+#[derive(Clone, Debug, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureCropRevertInput {
+    pub batch_id: String,
+    pub expected_revision: u32,
+    pub derivation_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Type)]
@@ -428,6 +447,89 @@ pub fn capture_item_preview(
 
 #[tauri::command]
 #[specta::specta]
+pub fn capture_crop_source_preview(
+    state: State<'_, LibraryRuntime>,
+    batch_id: String,
+    item_id: String,
+) -> AppResult<CaptureItemPreview> {
+    let profile = state.active_profile();
+    let connection = match state.connection.lock() {
+        Ok(connection) => connection,
+        Err(_) => return capture_error("library_lock_poisoned", None),
+    };
+    result_or_error(get_capture_crop_source_preview(
+        &connection,
+        &state.blob_root,
+        &state.asset_key,
+        state.account_id(),
+        &profile.id,
+        &batch_id,
+        &item_id,
+    ))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn capture_crop_apply(
+    app: AppHandle,
+    state: State<'_, LibraryRuntime>,
+    input: CaptureCropApplyInput,
+) -> AppResult<CaptureCropApplyReport> {
+    let batch_id = input.batch_id.clone();
+    let profile = state.active_profile();
+    let mut connection = match state.connection.lock() {
+        Ok(connection) => connection,
+        Err(_) => return capture_error("library_lock_poisoned", None),
+    };
+    let result = result_or_error(apply_capture_crop(
+        &mut connection,
+        &state.blob_root,
+        &state.asset_key,
+        ApplyCaptureCrop {
+            account_id: state.account_id().to_owned(),
+            profile_id: profile.id,
+            batch_id: input.batch_id,
+            expected_revision: input.expected_revision,
+            item_id: input.item_id,
+            recipes: input.recipes,
+            now_utc_ms: current_utc_millis(),
+        },
+    ));
+    emit_batch_changed(&app, &batch_id);
+    result
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn capture_crop_revert(
+    app: AppHandle,
+    state: State<'_, LibraryRuntime>,
+    input: CaptureCropRevertInput,
+) -> AppResult<CaptureBatchDetail> {
+    let batch_id = input.batch_id.clone();
+    let profile = state.active_profile();
+    let mut connection = match state.connection.lock() {
+        Ok(connection) => connection,
+        Err(_) => return capture_error("library_lock_poisoned", None),
+    };
+    let result = result_or_error(revert_capture_crop(
+        &mut connection,
+        &state.blob_root,
+        RevertCaptureCrop {
+            account_id: state.account_id().to_owned(),
+            profile_id: profile.id,
+            batch_id: input.batch_id,
+            expected_revision: input.expected_revision,
+            derivation_id: input.derivation_id,
+            now_utc_ms: current_utc_millis(),
+        },
+    ));
+    emit_batch_changed(&app, &batch_id);
+    result
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn capture_item_remove(
     app: AppHandle,
     state: State<'_, LibraryRuntime>,
@@ -675,6 +777,8 @@ fn error_code(error: &CaptureInboxError) -> &'static str {
         CaptureInboxError::InvalidInput => "capture_input_invalid",
         CaptureInboxError::CapacityReached => "capture_batch_capacity_reached",
         CaptureInboxError::InvalidImage => "capture_image_invalid",
+        CaptureInboxError::InvalidCrop => "capture_crop_invalid",
+        CaptureInboxError::CropNotRevertible => "capture_crop_not_revertible",
         CaptureInboxError::InvalidAssetPath => "capture_asset_path_invalid",
         CaptureInboxError::Io(_) => "capture_file_failed",
         CaptureInboxError::Database(_) => "capture_database_failed",

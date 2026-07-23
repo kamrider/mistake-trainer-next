@@ -35,7 +35,7 @@ function renderWorkspace(detail?: CaptureBatchDetail, preflight: CaptureLanPrefl
 function collectingDetail(): CaptureBatchDetail {
   return {
     batch,
-    items: [{ id: 'new', sourceName: 'new.png', sourceSequence: 0, mediaType: 'image/png', byteLength: 1, width: 800, height: 600, stagedRole: 'question', draftId: null, role: null, position: null }],
+    items: [{ id: 'new', sourceName: 'new.png', sourceSequence: 0, mediaType: 'image/png', byteLength: 1, width: 800, height: 600, stagedRole: 'question', draftId: null, role: null, position: null, cropDerivationId: null, cropSourceItemId: null }],
     drafts: [],
     unassignedItemIds: ['new'],
   }
@@ -45,11 +45,11 @@ function organizingDetail(): CaptureBatchDetail {
   return {
     batch: { ...batch, state: 'organizing', itemCount: 5, draftCount: 2, readyCount: 1 },
     items: [
-      { id: 'q1', sourceName: '第一题.png', sourceSequence: 0, mediaType: 'image/png', byteLength: 100, width: 1200, height: 900, stagedRole: 'question', draftId: 'd1', role: 'question', position: 0 },
-      { id: 'a1', sourceName: '第一题答案.png', sourceSequence: 1, mediaType: 'image/png', byteLength: 100, width: 1200, height: 900, stagedRole: 'answer', draftId: 'd1', role: 'answer', position: 0 },
-      { id: 'q2', sourceName: '第二题.png', sourceSequence: 2, mediaType: 'image/png', byteLength: 100, width: 1200, height: 900, stagedRole: 'question', draftId: 'd2', role: 'question', position: 0 },
-      { id: 'q2b', sourceName: '第二题续图.png', sourceSequence: 3, mediaType: 'image/png', byteLength: 100, width: 1200, height: 900, stagedRole: 'question', draftId: 'd2', role: 'question', position: 1 },
-      { id: 'loose', sourceName: '待配对超长文件名图片.png', sourceSequence: 4, mediaType: 'image/png', byteLength: 100, width: 1200, height: 900, stagedRole: 'question', draftId: null, role: null, position: null },
+      { id: 'q1', sourceName: '第一题.png', sourceSequence: 0, mediaType: 'image/png', byteLength: 100, width: 1200, height: 900, stagedRole: 'question', draftId: 'd1', role: 'question', position: 0, cropDerivationId: null, cropSourceItemId: null },
+      { id: 'a1', sourceName: '第一题答案.png', sourceSequence: 1, mediaType: 'image/png', byteLength: 100, width: 1200, height: 900, stagedRole: 'answer', draftId: 'd1', role: 'answer', position: 0, cropDerivationId: null, cropSourceItemId: null },
+      { id: 'q2', sourceName: '第二题.png', sourceSequence: 2, mediaType: 'image/png', byteLength: 100, width: 1200, height: 900, stagedRole: 'question', draftId: 'd2', role: 'question', position: 0, cropDerivationId: null, cropSourceItemId: null },
+      { id: 'q2b', sourceName: '第二题续图.png', sourceSequence: 3, mediaType: 'image/png', byteLength: 100, width: 1200, height: 900, stagedRole: 'question', draftId: 'd2', role: 'question', position: 1, cropDerivationId: null, cropSourceItemId: null },
+      { id: 'loose', sourceName: '待配对超长文件名图片.png', sourceSequence: 4, mediaType: 'image/png', byteLength: 100, width: 1200, height: 900, stagedRole: 'question', draftId: null, role: null, position: null, cropDerivationId: null, cropSourceItemId: null },
     ],
     drafts: [
       { id: 'd1', position: 0, subject: '数学', tags: [], note: '', questionItemIds: ['q1'], answerItemIds: ['a1'], ready: true },

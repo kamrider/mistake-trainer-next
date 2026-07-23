@@ -6,13 +6,15 @@ use mistake_trainer_next_lib::{
     infrastructure::database::{open_encrypted_database, run_migrations},
     modules::{
         capture_inbox::{
-            ApplyCaptureLayout, CaptureBatchState, CaptureInboxError, CaptureLayoutMode,
-            CreateCaptureBatch, IngestCaptureItem, MergeCaptureCard, MoveCaptureItem,
-            StageCaptureItemRole, UpdateCaptureDraft, apply_capture_layout,
+            ApplyCaptureCrop, ApplyCaptureLayout, CaptureBatchState, CaptureCropRecipe,
+            CaptureInboxError, CaptureLayoutMode, CreateCaptureBatch, IngestCaptureItem,
+            MergeCaptureCard, MoveCaptureItem, NormalizedCropRect, RevertCaptureCrop,
+            StageCaptureItemRole, UpdateCaptureDraft, apply_capture_crop, apply_capture_layout,
             assign_capture_batch_subject, commit_ready_capture_drafts, create_capture_batch,
             delete_capture_draft, discard_capture_batch, get_capture_batch_detail,
             get_capture_item_preview, ingest_capture_item, merge_capture_card, move_capture_item,
-            stage_capture_item_role, update_capture_batch, update_capture_draft,
+            remove_capture_item, revert_capture_crop, stage_capture_item_role,
+            update_capture_batch, update_capture_draft,
         },
         profiles::{CreateProfile, create_profile},
     },
@@ -76,6 +78,216 @@ fn png_sized(seed: u8, width: u32, height: u32) -> Vec<u8> {
     let mut output = Cursor::new(Vec::new());
     image.write_to(&mut output, ImageFormat::Png).unwrap();
     output.into_inner()
+}
+
+fn split_color_png() -> Vec<u8> {
+    let image = ImageBuffer::from_fn(8, 4, |x, _| {
+        if x < 4 {
+            Rgba([220, 30, 20, 255])
+        } else {
+            Rgba([20, 40, 220, 255])
+        }
+    });
+    let mut output = Cursor::new(Vec::new());
+    DynamicImage::ImageRgba8(image)
+        .write_to(&mut output, ImageFormat::Png)
+        .unwrap();
+    output.into_inner()
+}
+
+fn crop_recipe(x: f64, width: f64) -> CaptureCropRecipe {
+    CaptureCropRecipe {
+        rect: NormalizedCropRect {
+            x,
+            y: 0.0,
+            width,
+            height: 1.0,
+        },
+        rotation_degrees: 0,
+        output_media_type: "image/png".to_owned(),
+        max_edge: 4_096,
+        jpeg_quality: 90,
+    }
+}
+
+#[test]
+fn multi_region_crop_is_atomic_non_destructive_and_reversible() {
+    let library = TestLibrary::new();
+    let mut connection = library.open();
+    let batch = create_batch(
+        &library,
+        &mut connection,
+        "math",
+        CaptureBatchState::Collecting,
+    );
+    let source = ingest_capture_item(
+        &mut connection,
+        &library.blob_root(),
+        &ASSET_KEY,
+        IngestCaptureItem {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch.id.clone(),
+            client_upload_id: "crop-source".to_owned(),
+            source_name: "worksheet.png".to_owned(),
+            source_sequence: None,
+            bytes: split_color_png(),
+            now_utc_ms: 20,
+        },
+    )
+    .expect("ingest crop source");
+    let detail =
+        get_capture_batch_detail(&connection, ACCOUNT, &library.profile_id, &batch.id).unwrap();
+    let revision = organize(&library, &mut connection, &batch.id, detail.batch.revision);
+
+    let applied = apply_capture_crop(
+        &mut connection,
+        &library.blob_root(),
+        &ASSET_KEY,
+        ApplyCaptureCrop {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch.id.clone(),
+            expected_revision: revision,
+            item_id: source.id.clone(),
+            recipes: vec![crop_recipe(0.0, 0.5), crop_recipe(0.5, 0.5)],
+            now_utc_ms: 60,
+        },
+    )
+    .expect("apply two crops");
+
+    assert_eq!(applied.detail.items.len(), 2);
+    assert_eq!(applied.derived_item_ids.len(), 2);
+    assert_eq!(applied.derivation_ids.len(), 2);
+    assert!(!applied.detail.items.iter().any(|item| item.id == source.id));
+    assert!(
+        applied
+            .detail
+            .items
+            .iter()
+            .all(|item| item.width == 4 && item.height == 4)
+    );
+    let counts: (i64, i64, i64) = connection
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM capture_items WHERE batch_id = ?1),
+                    (SELECT COUNT(*) FROM assets WHERE account_id = ?2),
+                    (SELECT COUNT(*) FROM asset_derivations WHERE batch_id = ?1)",
+            rusqlite::params![batch.id, ACCOUNT],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(counts, (3, 3, 2), "source remains encrypted for recovery");
+
+    let deletion = remove_capture_item(
+        &mut connection,
+        &library.blob_root(),
+        ACCOUNT,
+        &library.profile_id,
+        &batch.id,
+        applied.detail.batch.revision,
+        &applied.derived_item_ids[0],
+        65,
+    )
+    .expect_err("derived regions must be restored as a group, not orphan their source");
+    assert!(matches!(deletion, CaptureInboxError::InvalidInput));
+
+    let left_preview = get_capture_item_preview(
+        &connection,
+        &library.blob_root(),
+        &ASSET_KEY,
+        ACCOUNT,
+        &library.profile_id,
+        &batch.id,
+        &applied.derived_item_ids[0],
+    )
+    .unwrap();
+    let bytes = STANDARD
+        .decode(left_preview.data_url.split_once(',').unwrap().1)
+        .unwrap();
+    assert_eq!(
+        image::load_from_memory(&bytes)
+            .unwrap()
+            .to_rgba8()
+            .get_pixel(0, 0)
+            .0,
+        [220, 30, 20, 255]
+    );
+
+    let restored = revert_capture_crop(
+        &mut connection,
+        &library.blob_root(),
+        RevertCaptureCrop {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch.id.clone(),
+            expected_revision: applied.detail.batch.revision,
+            derivation_id: applied.derivation_ids[0].clone(),
+            now_utc_ms: 70,
+        },
+    )
+    .expect("restore original source");
+    assert_eq!(restored.items.len(), 1);
+    assert_eq!(restored.items[0].id, source.id);
+    let counts: (i64, i64) = connection
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM assets WHERE account_id = ?1),
+                    (SELECT COUNT(*) FROM asset_derivations)",
+            [ACCOUNT],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(counts, (1, 0));
+}
+
+#[test]
+fn invalid_crop_recipe_changes_neither_database_nor_files() {
+    let library = TestLibrary::new();
+    let mut connection = library.open();
+    let batch = create_batch(
+        &library,
+        &mut connection,
+        "math",
+        CaptureBatchState::Collecting,
+    );
+    let source = ingest(&library, &mut connection, &batch.id, "invalid-crop", 17, 20);
+    let collected =
+        get_capture_batch_detail(&connection, ACCOUNT, &library.profile_id, &batch.id).unwrap();
+    let revision = organize(
+        &library,
+        &mut connection,
+        &batch.id,
+        collected.batch.revision,
+    );
+    let before_files = std::fs::read_dir(library.blob_root().join("blobs"))
+        .unwrap()
+        .count();
+
+    let error = apply_capture_crop(
+        &mut connection,
+        &library.blob_root(),
+        &ASSET_KEY,
+        ApplyCaptureCrop {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch.id.clone(),
+            expected_revision: revision,
+            item_id: source.id,
+            recipes: vec![crop_recipe(0.0, 0.5), crop_recipe(0.9, 0.5)],
+            now_utc_ms: 60,
+        },
+    )
+    .expect_err("out-of-bounds crop must fail before writing");
+    assert!(matches!(error, CaptureInboxError::InvalidCrop));
+    let after =
+        get_capture_batch_detail(&connection, ACCOUNT, &library.profile_id, &batch.id).unwrap();
+    assert_eq!(after.items.len(), 1);
+    assert_eq!(after.batch.revision, revision);
+    assert_eq!(
+        std::fs::read_dir(library.blob_root().join("blobs"))
+            .unwrap()
+            .count(),
+        before_files
+    );
 }
 
 #[test]
