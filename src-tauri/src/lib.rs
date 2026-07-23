@@ -20,13 +20,13 @@ pub fn run() {
     tauri::Builder::default()
         .invoke_handler(specta.invoke_handler())
         .setup(move |app| {
-            let data_root = app.path().app_data_dir()?.join("library");
+            let control_root = app.path().app_data_dir()?;
             let secrets = infrastructure::runtime::KeyringSecretStore::new(
                 "com.mistaketrainer.next.local-library",
             );
             let access_gate =
-                match application::startup::initialize_application_library_if_accessible(
-                    &data_root,
+                match application::startup::initialize_configured_application_library_if_accessible(
+                    &control_root,
                     &secrets,
                     current_utc_millis(),
                 )? {
@@ -38,10 +38,15 @@ pub fn run() {
                         commands::access::LibraryAccessGate::locked()
                     }
                     application::startup::LibraryStartup::AccessUnavailable(error) => {
-                        // Fail closed: an unreadable or malformed marker must never
-                        // fall through to opening SQLCipher with live keys.
                         eprintln!("library access gate failed closed [{}]", error.code());
-                        commands::access::LibraryAccessGate::unavailable()
+                        match error {
+                            application::startup::StartupAccessUnavailable::Credentials(_) => {
+                                commands::access::LibraryAccessGate::unavailable()
+                            }
+                            application::startup::StartupAccessUnavailable::Storage(_) => {
+                                commands::access::LibraryAccessGate::storage_unavailable()
+                            }
+                        }
                     }
                 };
             app.manage(access_gate);

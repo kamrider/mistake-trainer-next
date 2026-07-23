@@ -42,6 +42,7 @@ uuid = { version = "1", features = ["v7", "serde"] }
 windows = { version = "=0.62.2", features = [
   "Win32_Foundation",
   "Win32_NetworkManagement_WindowsFirewall",
+  "Win32_Storage_FileSystem",
   "Win32_System_Com",
   "Win32_System_Registry",
   "Win32_System_Threading",

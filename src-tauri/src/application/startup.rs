@@ -3,9 +3,12 @@ use std::path::Path;
 use thiserror::Error;
 
 use crate::{
-    infrastructure::runtime::{
-        LibraryRuntime, RuntimeError, SecretStore, initialize_local_library, library_is_locked,
-        load_restore_credentials,
+    infrastructure::{
+        runtime::{
+            LibraryRuntime, RuntimeError, SecretStore, initialize_local_library, library_is_locked,
+            load_restore_credentials,
+        },
+        storage_location::{StorageLocationError, resolve_storage},
     },
     modules::backup::{BackupError, begin_pending_restore, record_failed_restore},
 };
@@ -31,7 +34,24 @@ pub enum StartupError {
 pub enum LibraryStartup {
     Ready(LibraryRuntime),
     Locked,
-    AccessUnavailable(RuntimeError),
+    AccessUnavailable(StartupAccessUnavailable),
+}
+
+#[derive(Debug, Error)]
+pub enum StartupAccessUnavailable {
+    #[error("secure credential access is unavailable")]
+    Credentials(#[source] RuntimeError),
+    #[error("configured library storage is unavailable")]
+    Storage(#[source] StorageLocationError),
+}
+
+impl StartupAccessUnavailable {
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::Credentials(error) => error.code(),
+            Self::Storage(error) => error.code(),
+        }
+    }
 }
 
 /// Applies the process-start access boundary before any SQLCipher connection
@@ -46,7 +66,38 @@ pub fn initialize_application_library_if_accessible(
         Ok(false) => initialize_application_library(data_root, secrets, now_utc_ms)
             .map(LibraryStartup::Ready),
         Ok(true) => Ok(LibraryStartup::Locked),
-        Err(error) => Ok(LibraryStartup::AccessUnavailable(error)),
+        Err(error) => Ok(LibraryStartup::AccessUnavailable(
+            StartupAccessUnavailable::Credentials(error),
+        )),
+    }
+}
+
+/// Resolves the movable encrypted library only after the process-start lock
+/// marker has allowed access. Invalid or unavailable custom storage is exposed
+/// only as a public-safe locked-shell state and never falls back to the default
+/// root.
+pub fn initialize_configured_application_library_if_accessible(
+    control_root: &Path,
+    secrets: &dyn SecretStore,
+    now_utc_ms: i64,
+) -> Result<LibraryStartup, StartupError> {
+    match library_is_locked(secrets) {
+        Ok(true) => Ok(LibraryStartup::Locked),
+        Err(error) => Ok(LibraryStartup::AccessUnavailable(
+            StartupAccessUnavailable::Credentials(error),
+        )),
+        Ok(false) => {
+            let storage = match resolve_storage(control_root) {
+                Ok(storage) => storage,
+                Err(error) => {
+                    return Ok(LibraryStartup::AccessUnavailable(
+                        StartupAccessUnavailable::Storage(error),
+                    ));
+                }
+            };
+            initialize_application_library(storage.library_root(), secrets, now_utc_ms)
+                .map(LibraryStartup::Ready)
+        }
     }
 }
 

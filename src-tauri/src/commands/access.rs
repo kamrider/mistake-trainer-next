@@ -26,7 +26,13 @@ pub struct LibraryAccessStatus {
 enum StartupAccessDecision {
     Unlocked,
     Locked,
-    Unavailable,
+    Unavailable(LibraryAccessUnavailableReason),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LibraryAccessUnavailableReason {
+    Credentials,
+    Storage,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,7 +55,15 @@ impl LibraryAccessGate {
 
     pub const fn unavailable() -> Self {
         Self {
-            decision: StartupAccessDecision::Unavailable,
+            decision: StartupAccessDecision::Unavailable(
+                LibraryAccessUnavailableReason::Credentials,
+            ),
+        }
+    }
+
+    pub const fn storage_unavailable() -> Self {
+        Self {
+            decision: StartupAccessDecision::Unavailable(LibraryAccessUnavailableReason::Storage),
         }
     }
 }
@@ -69,10 +83,18 @@ pub fn access_status_for(gate: &LibraryAccessGate) -> AppResult<LibraryAccessSta
     match gate.decision {
         StartupAccessDecision::Unlocked => AppResult::success(status(false)),
         StartupAccessDecision::Locked => AppResult::success(status(true)),
-        StartupAccessDecision::Unavailable => access_failure(
-            "LIBRARY_ACCESS_UNAVAILABLE",
-            "无法读取 Windows 资料库凭据，已保持锁定；请检查系统凭据服务后重试。",
-        ),
+        StartupAccessDecision::Unavailable(LibraryAccessUnavailableReason::Credentials) => {
+            access_failure(
+                "LIBRARY_ACCESS_UNAVAILABLE",
+                "无法读取 Windows 资料库凭据，已保持锁定；请检查系统凭据服务后重试。",
+            )
+        }
+        StartupAccessDecision::Unavailable(LibraryAccessUnavailableReason::Storage) => {
+            access_failure(
+                "LIBRARY_STORAGE_UNAVAILABLE",
+                "配置的资料库位置当前不可用，未打开或创建任何资料，请重新连接磁盘后重试。",
+            )
+        }
     }
 }
 
@@ -220,6 +242,17 @@ mod tests {
             panic!("credential read failure must not claim unlocked")
         };
         assert_eq!(error.code, "LIBRARY_ACCESS_UNAVAILABLE");
+
+        let AppResult::Failure { error, .. } =
+            access_status_for(&LibraryAccessGate::storage_unavailable())
+        else {
+            panic!("storage unavailability must not claim unlocked")
+        };
+        assert_eq!(error.code, "LIBRARY_STORAGE_UNAVAILABLE");
+        assert_eq!(
+            error.user_message,
+            "配置的资料库位置当前不可用，未打开或创建任何资料，请重新连接磁盘后重试。"
+        );
 
         let write_failure = MemorySecretStore {
             fail_writes: true,
