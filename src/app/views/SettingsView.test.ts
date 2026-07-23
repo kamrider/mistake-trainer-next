@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { libraryAccessControllerKey } from '../library-access-controller'
 import SettingsView from './SettingsView.vue'
 
 const api = vi.hoisted(() => ({
@@ -8,6 +9,8 @@ const api = vi.hoisted(() => ({
   syncBackendStatus: vi.fn(),
   syncBackendSet: vi.fn(),
   authStatusCommand: vi.fn(),
+  authDisconnect: vi.fn(),
+  libraryLock: vi.fn(),
   legacyScan: vi.fn(),
   legacyImport: vi.fn(),
   legacyImportList: vi.fn(),
@@ -39,6 +42,13 @@ describe('SettingsView', () => {
     api.authStatusCommand.mockResolvedValue({ ok: true, data: {
       configured: false, status: { kind: 'unconfigured', emailHint: null },
     } })
+    api.authDisconnect.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      configured: true, status: { kind: 'signed_out', emailHint: null },
+    } } })
+    api.libraryLock.mockResolvedValue({
+      ok: true,
+      data: { locked: true, trustedWindowsAccount: true },
+    })
     api.subjectPreferencesGet.mockResolvedValue({ ok: true, data: {
       enabledSubjects: ['语文', '数学', '英语'],
       customSubjects: [],
@@ -176,6 +186,62 @@ describe('SettingsView', () => {
     expect(screen.getByText('8 道活动题')).toBeVisible()
     expect(screen.getByText('尚未配置')).toBeVisible()
     expect(screen.getByText(/本地 outbox 已记录 11 项变更/)).toBeVisible()
+  })
+
+  it('confirms an immediate local lock and restores focus when cancelled', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 8, archivedProblemCount: 2, trashedProblemCount: 1,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    const user = userEvent.setup()
+    const enterRestarting = vi.fn()
+    render(SettingsView, {
+      global: {
+        provide: {
+          [libraryAccessControllerKey as symbol]: { enterRestarting },
+        },
+      },
+    })
+
+    const trigger = await screen.findByRole('button', { name: '立即锁定资料库' })
+    await user.click(trigger)
+    expect(screen.getByRole('heading', { name: '现在锁定本地资料库？' })).toBeVisible()
+    expect(screen.getByRole('button', { name: '取消，继续使用' })).toHaveFocus()
+
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(trigger).toHaveFocus()
+
+    await user.click(trigger)
+    await user.click(screen.getByRole('button', { name: '立即锁定' }))
+
+    expect(api.libraryLock).toHaveBeenCalledOnce()
+    expect(enterRestarting).toHaveBeenCalledOnce()
+    expect(await screen.findByRole('button', { name: '正在锁定…' })).toBeDisabled()
+  })
+
+  it('clears cloud credentials before locking a connected library', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 1, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: true,
+    } })
+    api.authStatusCommand.mockResolvedValue({ ok: true, data: {
+      configured: true, status: { kind: 'connected', emailHint: 'u***@example.com' },
+    } })
+    const user = userEvent.setup()
+    render(SettingsView)
+
+    await user.click(await screen.findByRole('button', { name: '退出云端并锁定' }))
+    expect(screen.getByText(/断网也不会阻止本机退出/)).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '退出并锁定' }))
+
+    await waitFor(() => {
+      expect(api.authDisconnect).toHaveBeenCalledOnce()
+      expect(api.libraryLock).toHaveBeenCalledOnce()
+    })
+    expect(api.authDisconnect.mock.invocationCallOrder[0]!).toBeLessThan(api.libraryLock.mock.invocationCallOrder[0]!)
   })
 
   it('explains regional cloud limits while keeping local-first recovery visible', async () => {

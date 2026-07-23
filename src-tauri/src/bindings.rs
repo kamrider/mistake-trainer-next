@@ -7,6 +7,9 @@ use crate::commands;
 
 pub fn builder() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new().commands(collect_commands![
+        commands::access::library_access_status,
+        commands::access::library_lock,
+        commands::access::library_unlock,
         commands::backup::backup_create,
         commands::backup::backup_prepare_restore,
         commands::backup::backup_restore,

@@ -1,8 +1,18 @@
 use std::{collections::HashMap, sync::Mutex};
 
-use mistake_trainer_next_lib::infrastructure::runtime::{SecretStore, initialize_local_library};
 use mistake_trainer_next_lib::modules::profiles::{
     CreateProfile, ProfileUseCaseError, create_profile,
+};
+use mistake_trainer_next_lib::{
+    application::startup::{LibraryStartup, initialize_application_library_if_accessible},
+    commands::library::problem_list_for,
+    infrastructure::runtime::{
+        SecretStore, initialize_local_library, library_is_locked, set_library_locked,
+        validate_library_unlock_credentials,
+    },
+    modules::problems::{
+        AssetRole, CaptureAsset, CreateProblem, ProblemStatusFilter, create_problem,
+    },
 };
 use tempfile::tempdir;
 
@@ -138,4 +148,80 @@ fn existing_library_with_a_missing_secret_fails_closed_without_replacement() {
         assert_eq!(error.code(), "library_credentials_missing");
         assert_eq!(secrets.get(missing_name).unwrap(), None);
     }
+}
+
+#[test]
+fn lock_cycle_reopens_the_same_profile_problem_and_encrypted_assets() {
+    let application_root = tempdir().expect("application root");
+    let library_root = application_root.path().join("library");
+    let secrets = MemorySecretStore::default();
+
+    let first = match initialize_application_library_if_accessible(&library_root, &secrets, 100)
+        .expect("initial startup")
+    {
+        LibraryStartup::Ready(runtime) => runtime,
+        LibraryStartup::Locked | LibraryStartup::AccessUnavailable(_) => {
+            panic!("a new library must start unlocked")
+        }
+    };
+    let account_id = first.account_id().to_owned();
+    let profile = first.active_profile();
+    let created = create_problem(
+        &mut first.connection.lock().unwrap(),
+        &first.blob_root,
+        &first.asset_key,
+        CreateProblem {
+            account_id: account_id.clone(),
+            profile_id: profile.id.clone(),
+            subject: "数学".to_owned(),
+            note: "锁定生命周期验收".to_owned(),
+            assets: vec![
+                CaptureAsset {
+                    role: AssetRole::Question,
+                    media_type: "image/png".to_owned(),
+                    bytes: b"encrypted-question".to_vec(),
+                },
+                CaptureAsset {
+                    role: AssetRole::Answer,
+                    media_type: "image/png".to_owned(),
+                    bytes: b"encrypted-answer".to_vec(),
+                },
+            ],
+            now_utc_ms: 200,
+        },
+    )
+    .expect("create encrypted problem");
+    drop(first);
+
+    set_library_locked(&secrets, true).expect("persist lock marker");
+    assert!(library_is_locked(&secrets).expect("read locked marker"));
+    assert!(matches!(
+        initialize_application_library_if_accessible(&library_root, &secrets, 300)
+            .expect("locked startup"),
+        LibraryStartup::Locked
+    ));
+
+    validate_library_unlock_credentials(&secrets).expect("trusted-account credentials");
+    set_library_locked(&secrets, false).expect("persist unlocked marker");
+    let reopened = match initialize_application_library_if_accessible(&library_root, &secrets, 400)
+        .expect("unlocked restart")
+    {
+        LibraryStartup::Ready(runtime) => runtime,
+        LibraryStartup::Locked | LibraryStartup::AccessUnavailable(_) => {
+            panic!("validated unlock must reopen the library")
+        }
+    };
+
+    assert_eq!(reopened.account_id(), account_id);
+    assert_eq!(reopened.active_profile(), profile);
+    let problems = problem_list_for(
+        &reopened,
+        ProblemStatusFilter::Active,
+        Some("锁定生命周期验收".to_owned()),
+    );
+    let serialized = serde_json::to_value(problems).expect("serialize problem list");
+    assert_eq!(serialized["ok"], true);
+    assert_eq!(serialized["data"][0]["id"], created.id);
+    assert_eq!(serialized["data"][0]["questionAssetCount"], 1);
+    assert_eq!(serialized["data"][0]["answerAssetCount"], 1);
 }

@@ -1,16 +1,28 @@
 <script setup lang="ts">
 import { isTauri } from '@tauri-apps/api/core'
 import { CheckCircle2, ShieldAlert, X } from '@lucide/vue'
-import { computed, onErrorCaptured, onMounted, ref, watch } from 'vue'
+import { computed, onErrorCaptured, onMounted, provide, ref, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
-import type { AppResult } from '../shared/api/app-result'
+import { failure, type AppResult } from '../shared/api/app-result'
 import { commands, type BackupRestoreReceipt, type ProfileOverview, type ProfileSummary, type SystemStatus } from '../shared/api/bindings'
 import { normalizeAppResult } from '../shared/api/normalize-result'
 import { loadSystemStatus, systemStatusLabel } from '../shared/api/system-status'
 import AppShell, { type AppPage } from './AppShell.vue'
+import LibraryAccessScreen from './LibraryAccessScreen.vue'
+import { libraryAccessControllerKey } from './library-access-controller'
 
 const route = useRoute()
 const router = useRouter()
+const desktopRuntime = isTauri()
+type LibraryAccessPhase = 'checking' | 'unlocked' | 'locked' | 'error' | 'unlocking' | 'restarting'
+const libraryAccessPhase = ref<LibraryAccessPhase>(desktopRuntime ? 'checking' : 'unlocked')
+const libraryAccessError = ref('')
+let workspaceInitialized = false
+provide(libraryAccessControllerKey, {
+  enterRestarting: () => {
+    libraryAccessPhase.value = 'restarting'
+  },
+})
 const activePage = computed(() => (route.meta.shellPage ?? route.name ?? 'dashboard') as AppPage)
 type PageDirection = 'forward' | 'backward'
 const pageOrder: Record<AppPage, number> = {
@@ -33,7 +45,6 @@ const profileEpoch = ref(0)
 const restoreNotice = ref<BackupRestoreReceipt>()
 const routeError = ref('')
 const routeErrorDetail = ref('')
-const desktopRuntime = isTauri()
 const previewProfile: ProfileSummary = {
   id: 'preview-profile',
   name: '本机学习档案',
@@ -69,11 +80,69 @@ onErrorCaptured((error, _instance, info) => {
   return false
 })
 
-onMounted(async () => {
-  systemStatus.value = await loadSystemStatus()
-  await loadProfiles()
-  await loadRestoreReceipt()
-})
+onMounted(loadLibraryAccess)
+
+async function initializeWorkspace() {
+  if (workspaceInitialized) return
+  try {
+    systemStatus.value = await loadSystemStatus()
+  } catch {
+    systemStatus.value = failure(
+      'SYSTEM_STATUS_UNAVAILABLE',
+      '资料库状态暂时无法读取。',
+      true,
+      'system-status-startup',
+    )
+  }
+  await Promise.all([loadProfiles(), loadRestoreReceipt()])
+  workspaceInitialized = true
+}
+
+async function loadLibraryAccess() {
+  if (!desktopRuntime) {
+    libraryAccessPhase.value = 'unlocked'
+    await initializeWorkspace()
+    return
+  }
+
+  libraryAccessPhase.value = 'checking'
+  libraryAccessError.value = ''
+  try {
+    const result = normalizeAppResult(await commands.libraryAccessStatus())
+    if (!result.ok) {
+      libraryAccessPhase.value = 'error'
+      libraryAccessError.value = result.error.userMessage
+      return
+    }
+    if (result.data.locked) {
+      libraryAccessPhase.value = 'locked'
+      return
+    }
+    libraryAccessPhase.value = 'unlocked'
+    await initializeWorkspace()
+  } catch {
+    libraryAccessPhase.value = 'error'
+    libraryAccessError.value = 'Windows 凭据管理器没有响应，请重新检查或使用当前账户解锁。'
+  }
+}
+
+async function unlockLibrary() {
+  if (!desktopRuntime || libraryAccessPhase.value === 'unlocking' || libraryAccessPhase.value === 'restarting') return
+  libraryAccessPhase.value = 'unlocking'
+  libraryAccessError.value = ''
+  try {
+    const result = normalizeAppResult(await commands.libraryUnlock())
+    if (!result.ok) {
+      libraryAccessPhase.value = 'error'
+      libraryAccessError.value = result.error.userMessage
+      return
+    }
+    libraryAccessPhase.value = 'restarting'
+  } catch {
+    libraryAccessPhase.value = 'error'
+    libraryAccessError.value = '当前 Windows 账户未能完成解锁，请稍后再试。'
+  }
+}
 
 const restoreNoticeCopy = computed(() => {
   const receipt = restoreNotice.value
@@ -165,7 +234,15 @@ function selectProfile(profileId: string) {
 </script>
 
 <template>
+  <LibraryAccessScreen
+    v-if="libraryAccessPhase !== 'unlocked'"
+    :phase="libraryAccessPhase"
+    :message="libraryAccessError"
+    @unlock="unlockLibrary"
+    @retry="loadLibraryAccess"
+  />
   <AppShell
+    v-else
     :profiles="shellProfiles"
     :active-profile-id="shellActiveProfileId"
     :profile-busy="profileBusy"

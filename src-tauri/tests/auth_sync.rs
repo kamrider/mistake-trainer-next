@@ -3,6 +3,7 @@ use std::{
     future::Future,
     sync::Mutex,
 };
+use tokio::sync::Notify;
 
 use mistake_trainer_next_lib::{
     infrastructure::{
@@ -70,6 +71,48 @@ impl AuthTransport for QueueTransport {
     ) -> impl Future<Output = Result<(), CloudError>> + Send + 'a {
         let result = self.revokes.lock().unwrap().pop_front().unwrap_or(Ok(()));
         async move { result }
+    }
+}
+
+#[derive(Default)]
+struct BlockingRevokeTransport {
+    entered: Notify,
+    release: Notify,
+}
+
+impl AuthTransport for BlockingRevokeTransport {
+    fn sign_up<'a>(
+        &'a self,
+        _email: &'a str,
+        _password: &'a str,
+    ) -> impl Future<Output = Result<AuthReply, CloudError>> + Send + 'a {
+        async { panic!("sign_up is not used by this test") }
+    }
+
+    fn sign_in<'a>(
+        &'a self,
+        _email: &'a str,
+        _password: &'a str,
+    ) -> impl Future<Output = Result<AuthReply, CloudError>> + Send + 'a {
+        async { panic!("sign_in is not used by this test") }
+    }
+
+    fn refresh<'a>(
+        &'a self,
+        _refresh_token: &'a str,
+    ) -> impl Future<Output = Result<AuthReply, CloudError>> + Send + 'a {
+        async { panic!("refresh is not used by this test") }
+    }
+
+    fn revoke<'a>(
+        &'a self,
+        _access_token: &'a str,
+    ) -> impl Future<Output = Result<(), CloudError>> + Send + 'a {
+        async move {
+            self.entered.notify_one();
+            self.release.notified().await;
+            Ok(())
+        }
     }
 }
 
@@ -318,5 +361,72 @@ fn disconnect_revokes_the_session_and_clears_only_the_refresh_token() {
             secrets.value("cloud-user-id").as_deref(),
             Some("33333333-3333-4333-8333-333333333333")
         );
+    });
+}
+
+#[test]
+fn disconnect_clears_the_local_session_when_remote_revocation_is_offline() {
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let manager = AuthSyncManager::default();
+        let secrets = MemorySecrets::default();
+        manager
+            .accept_verified_session(
+                &secrets,
+                AuthReply::verified_session(
+                    "33333333-3333-4333-8333-333333333333",
+                    "student@example.test",
+                    "access-secret",
+                    "refresh-secret",
+                    1_800_000_000_000,
+                ),
+            )
+            .unwrap();
+        let transport = QueueTransport {
+            replies: Mutex::new(VecDeque::new()),
+            revokes: Mutex::new(VecDeque::from([Err(CloudError::Network)])),
+        };
+
+        let status = manager.disconnect(&transport, &secrets).await.unwrap();
+
+        assert_eq!(status.kind, AuthStatusKind::SignedOut);
+        assert_eq!(secrets.value("cloud-refresh-token").as_deref(), Some(""));
+        assert_eq!(
+            secrets.value("cloud-user-id").as_deref(),
+            Some("33333333-3333-4333-8333-333333333333")
+        );
+    });
+}
+
+#[test]
+fn disconnect_clears_local_credentials_before_remote_revocation_finishes() {
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let manager = AuthSyncManager::default();
+        let secrets = MemorySecrets::default();
+        manager
+            .accept_verified_session(
+                &secrets,
+                AuthReply::verified_session(
+                    "33333333-3333-4333-8333-333333333333",
+                    "student@example.test",
+                    "access-secret",
+                    "refresh-secret",
+                    1_800_000_000_000,
+                ),
+            )
+            .unwrap();
+        let transport = BlockingRevokeTransport::default();
+        let disconnect = manager.disconnect(&transport, &secrets);
+        tokio::pin!(disconnect);
+
+        tokio::select! {
+            _ = transport.entered.notified() => {}
+            result = &mut disconnect => panic!("revoke unexpectedly completed: {result:?}"),
+        }
+
+        assert_eq!(manager.status().kind, AuthStatusKind::SignedOut);
+        assert_eq!(secrets.value("cloud-refresh-token").as_deref(), Some(""));
+
+        transport.release.notify_one();
+        assert_eq!(disconnect.await.unwrap().kind, AuthStatusKind::SignedOut);
     });
 }

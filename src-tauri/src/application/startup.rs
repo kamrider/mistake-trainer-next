@@ -4,7 +4,7 @@ use thiserror::Error;
 
 use crate::{
     infrastructure::runtime::{
-        LibraryRuntime, RuntimeError, SecretStore, initialize_local_library,
+        LibraryRuntime, RuntimeError, SecretStore, initialize_local_library, library_is_locked,
         load_restore_credentials,
     },
     modules::backup::{BackupError, begin_pending_restore, record_failed_restore},
@@ -26,6 +26,28 @@ pub enum StartupError {
         restore: BackupError,
         runtime: RuntimeError,
     },
+}
+
+pub enum LibraryStartup {
+    Ready(LibraryRuntime),
+    Locked,
+    AccessUnavailable(RuntimeError),
+}
+
+/// Applies the process-start access boundary before any SQLCipher connection
+/// can be created. The caller can still start the Tauri shell for locked and
+/// credential-error states without ever constructing `LibraryRuntime`.
+pub fn initialize_application_library_if_accessible(
+    data_root: &Path,
+    secrets: &dyn SecretStore,
+    now_utc_ms: i64,
+) -> Result<LibraryStartup, StartupError> {
+    match library_is_locked(secrets) {
+        Ok(false) => initialize_application_library(data_root, secrets, now_utc_ms)
+            .map(LibraryStartup::Ready),
+        Ok(true) => Ok(LibraryStartup::Locked),
+        Err(error) => Ok(LibraryStartup::AccessUnavailable(error)),
+    }
 }
 
 /// Opens the fixed local library root, applying any scheduled restore before the

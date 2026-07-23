@@ -1,6 +1,7 @@
 use std::{
     fmt,
     sync::{Arc, RwLock},
+    time::Duration,
 };
 
 use serde::Serialize;
@@ -277,9 +278,6 @@ impl AuthSyncManager {
             .unwrap_or_else(|value| value.into_inner())
             .as_ref()
             .map(|session| session.access_token.clone());
-        if let Some(access_token) = access_token {
-            transport.revoke(&access_token).await?;
-        }
         secrets
             .set(CLOUD_REFRESH_TOKEN, "")
             .map_err(|_| CloudError::SecretStore)?;
@@ -295,7 +293,14 @@ impl AuthSyncManager {
             .offline
             .write()
             .unwrap_or_else(|value| value.into_inner()) = false;
-        Ok(self.status())
+        let status = self.status();
+        if let Some(access_token) = access_token {
+            // Remote revocation is bounded and best-effort. Local credentials are
+            // already gone, so a slow or offline endpoint cannot block sign-out.
+            let _ =
+                tokio::time::timeout(Duration::from_secs(2), transport.revoke(&access_token)).await;
+        }
+        Ok(status)
     }
 
     pub fn mark_verification_required(&self, email: &str) -> AuthStatus {

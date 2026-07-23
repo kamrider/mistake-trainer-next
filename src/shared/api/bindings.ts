@@ -4,6 +4,9 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 
 /** Commands */
 export const commands = {
+	libraryAccessStatus: () => __TAURI_INVOKE<AppResult<LibraryAccessStatus>>("library_access_status"),
+	libraryLock: () => __TAURI_INVOKE<AppResult<LibraryAccessStatus>>("library_lock"),
+	libraryUnlock: () => __TAURI_INVOKE<AppResult<LibraryAccessStatus>>("library_unlock"),
 	backupCreate: () => typedError<AppResult<BackupSummary | null>, null>(__TAURI_INVOKE("backup_create")),
 	backupPrepareRestore: () => typedError<AppResult<BackupRestoreCandidate | null>, null>(__TAURI_INVOKE("backup_prepare_restore")),
 	backupRestore: (candidateId: string) => typedError<AppResult<boolean>, null>(__TAURI_INVOKE("backup_restore", { candidateId })),
@@ -476,6 +479,11 @@ export type LegacyScanReport = {
 	duplicateAssets: number,
 	truncated: boolean,
 	issues: LegacyIssue[],
+};
+
+export type LibraryAccessStatus = {
+	locked: boolean,
+	trustedWindowsAccount: boolean,
 };
 
 export type LibraryContext = {

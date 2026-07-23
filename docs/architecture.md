@@ -44,6 +44,32 @@ Vue feature -> generated typed command client -> Tauri command -> Rust use case
   different keyed library; backup creation and validation fail closed if foreign account
   rows are present.
 
+## Local access lock boundary
+
+- `library-lock-state` is stored beside the database and asset keys in Windows Credential
+  Manager. Existing installations without the marker start unlocked; only the exact values
+  `locked` and `unlocked` are accepted.
+- Tauri reads the marker before library startup can open SQLCipher or load an asset key and
+  keeps that exact decision in a process-scoped access gate. A later credential-store read
+  can never make a process that started fail-closed claim to have a live runtime. A locked,
+  unreadable, or malformed marker deliberately omits `LibraryRuntime`, so profile, problem,
+  review, export, backup, and capture commands cannot acquire database state even if invoked
+  outside Vue.
+- Manual lock stops the temporary LAN phone collector, persists the marker, moves Vue into
+  the root restarting boundary, and then restarts the process. Unlock first verifies the
+  database key, asset key, and account identity through the current Windows account's
+  credential access, clears the marker, and also restarts; the application never hot-loads
+  encryption keys into a process that began in the locked state.
+- Vue asks only for the typed access status before it mounts `AppShell`. Checking, locked,
+  credential-error, unlocking, and restarting states cannot start profile or library reads.
+  Browser preview remains an unlocked, command-free design surface.
+- Cloud sign-out is local-first: it clears the refresh token and in-memory session before a
+  bounded, best-effort remote revocation attempt. A slow or unreachable endpoint cannot
+  preserve local credentials or block locking indefinitely. The settings flow never claims
+  success after a credential-store or marker-write failure.
+- The current signed-in Windows account is the offline trust boundary. No weak application
+  password is derived, and locking never deletes, moves, or rewrites encrypted user data.
+
 ## Cloud backends
 
 The `CloudBackend` port is provider-neutral and selected by Rust configuration:

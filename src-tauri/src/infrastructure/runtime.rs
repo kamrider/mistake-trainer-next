@@ -19,10 +19,36 @@ const DATABASE_KEY: &str = "database-key";
 const ASSET_KEY: &str = "asset-key";
 const ACCOUNT_ID: &str = "account-id";
 const DEVICE_ID: &str = "device-id";
+pub const LIBRARY_LOCK_STATE: &str = "library-lock-state";
 
 pub trait SecretStore: Send + Sync {
     fn get(&self, name: &str) -> Result<Option<String>, String>;
     fn set(&self, name: &str, value: &str) -> Result<(), String>;
+}
+
+pub fn library_is_locked(secrets: &dyn SecretStore) -> Result<bool, RuntimeError> {
+    match secrets
+        .get(LIBRARY_LOCK_STATE)
+        .map_err(RuntimeError::SecretStore)?
+        .as_deref()
+    {
+        None | Some("unlocked") => Ok(false),
+        Some("locked") => Ok(true),
+        Some(_) => Err(RuntimeError::InvalidLibraryLockState),
+    }
+}
+
+pub fn set_library_locked(secrets: &dyn SecretStore, locked: bool) -> Result<(), RuntimeError> {
+    secrets
+        .set(
+            LIBRARY_LOCK_STATE,
+            if locked { "locked" } else { "unlocked" },
+        )
+        .map_err(RuntimeError::SecretStore)
+}
+
+pub fn validate_library_unlock_credentials(secrets: &dyn SecretStore) -> Result<(), RuntimeError> {
+    load_restore_credentials(secrets).map(|_| ())
 }
 
 pub struct KeyringSecretStore {
@@ -183,6 +209,8 @@ pub enum RuntimeError {
     InvalidAccountId,
     #[error("stored device identity is malformed")]
     InvalidDeviceId,
+    #[error("stored library lock state is malformed")]
+    InvalidLibraryLockState,
     #[error("an existing library is missing required secure credentials")]
     MissingCredentials,
     #[error("local data directory could not be created")]
@@ -203,6 +231,7 @@ impl RuntimeError {
             Self::InvalidAssetKey => "invalid_asset_key",
             Self::InvalidAccountId => "invalid_account_id",
             Self::InvalidDeviceId => "invalid_device_id",
+            Self::InvalidLibraryLockState => "invalid_library_lock_state",
             Self::MissingCredentials => "library_credentials_missing",
             Self::File(_) => "data_directory_failed",
             Self::Database(_) => "database_open_failed",
@@ -363,4 +392,54 @@ fn decode_key(value: &str) -> Option<[u8; 32]> {
         *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16).ok()?;
     }
     Some(key)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, sync::Mutex};
+
+    use super::*;
+
+    #[derive(Default)]
+    struct MemorySecretStore {
+        values: Mutex<HashMap<String, String>>,
+    }
+
+    impl SecretStore for MemorySecretStore {
+        fn get(&self, name: &str) -> Result<Option<String>, String> {
+            Ok(self
+                .values
+                .lock()
+                .map_err(|_| "secret store poisoned".to_owned())?
+                .get(name)
+                .cloned())
+        }
+
+        fn set(&self, name: &str, value: &str) -> Result<(), String> {
+            self.values
+                .lock()
+                .map_err(|_| "secret store poisoned".to_owned())?
+                .insert(name.to_owned(), value.to_owned());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn library_lock_marker_is_strict() {
+        let store = MemorySecretStore::default();
+
+        assert!(!library_is_locked(&store).expect("missing marker is unlocked"));
+        set_library_locked(&store, true).expect("lock marker");
+        assert!(library_is_locked(&store).expect("locked marker"));
+        set_library_locked(&store, false).expect("unlock marker");
+        assert!(!library_is_locked(&store).expect("unlocked marker"));
+
+        store
+            .set(LIBRARY_LOCK_STATE, "corrupt")
+            .expect("write malformed marker");
+        assert!(matches!(
+            library_is_locked(&store),
+            Err(RuntimeError::InvalidLibraryLockState)
+        ));
+    }
 }
