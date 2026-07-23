@@ -39,7 +39,7 @@
 - Modify: `labs/question-region-bakeoff/question_bakeoff/report.py` — run a selected engine and persist comparable runtime/model metadata.
 - Create: `labs/question-region-bakeoff/tests/test_rapidocr_engine.py` — deterministic box-to-region tests without loading a real model.
 - Modify: `labs/question-region-bakeoff/README.md` — exact consented 60/300-image comparison workflow.
-- Create after the gate: `src-tauri/migrations/0013_capture_region_suggestions.sql` — resumable suggestion ledger.
+- Create after the gate: `src-tauri/migrations/0014_capture_region_suggestions.sql` — resumable suggestion ledger.
 - Create after the gate: `src-tauri/src/modules/capture_suggestions.rs` — account-scoped use cases and validation.
 - Create after the gate: `src-tauri/src/commands/capture_suggestions.rs` — typed Tauri commands only.
 - Modify after the gate: `src-tauri/src/bindings.rs` and `src-tauri/src/lib.rs` — register/export commands.
@@ -242,7 +242,7 @@ git commit -m "docs: record question region model gate"
 ### Task 4: Persist resumable suggestions after the 300-image gate
 
 **Files:**
-- Create: `src-tauri/migrations/0013_capture_region_suggestions.sql`
+- Create: `src-tauri/migrations/0014_capture_region_suggestions.sql`
 - Create: `src-tauri/src/modules/capture_suggestions.rs`
 - Create: `src-tauri/src/commands/capture_suggestions.rs`
 - Modify: `src-tauri/src/infrastructure/database.rs`
@@ -374,4 +374,3 @@ git commit -m "feat: review automatic question regions on desktop"
 - Mathpix STEM OCR: <https://docs.mathpix.com/>
 - pix2tex formula OCR: <https://github.com/lukas-blecher/LaTeX-OCR>
 - MolScribe chemistry recognition: <https://github.com/thomas0809/MolScribe>
-
