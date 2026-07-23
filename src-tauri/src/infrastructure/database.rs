@@ -270,7 +270,7 @@ fn run_migrations_to_v11(connection: &mut Connection) -> Result<(), DatabaseErro
 
 pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> {
     let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if version > 12 {
+    if version > 13 {
         return Err(DatabaseError::UnsupportedSchema(version));
     }
     if version < 11 {
@@ -281,6 +281,13 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
         let transaction = connection.transaction()?;
         transaction.execute_batch(include_str!("../../migrations/0012_asset_derivations.sql"))?;
         transaction.pragma_update(None, "user_version", 12)?;
+        transaction.commit()?;
+    }
+    let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version == 12 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(include_str!("../../migrations/0013_sync_merge_state.sql"))?;
+        transaction.pragma_update(None, "user_version", 13)?;
         transaction.commit()?;
     }
     Ok(())

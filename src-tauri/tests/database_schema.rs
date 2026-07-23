@@ -32,6 +32,7 @@ fn initial_migration_creates_the_offline_first_core_schema() {
         "legacy_import_entities",
         "asset_derivations",
         "capture_source_retention",
+        "sync_entity_snapshots",
     ];
     for table in expected {
         let found: i64 = connection
@@ -47,7 +48,7 @@ fn initial_migration_creates_the_offline_first_core_schema() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        12
+        13
     );
 }
 
@@ -94,7 +95,7 @@ fn version_nine_library_adds_reversible_legacy_import_ledger_without_changing_ro
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        12
+        13
     );
     let import_columns = connection
         .prepare("SELECT name FROM pragma_table_info('legacy_imports') ORDER BY cid")
@@ -178,7 +179,7 @@ fn version_two_library_upgrades_without_changing_existing_problem_data() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        12
+        13
     );
 
     let staged_role: String = connection
@@ -241,7 +242,7 @@ fn version_five_library_adds_active_profile_preferences_without_changing_existin
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        12
+        13
     );
 }
 
@@ -312,7 +313,7 @@ fn version_six_library_adds_exam_state_without_changing_existing_session_progres
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        12
+        13
     );
 
     let invalid_phase = connection.execute(
@@ -439,7 +440,7 @@ fn version_seven_library_adds_focus_state_without_changing_existing_preferences_
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        12
+        13
     );
 
     assert!(connection.execute(
@@ -565,7 +566,7 @@ fn version_eight_library_adds_review_history_index_without_changing_existing_row
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        12
+        13
     );
 }
 
@@ -685,7 +686,7 @@ fn version_ten_library_adds_cloud_sync_state_without_changing_existing_data() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        12
+        13
     );
     assert_eq!(
         connection.query_row(
@@ -776,6 +777,126 @@ fn version_eleven_library_adds_non_destructive_crop_ledger_without_changing_capt
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        12
+        13
     );
+}
+
+#[test]
+fn version_twelve_library_adds_sync_merge_state_without_changing_open_conflicts() {
+    let directory = tempdir().expect("temp directory");
+    let path = directory.path().join("library.db");
+    let mut connection =
+        open_encrypted_database(&path, "sync-merge-upgrade-key").expect("open database");
+    for migration in [
+        include_str!("../migrations/0001_initial.sql"),
+        include_str!("../migrations/0002_review_sessions.sql"),
+        include_str!("../migrations/0003_capture_inbox.sql"),
+        include_str!("../migrations/0004_capture_staged_roles.sql"),
+        include_str!("../migrations/0005_profile_preferences.sql"),
+        include_str!("../migrations/0006_account_preferences.sql"),
+        include_str!("../migrations/0007_review_exam.sql"),
+        include_str!("../migrations/0008_review_focus.sql"),
+        include_str!("../migrations/0009_review_history_index.sql"),
+        include_str!("../migrations/0010_legacy_import_ledger.sql"),
+        include_str!("../migrations/0011_cloud_sync_state.sql"),
+        include_str!("../migrations/0012_asset_derivations.sql"),
+    ] {
+        connection.execute_batch(migration).unwrap();
+    }
+    connection.pragma_update(None, "user_version", 12).unwrap();
+    connection
+        .execute(
+            "INSERT INTO sync_conflicts(
+               id, account_id, profile_id, entity_type, entity_id, field_name,
+               local_value_json, remote_value_json, base_revision, created_at_utc_ms
+             ) VALUES(
+               'conflict', 'account', 'profile', 'problem', 'problem', 'note',
+               '\"local\"', '\"remote\"', 1, 2
+             )",
+            [],
+        )
+        .unwrap();
+
+    run_migrations(&mut connection).expect("upgrade schema v12 to v13");
+
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .unwrap(),
+        13
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM sync_conflicts", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM sync_entity_snapshots", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+        0
+    );
+
+    let conflict_columns = connection
+        .prepare("SELECT name FROM pragma_table_info('sync_conflicts') ORDER BY cid")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        conflict_columns,
+        [
+            "id",
+            "account_id",
+            "profile_id",
+            "entity_type",
+            "entity_id",
+            "field_name",
+            "local_value_json",
+            "remote_value_json",
+            "base_revision",
+            "created_at_utc_ms",
+            "resolved_at_utc_ms",
+            "resolution",
+            "resolved_value_json",
+        ]
+    );
+
+    let duplicate_open = connection.execute(
+        "INSERT INTO sync_conflicts(
+           id, account_id, profile_id, entity_type, entity_id, field_name,
+           local_value_json, remote_value_json, base_revision, created_at_utc_ms
+         ) VALUES(
+           'duplicate', 'account', 'profile', 'problem', 'problem', 'note',
+           '\"new local\"', '\"new remote\"', 2, 3
+         )",
+        [],
+    );
+    assert!(duplicate_open.is_err());
+
+    connection
+        .execute(
+            "UPDATE sync_conflicts
+             SET resolution = 'local', resolved_value_json = local_value_json,
+                 resolved_at_utc_ms = 4
+             WHERE id = 'conflict'",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO sync_conflicts(
+               id, account_id, profile_id, entity_type, entity_id, field_name,
+               local_value_json, remote_value_json, base_revision, created_at_utc_ms
+             ) VALUES(
+               'next', 'account', 'profile', 'problem', 'problem', 'note',
+               '\"later local\"', '\"later remote\"', 3, 5
+             )",
+            [],
+        )
+        .expect("a later conflict is allowed after audit resolution");
 }

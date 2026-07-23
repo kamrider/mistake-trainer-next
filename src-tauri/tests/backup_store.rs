@@ -124,6 +124,66 @@ fn remove_v12_derivation_schema(database: &Connection) {
         .unwrap();
 }
 
+fn remove_v13_sync_merge_schema(database: &Connection) {
+    database
+        .execute_batch(
+            "DROP INDEX sync_conflicts_open_field_idx;
+         DROP INDEX sync_entity_snapshots_profile_idx;
+         DROP TABLE sync_entity_snapshots;
+         ALTER TABLE sync_conflicts DROP COLUMN resolved_value_json;
+         ALTER TABLE sync_conflicts DROP COLUMN resolution;",
+        )
+        .unwrap();
+}
+
+#[test]
+fn schema_v13_backup_requires_merge_state_and_rejects_foreign_snapshots() {
+    let missing_index_fixture = fixture();
+    let (_, package) = created_package(&missing_index_fixture);
+    {
+        let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        database
+            .execute("DROP INDEX sync_conflicts_open_field_idx", [])
+            .unwrap();
+        database
+            .pragma_update(None, "journal_mode", "DELETE")
+            .unwrap();
+    }
+    refresh_database_manifest(&package, 13);
+    assert!(matches!(
+        validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID),
+        Err(BackupError::Integrity)
+    ));
+
+    let foreign_snapshot_fixture = fixture();
+    foreign_snapshot_fixture
+        .connection
+        .lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO sync_entity_snapshots(
+               account_id, profile_id, entity_type, entity_id, revision,
+               payload_json, updated_at_utc_ms
+             ) VALUES(
+               'foreign-account', NULL, 'learner_profile', 'foreign-profile',
+               1, '{\"name\":\"foreign\"}', 1
+             )",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        create_backup(
+            &foreign_snapshot_fixture.connection,
+            &foreign_snapshot_fixture.blob_root,
+            DATABASE_KEY,
+            ACCOUNT_ID,
+            foreign_snapshot_fixture.destination.path(),
+            1_725_000_000_000,
+        ),
+        Err(BackupError::ForeignAccountData)
+    ));
+}
+
 #[test]
 fn schema_v11_backup_preserves_cloud_progress_and_requires_the_complete_shape() {
     let fixture = fixture();
@@ -151,7 +211,7 @@ fn schema_v11_backup_preserves_cloud_progress_and_requires_the_complete_shape() 
     let (_, package) = created_package(&fixture);
     let manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(package.join("manifest.json")).unwrap()).unwrap();
-    assert_eq!(manifest["schemaVersion"], 12);
+    assert_eq!(manifest["schemaVersion"], 13);
     validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID).unwrap();
     {
         let database =
@@ -499,6 +559,7 @@ fn validation_requires_review_sessions_exactly_when_the_schema_requires_it() {
 
     {
         let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        remove_v13_sync_merge_schema(&database);
         remove_v12_derivation_schema(&database);
         remove_v11_cloud_schema(&database);
         database
@@ -672,6 +733,7 @@ fn validation_requires_review_history_index_only_for_schema_v9() {
 
     {
         let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        remove_v13_sync_merge_schema(&database);
         remove_v12_derivation_schema(&database);
         remove_v11_cloud_schema(&database);
         database
@@ -711,6 +773,7 @@ fn validation_requires_legacy_import_ledger_only_for_schema_v10() {
 
     {
         let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        remove_v13_sync_merge_schema(&database);
         remove_v12_derivation_schema(&database);
         remove_v11_cloud_schema(&database);
         database

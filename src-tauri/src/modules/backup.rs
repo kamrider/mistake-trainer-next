@@ -20,7 +20,7 @@ use crate::infrastructure::{
 };
 
 const FORMAT_VERSION: i32 = 1;
-const CURRENT_SCHEMA_VERSION: i64 = 12;
+const CURRENT_SCHEMA_VERSION: i64 = 13;
 const DATABASE_FILE: &str = "library.db";
 const MANIFEST_FILE: &str = "manifest.json";
 const ASSETS_DIRECTORY: &str = "assets";
@@ -1074,6 +1074,54 @@ fn ensure_single_account(
     account_id: &str,
     schema_version: i64,
 ) -> Result<(), BackupError> {
+    let has_sync_snapshot_table = table_exists(connection, "sync_entity_snapshots")?;
+    let has_conflict_resolution = column_exists(connection, "sync_conflicts", "resolution")?;
+    let has_conflict_resolved_value =
+        column_exists(connection, "sync_conflicts", "resolved_value_json")?;
+    if (schema_version < 13
+        && (has_sync_snapshot_table || has_conflict_resolution || has_conflict_resolved_value))
+        || (schema_version >= 13
+            && (!has_sync_snapshot_table
+                || !has_conflict_resolution
+                || !has_conflict_resolved_value))
+    {
+        return Err(BackupError::Integrity);
+    }
+    if schema_version >= 13 {
+        if !table_columns_match(
+            connection,
+            "sync_entity_snapshots",
+            &[
+                "account_id",
+                "profile_id",
+                "entity_type",
+                "entity_id",
+                "revision",
+                "payload_json",
+                "updated_at_utc_ms",
+            ],
+        )? || !index_columns_match(
+            connection,
+            "sync_entity_snapshots_profile_idx",
+            &["account_id", "profile_id", "entity_type", "entity_id"],
+        )? || !index_columns_match(
+            connection,
+            "sync_conflicts_open_field_idx",
+            &["account_id", "entity_type", "entity_id", "field_name"],
+        )? {
+            return Err(BackupError::Integrity);
+        }
+        let has_foreign_snapshot: i64 = connection.query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM sync_entity_snapshots WHERE account_id <> ?1 LIMIT 1
+             )",
+            [account_id],
+            |row| row.get(0),
+        )?;
+        if has_foreign_snapshot != 0 {
+            return Err(BackupError::ForeignAccountData);
+        }
+    }
     let derivation_tables = ["asset_derivations", "capture_source_retention"];
     let derivation_table_count = derivation_tables
         .iter()
