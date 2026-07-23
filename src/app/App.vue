@@ -12,6 +12,17 @@ import AppShell, { type AppPage } from './AppShell.vue'
 const route = useRoute()
 const router = useRouter()
 const activePage = computed(() => (route.meta.shellPage ?? route.name ?? 'dashboard') as AppPage)
+type PageDirection = 'forward' | 'backward'
+const pageOrder: Record<AppPage, number> = {
+  dashboard: 0,
+  inbox: 1,
+  library: 2,
+  review: 3,
+  report: 4,
+  settings: 5,
+}
+const pageDirection = ref<PageDirection>('forward')
+const pageTransitionName = computed(() => `page-${pageDirection.value}`)
 const systemStatus = ref<AppResult<SystemStatus>>()
 const statusLabel = computed(() => systemStatusLabel(systemStatus.value))
 const profiles = ref<ProfileSummary[]>([])
@@ -40,6 +51,13 @@ const shellActiveProfileId = computed(() =>
 watch(() => route.fullPath, () => {
   routeError.value = ''
   routeErrorDetail.value = ''
+})
+
+watch(activePage, (next, previous) => {
+  if (next === previous) return
+  pageDirection.value = (pageOrder[next] ?? 0) >= (pageOrder[previous] ?? 0)
+    ? 'forward'
+    : 'backward'
 })
 
 onErrorCaptured((error, _instance, info) => {
@@ -184,12 +202,13 @@ function selectProfile(profileId: string) {
     </Transition>
     <RouterView v-slot="{ Component }">
       <Transition
-        name="page"
+        :name="pageTransitionName"
         mode="out-in"
       >
         <div
           :key="`${route.fullPath}:${profileEpoch}`"
           class="route-page"
+          :data-direction="pageDirection"
         >
           <section
             v-if="routeError"
@@ -246,9 +265,16 @@ function selectProfile(profileId: string) {
 
 <style>
 .route-page { min-width: 0; min-height: 100vh; }
-.page-enter-active, .page-leave-active { transition: opacity var(--motion-page) var(--ease-standard), transform var(--motion-page) var(--ease-standard); }
-.page-enter-from { opacity: 0; transform: translateY(8px); }
-.page-leave-to { opacity: 0; transform: translateY(-4px); }
+.page-forward-enter-active, .page-backward-enter-active { transition: opacity 180ms var(--ease-standard), transform 180ms var(--ease-standard); }
+.page-forward-leave-active, .page-backward-leave-active { transition: opacity 100ms var(--ease-standard), transform 100ms var(--ease-standard); }
+.page-forward-enter-from { opacity: 0; transform: translate3d(14px,0,0); }
+.page-forward-leave-to { opacity: 0; transform: translate3d(-6px,0,0); }
+.page-backward-enter-from { opacity: 0; transform: translate3d(-14px,0,0); }
+.page-backward-leave-to { opacity: 0; transform: translate3d(6px,0,0); }
+@media (prefers-reduced-motion: reduce) {
+  .page-forward-enter-active, .page-forward-leave-active, .page-backward-enter-active, .page-backward-leave-active { transition: none; }
+  .page-forward-enter-from, .page-forward-leave-to, .page-backward-enter-from, .page-backward-leave-to { opacity: 1; transform: none; }
+}
 .restore-notice { position: fixed; z-index: 60; top: 20px; right: 24px; display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 11px; align-items: center; width: min(440px,calc(100vw - 48px)); padding: 14px 15px; color: #fffdf7; border: 1px solid rgba(255,255,255,.28); border-radius: 15px; background: #365446; box-shadow: 0 18px 46px rgba(26,38,33,.24); }
 .restore-notice.warning { background: #874a38; }.restore-notice span { display: grid; gap: 3px; }.restore-notice strong { font-size: 13px; }.restore-notice small { color: rgba(255,253,247,.82); font-size: 11px; line-height: 1.5; }.restore-notice button { display: grid; width: 30px; height: 30px; padding: 0; place-items: center; color: inherit; border: 0; border-radius: 50%; background: rgba(255,255,255,.1); cursor: pointer; }
 .restore-notice-enter-active,.restore-notice-leave-active { transition: opacity var(--motion-standard) var(--ease-standard), transform var(--motion-page) var(--ease-standard); }.restore-notice-enter-from,.restore-notice-leave-to { opacity: 0; transform: translateY(-10px) scale(.98); }

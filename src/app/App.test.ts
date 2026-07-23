@@ -18,6 +18,32 @@ describe('App', () => {
     expect(await screen.findByRole('heading', { name: '题库' })).toBeVisible()
   })
 
+  it('exposes forward and backward direction for bounded page motion', async () => {
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/')
+    await router.isReady()
+
+    const view = render(App, {
+      global: {
+        plugins: [router],
+        stubs: { transition: false },
+      },
+    })
+
+    await user.click(screen.getByRole('button', { name: '设置' }))
+    await waitFor(() => {
+      expect(router.currentRoute.value.name).toBe('settings')
+      expect(view.container.querySelector('.route-page')).toHaveAttribute('data-direction', 'forward')
+    })
+
+    await user.click(screen.getByRole('button', { name: '题库' }))
+    await waitFor(() => {
+      expect(router.currentRoute.value.name).toBe('library')
+      expect(view.container.querySelector('.route-page')).toHaveAttribute('data-direction', 'backward')
+    })
+  })
+
   it('keeps rendering content while cycling through every sidebar page', async () => {
     const user = userEvent.setup()
     const router = createAppRouter(createMemoryHistory())

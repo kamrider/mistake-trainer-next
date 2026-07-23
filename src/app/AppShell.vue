@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import {
   BookOpen,
   ChartNoAxesColumnIncreasing,
@@ -13,7 +14,7 @@ import type { ProfileSummary } from '../shared/api/bindings'
 
 export type AppPage = 'dashboard' | 'inbox' | 'library' | 'review' | 'report' | 'settings'
 
-defineProps<{
+const props = defineProps<{
   profiles: ProfileSummary[]
   activeProfileId: string
   profileBusy: boolean
@@ -47,6 +48,10 @@ const navigation = [
   { id: 'report', label: '学习报告', icon: ChartNoAxesColumnIncreasing },
   { id: 'settings', label: '设置', icon: Settings },
 ] as const
+
+const activeNavigationIndex = computed(() =>
+  Math.max(0, navigation.findIndex(item => item.id === props.activePage)),
+)
 </script>
 
 <template>
@@ -60,7 +65,18 @@ const navigation = [
         <span><strong>Mistake</strong><small>Trainer Next</small></span>
       </div>
 
-      <nav aria-label="主导航">
+      <nav
+        aria-label="主导航"
+        :style="{
+          '--active-index': activeNavigationIndex,
+          '--active-y': `${activeNavigationIndex * 48}px`,
+          '--active-x': `${activeNavigationIndex * 100}%`,
+        }"
+      >
+        <span
+          class="nav-indicator"
+          aria-hidden="true"
+        />
         <button
           v-for="item in navigation"
           :key="item.id"
@@ -115,14 +131,18 @@ const navigation = [
 .brand strong, .brand small { display: block; }
 .brand strong { font-family: Georgia, serif; font-size: 17px; letter-spacing: .02em; }
 .brand small { margin-top: 1px; color: var(--ink-muted); font-size: 10px; letter-spacing: .13em; text-transform: uppercase; }
-nav { display: grid; gap: 5px; }
-.nav-item { display: flex; gap: 12px; align-items: center; width: 100%; min-height: 43px; padding: 0 13px; color: var(--ink-muted); border: 0; border-radius: 11px; background: transparent; cursor: pointer; text-align: left; transition: color var(--motion-standard) var(--ease-standard), background var(--motion-standard) var(--ease-standard), transform var(--motion-feedback) var(--ease-standard); }
+nav { position: relative; display: grid; gap: 5px; isolation: isolate; }
+.nav-indicator { position: absolute; z-index: -1; top: 0; left: 0; width: 100%; height: 43px; border: 1px solid rgba(33,51,45,.08); border-radius: 11px; background: var(--green-soft); box-shadow: 0 8px 22px rgba(33,51,45,.06); pointer-events: none; transform: translate3d(0,var(--active-y),0); transition: transform var(--motion-page) var(--ease-standard), border-radius var(--motion-standard) var(--ease-standard); will-change: transform; }
+.nav-item { position: relative; z-index: 1; display: flex; gap: 12px; align-items: center; width: 100%; min-height: 43px; padding: 0 13px; color: var(--ink-muted); border: 0; border-radius: 11px; background: transparent; cursor: pointer; text-align: left; transition: color var(--motion-standard) var(--ease-standard), background var(--motion-standard) var(--ease-standard), transform var(--motion-feedback) var(--ease-standard); }
 .nav-item:hover { color: var(--ink); background: rgba(232,221,199,.52); }
 .nav-item:active { transform: scale(.985); }
-.nav-item.active { color: var(--green-deep); background: var(--green-soft); font-weight: 700; }
+.nav-item.active { color: var(--green-deep); background: transparent; font-weight: 700; }
+.nav-item svg { transition: transform var(--motion-standard) var(--ease-standard); }
+.nav-item.active svg { transform: scale(1.06); }
 .rail-footer { display: grid; gap: 12px; margin-top: auto; }
 .sync-state { display: flex; gap: 7px; align-items: center; padding: 0 11px; color: var(--ink-muted); font-size: 12px; }
 .sync-state svg { color: #657f70; }
 .app-content { min-width: 0; }
-@media (max-width: 760px) { .app-frame { grid-template-columns: 1fr; padding-bottom: 68px; } .side-rail { position: fixed; z-index: 20; top: auto; right: 0; bottom: 0; left: 0; height: 68px; padding: 8px 10px; border-top: 1px solid var(--line); border-right: 0; } .brand, .rail-footer { display: none; } nav { display: grid; grid-template-columns: repeat(6,1fr); } .nav-item { justify-content: center; min-height: 50px; padding: 0; } .nav-item span { display: none; } }
+@media (max-width: 760px) { .app-frame { grid-template-columns: 1fr; padding-bottom: 68px; } .side-rail { position: fixed; z-index: 20; top: auto; right: 0; bottom: 0; left: 0; height: 68px; padding: 8px 10px; border-top: 1px solid var(--line); border-right: 0; } .brand, .rail-footer { display: none; } nav { display: grid; grid-template-columns: repeat(6,1fr); } .nav-indicator { width: calc(100% / 6); height: 50px; transform: translate3d(var(--active-x),0,0); } .nav-item { justify-content: center; min-height: 50px; padding: 0; } .nav-item span { display: none; } }
+@media (prefers-reduced-motion: reduce) { .nav-indicator, .nav-item, .nav-item svg { transition: none; } }
 </style>
