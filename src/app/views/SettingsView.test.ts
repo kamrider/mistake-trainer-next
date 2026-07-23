@@ -19,6 +19,9 @@ const api = vi.hoisted(() => ({
   subjectPreferencesSave: vi.fn(),
   reviewPreferencesGet: vi.fn(),
   reviewPreferencesSave: vi.fn(),
+  syncConflictList: vi.fn(),
+  syncConflictResolve: vi.fn(),
+  syncConflictResolveEntity: vi.fn(),
 }))
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => true }))
 vi.mock('../../shared/api/bindings', () => ({ commands: api }))
@@ -43,6 +46,34 @@ describe('SettingsView', () => {
     } })
     api.reviewPreferencesGet.mockResolvedValue({ ok: true, data: { focusPolicy: 'off' } })
     api.reviewPreferencesSave.mockResolvedValue({ ok: true, data: { focusPolicy: 'every_10' } })
+    api.syncConflictList.mockResolvedValue({ ok: true, data: [] })
+    api.syncConflictResolve.mockResolvedValue({ ok: true, data: [] })
+    api.syncConflictResolveEntity.mockResolvedValue({ ok: true, data: [] })
+  })
+
+  it('places real unresolved sync choices below the library overview', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 1, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 1,
+      localEncryptionReady: true, cloudSyncConfigured: true,
+    } })
+    api.syncConflictList.mockResolvedValue({ ok: true, data: [{
+      id: 'conflict-note',
+      entityType: 'problem',
+      entityId: 'opaque-problem',
+      entityLabel: '数学',
+      fieldName: 'note',
+      localValue: { kind: 'string', value: '本机笔记' },
+      remoteValue: { kind: 'string', value: '云端笔记' },
+      createdAtUtcMs: 1_725_000_000_000,
+    }] })
+    render(SettingsView)
+
+    expect(await screen.findByRole('heading', { name: '本机和云端改了同一处内容' })).toBeVisible()
+    expect(screen.getByText('本机笔记')).toBeVisible()
+    expect(screen.getByText('云端笔记')).toBeVisible()
+    expect(screen.queryByText('opaque-problem')).not.toBeInTheDocument()
+    expect(screen.queryByText('只呈现同字段真冲突；不同字段自动合并。')).not.toBeInTheDocument()
   })
 
   it('configures builtin and custom subjects plus capture sound', async () => {
