@@ -2,11 +2,14 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import cv2
 import numpy as np
 
 from question_bakeoff.cli import main
+from question_bakeoff.engine import resolve_engine
+from question_bakeoff.opencv_baseline import analyze_image
 from question_bakeoff.report import OUTPUT_MARKER_VALUE
 
 
@@ -48,6 +51,43 @@ def write_fixture(root: Path) -> Path:
 
 
 class CliReportTests(unittest.TestCase):
+    def test_resolve_engine_rejects_unknown_name(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported question-region engine"):
+            resolve_engine("chat-model")
+
+    def test_cli_selects_the_named_engine_without_global_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = write_fixture(root)
+            selected = []
+            fake_report = {
+                "sampleCount": 0,
+                "aggregate": {
+                    "contentCutRate": 0.0,
+                    "falseSplitRate": 0.0,
+                },
+            }
+
+            with patch(
+                "question_bakeoff.cli.write_benchmark_report",
+                side_effect=lambda _path, _manifest, _output, *, analyzer: (
+                    selected.append(analyzer) or fake_report
+                ),
+            ):
+                exit_code = main(
+                    [
+                        "run",
+                        str(manifest),
+                        "--output",
+                        str(root / "report"),
+                        "--engine",
+                        "opencv-whitespace",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(selected, [analyze_image])
+
     def test_run_writes_deterministic_path_safe_report_html_and_overlay(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

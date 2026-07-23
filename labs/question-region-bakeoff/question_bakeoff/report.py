@@ -17,8 +17,9 @@ import numpy
 import PIL
 from PIL import Image, ImageDraw, ImageOps
 
+from .engine import Analyzer
 from .metrics import AggregateMetrics, SampleMetrics, aggregate_metrics, evaluate_sample
-from .opencv_baseline import Analysis, analyze_image
+from .opencv_baseline import Analysis
 from .schema import BenchmarkManifest, BenchmarkSample, NormalizedPoint, NormalizedRect, Suggestion
 
 
@@ -280,6 +281,8 @@ def write_benchmark_report(
     manifest_path: Path,
     manifest: BenchmarkManifest,
     output: Path,
+    *,
+    analyzer: Analyzer,
 ) -> dict[str, Any]:
     output = output.absolute()
     if output == output.parent or not output.name:
@@ -291,7 +294,7 @@ def write_benchmark_report(
     analyses: list[Analysis] = []
     metrics: list[SampleMetrics] = []
     for sample in manifest.samples:
-        analysis = analyze_image(sample.image_path)
+        analysis = analyzer(sample.image_path)
         analyses.append(analysis)
         metrics.append(evaluate_sample(sample, analysis.suggestions))
     report = _report_document(manifest_path, manifest, analyses, metrics)

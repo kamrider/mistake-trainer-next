@@ -6,8 +6,9 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-from .report import ReportError, write_benchmark_report
+from .engine import resolve_engine
 from .opencv_baseline import ENGINE_NAME, ENGINE_VERSION
+from .report import ReportError, write_benchmark_report
 from .schema import ManifestError, load_manifest
 
 
@@ -20,9 +21,10 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser("self-check", help="print the isolated lab runtime versions")
     validate = commands.add_parser("validate", help="validate consent, paths, and labels")
     validate.add_argument("manifest", type=Path)
-    run = commands.add_parser("run", help="run OpenCV baseline and write an auditable report")
+    run = commands.add_parser("run", help="run a named engine and write an auditable report")
     run.add_argument("manifest", type=Path)
     run.add_argument("--output", type=Path, required=True)
+    run.add_argument("--engine", default="opencv-whitespace")
     return parser
 
 
@@ -53,7 +55,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.command == "validate":
             print(f"validated {len(manifest.samples)} consented sample(s)")
             return 0
-        report = write_benchmark_report(manifest_path, manifest, arguments.output)
+        analyzer = resolve_engine(arguments.engine)
+        report = write_benchmark_report(
+            manifest_path,
+            manifest,
+            arguments.output,
+            analyzer=analyzer,
+        )
         aggregate = report["aggregate"]
         print(
             f"wrote {report['sampleCount']} sample(s); "
