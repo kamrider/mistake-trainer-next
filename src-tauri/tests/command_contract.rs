@@ -105,3 +105,40 @@ fn legacy_command_identifiers_do_not_expose_runtime_identity_or_paths() {
         }
     }
 }
+
+#[test]
+fn storage_location_status_serializes_only_redacted_capacity_information() {
+    use mistake_trainer_next_lib::commands::storage::{StorageLocationKind, StorageLocationStatus};
+
+    let value = serde_json::to_value(StorageLocationStatus {
+        kind: StorageLocationKind::Custom,
+        location_label: "自定义位置 · Study".to_owned(),
+        database_bytes: 4_096.0,
+        asset_bytes: 8_192.0,
+        migration_pending: false,
+    })
+    .expect("serialize storage status");
+    assert_eq!(
+        value,
+        json!({
+            "kind": "custom",
+            "locationLabel": "自定义位置 · Study",
+            "databaseBytes": 4096.0,
+            "assetBytes": 8192.0,
+            "migrationPending": false
+        })
+    );
+
+    let serialized = value.to_string();
+    for forbidden in [
+        "C:\\",
+        "/Users/",
+        "library.db",
+        "accountId",
+        "profileId",
+        "databaseKey",
+        "assetKey",
+    ] {
+        assert!(!serialized.contains(forbidden));
+    }
+}

@@ -52,6 +52,7 @@ pub fn run() {
                         }
                     }
                 };
+            app.manage(commands::storage::ApplicationControlRoot(control_root));
             app.manage(access_gate);
             app.manage(modules::auth_sync::AuthSyncManager::default());
             app.manage(modules::auth_sync::CloudAuthRuntime::from_build_environment());

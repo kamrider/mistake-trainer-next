@@ -11,6 +11,9 @@ export const commands = {
 	backupPrepareRestore: () => typedError<AppResult<BackupRestoreCandidate | null>, null>(__TAURI_INVOKE("backup_prepare_restore")),
 	backupRestore: (candidateId: string) => typedError<AppResult<boolean>, null>(__TAURI_INVOKE("backup_restore", { candidateId })),
 	backupRestoreStatus: () => __TAURI_INVOKE<AppResult<BackupRestoreReceipt | null>>("backup_restore_status"),
+	storageStatus: () => typedError<AppResult<StorageLocationStatus>, null>(__TAURI_INVOKE("storage_status")),
+	storageMigrateSelect: () => typedError<AppResult<StorageMigrationReceipt | null>, null>(__TAURI_INVOKE("storage_migrate_select")),
+	storageMigrationReceipt: () => __TAURI_INVOKE<AppResult<StorageMigrationReceipt | null>>("storage_migration_receipt"),
 	systemStatus: () => __TAURI_INVOKE<AppResult<SystemStatus>>("system_status"),
 	profileList: () => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_list"),
 	profileCreate: (input: ProfileNameInput) => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_create", { input }),
@@ -735,6 +738,25 @@ export type SettingsOverview = {
 	unresolvedConflictCount: number,
 	localEncryptionReady: boolean,
 	cloudSyncConfigured: boolean,
+};
+
+export type StorageLocationKind = "default" | "custom";
+
+export type StorageLocationStatus = {
+	kind: StorageLocationKind,
+	locationLabel: string,
+	databaseBytes: number | null,
+	assetBytes: number | null,
+	migrationPending: boolean,
+};
+
+export type StorageMigrationOutcome = "scheduled" | "moved" | "rolled_back" | "cleanup_required";
+
+export type StorageMigrationReceipt = {
+	outcome: StorageMigrationOutcome,
+	destinationLabel: string,
+	copiedAssetCount: number,
+	copiedBytes: number | null,
 };
 
 export type SubjectActivity = {

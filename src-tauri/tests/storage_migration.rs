@@ -5,10 +5,12 @@ use std::{
 };
 
 use mistake_trainer_next_lib::{
+    application::result::AppResult,
     application::startup::{
         LibraryStartup, StartupAccessUnavailable, initialize_application_library,
         initialize_configured_application_library_if_accessible,
     },
+    commands::storage::{StorageLocationKind, storage_status_for},
     infrastructure::{
         assets::{encrypt_asset, plaintext_sha256},
         runtime::{LibraryRuntime, SecretStore, initialize_local_library},
@@ -163,6 +165,45 @@ fn referenced_paths(runtime: &LibraryRuntime) -> HashSet<String> {
 fn sha256(path: &Path) -> String {
     let bytes = fs::read(path).unwrap();
     format!("{:x}", Sha256::digest(bytes))
+}
+
+#[test]
+fn storage_status_reports_bounded_sizes_and_pending_state_without_a_path() {
+    let fixture = fixture();
+    let expected_asset_bytes = fs::metadata(fixture.runtime.blob_root.join("aa/question.enc"))
+        .unwrap()
+        .len()
+        + fs::metadata(fixture.runtime.blob_root.join("aa/answer.enc"))
+            .unwrap()
+            .len();
+
+    let AppResult::Success { data, .. } =
+        storage_status_for(&fixture.runtime, &fixture.control_root)
+    else {
+        panic!("default storage status should load")
+    };
+    assert_eq!(data.kind, StorageLocationKind::Default);
+    assert_eq!(data.location_label, "默认位置 · Windows 应用数据");
+    assert!(data.database_bytes > 0.0);
+    assert_eq!(data.asset_bytes, expected_asset_bytes as f64);
+    assert!(!data.migration_pending);
+    let serialized = serde_json::to_string(&data).unwrap();
+    assert!(!serialized.contains(&fixture.control_root.to_string_lossy().to_string()));
+
+    let destination = tempdir().unwrap();
+    stage_storage_migration(
+        &fixture.runtime,
+        &fixture.control_root,
+        destination.path(),
+        200,
+    )
+    .unwrap();
+    let AppResult::Success { data, .. } =
+        storage_status_for(&fixture.runtime, &fixture.control_root)
+    else {
+        panic!("status should remain available while restart is pending")
+    };
+    assert!(data.migration_pending);
 }
 
 #[test]

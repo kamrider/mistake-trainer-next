@@ -3,6 +3,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{self, Read, Write},
     path::{Component, Path, PathBuf},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -141,8 +142,68 @@ enum JournalPointerState {
     Destination,
 }
 
+#[derive(Clone)]
+pub struct StorageMigrationSource {
+    connection: Arc<Mutex<Connection>>,
+    blob_root: PathBuf,
+    asset_key: [u8; 32],
+    database_key: String,
+    account_id: String,
+}
+
+impl std::fmt::Debug for StorageMigrationSource {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StorageMigrationSource")
+            .field("connection", &"<encrypted database>")
+            .field("blob_root", &"<application storage>")
+            .field("asset_key", &"<redacted>")
+            .field("database_key", &"<redacted>")
+            .field("account_id", &"<redacted>")
+            .finish()
+    }
+}
+
+impl StorageMigrationSource {
+    pub fn from_runtime(runtime: &LibraryRuntime) -> Self {
+        Self {
+            connection: Arc::clone(&runtime.connection),
+            blob_root: runtime.blob_root.clone(),
+            asset_key: runtime.asset_key,
+            database_key: runtime.database_key().to_owned(),
+            account_id: runtime.account_id().to_owned(),
+        }
+    }
+
+    fn account_id(&self) -> &str {
+        &self.account_id
+    }
+
+    fn database_key(&self) -> &str {
+        &self.database_key
+    }
+
+    pub(crate) fn library_root(&self) -> Option<&Path> {
+        self.blob_root.parent()
+    }
+}
+
 pub fn stage_storage_migration(
     runtime: &LibraryRuntime,
+    control_root: &Path,
+    selected_parent: &Path,
+    now_utc_ms: i64,
+) -> Result<StorageMigrationReceipt, StorageMigrationError> {
+    stage_storage_migration_from_source(
+        &StorageMigrationSource::from_runtime(runtime),
+        control_root,
+        selected_parent,
+        now_utc_ms,
+    )
+}
+
+pub fn stage_storage_migration_from_source(
+    source: &StorageMigrationSource,
     control_root: &Path,
     selected_parent: &Path,
     now_utc_ms: i64,
@@ -151,7 +212,7 @@ pub fn stage_storage_migration(
         return Err(StorageMigrationError::MigrationPending);
     }
 
-    let source_root = runtime
+    let source_root = source
         .blob_root
         .parent()
         .ok_or(StorageMigrationError::InvalidDestination)?
@@ -207,30 +268,30 @@ pub fn stage_storage_migration(
             &StorageOwner {
                 schema_version: OWNER_SCHEMA_VERSION,
                 migration_id: migration_id.clone(),
-                account_hash: account_hash(runtime.account_id()),
+                account_hash: account_hash(source.account_id()),
             },
         )?;
 
         let (asset_count, copied_bytes) = {
-            let source = runtime
+            let connection = source
                 .connection
                 .lock()
                 .map_err(|_| StorageMigrationError::Lock)?;
-            validate_account_boundary(&source, runtime.account_id())?;
-            ensure_database_budget(&source)?;
+            validate_account_boundary(&connection, source.account_id())?;
+            ensure_database_budget(&connection)?;
             create_database_snapshot(
-                &source,
+                &connection,
                 &stage_library_root.join(DATABASE_FILE),
-                runtime.database_key(),
+                source.database_key(),
             )?;
-            let assets = query_assets(&source, runtime.account_id())?;
+            let assets = query_assets(&connection, source.account_id())?;
             let copied_bytes =
-                copy_referenced_assets(&runtime.blob_root, &stage_library_root, &assets)?;
+                copy_referenced_assets(&source.blob_root, &stage_library_root, &assets)?;
             validate_library_tree(
                 &stage_library_root,
-                runtime.database_key(),
-                &runtime.asset_key,
-                runtime.account_id(),
+                source.database_key(),
+                &source.asset_key,
+                source.account_id(),
                 Some(&stage_product_root),
                 Some(&migration_id),
             )?;
@@ -268,12 +329,68 @@ pub fn stage_storage_migration(
             let _ = remove_owned_product_tree(
                 &destination_product_root,
                 &migration_id,
-                runtime.account_id(),
+                source.account_id(),
             );
         }
         let _ = remove_owned_stage_tree(&stage_root);
     }
     result
+}
+
+pub fn storage_usage_bytes(
+    source: &StorageMigrationSource,
+) -> Result<(u64, u64), StorageMigrationError> {
+    let library_root = source
+        .blob_root
+        .parent()
+        .ok_or(StorageMigrationError::InvalidDestination)?;
+    ensure_no_link_or_reparse_ancestor(library_root)?;
+    ensure_safe_directory(library_root)?;
+    let database_path = library_root.join(DATABASE_FILE);
+    ensure_safe_regular_file(&database_path)?;
+    let database_bytes = fs::metadata(database_path)?.len();
+    if database_bytes > MAX_DATABASE_BYTES {
+        return Err(StorageMigrationError::TooLarge);
+    }
+
+    let assets = {
+        let connection = source
+            .connection
+            .lock()
+            .map_err(|_| StorageMigrationError::Lock)?;
+        validate_account_boundary(&connection, source.account_id())?;
+        query_assets(&connection, source.account_id())?
+    };
+    let canonical_blob_root = source
+        .blob_root
+        .canonicalize()
+        .map_err(|_| StorageMigrationError::Integrity)?;
+    ensure_safe_directory(&canonical_blob_root)?;
+    let mut seen = HashSet::with_capacity(assets.len());
+    let mut asset_bytes = 0_u64;
+    for asset in assets {
+        let relative = safe_relative_asset_path(&asset.encrypted_path)?;
+        let normalized = normalize_relative(&relative);
+        if !seen.insert(normalized) {
+            return Err(StorageMigrationError::Integrity);
+        }
+        ensure_no_reparse_components(&canonical_blob_root, &relative)?;
+        let path = canonical_blob_root.join(relative);
+        ensure_safe_regular_file(&path)?;
+        let bytes = fs::metadata(path)?.len();
+        if bytes > MAX_ASSET_BYTES {
+            return Err(StorageMigrationError::TooLarge);
+        }
+        asset_bytes = asset_bytes
+            .checked_add(bytes)
+            .filter(|value| *value <= MAX_TOTAL_ASSET_BYTES)
+            .ok_or(StorageMigrationError::TooLarge)?;
+    }
+    Ok((database_bytes, asset_bytes))
+}
+
+pub fn storage_migration_pending(control_root: &Path) -> Result<bool, StorageMigrationError> {
+    read_pending_journal(control_root).map(|journal| journal.is_some())
 }
 
 pub fn apply_pending_storage_migration(
