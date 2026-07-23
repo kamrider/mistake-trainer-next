@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/vue'
+import { render, screen, waitFor, within } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import SettingsView from './SettingsView.vue'
@@ -102,6 +102,28 @@ describe('SettingsView', () => {
       captureSoundEnabled: false,
     })
     expect(await screen.findByText('科目配置已保存')).toBeVisible()
+  })
+
+  it('jumps directly to frequently used subject settings from the sticky directory', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    render(SettingsView)
+
+    expect(await screen.findByRole('heading', { name: '常用科目' })).toBeVisible()
+    const subjectPanel = screen.getByRole('region', { name: '常用科目' })
+    const scrollIntoView = vi.fn()
+    subjectPanel.scrollIntoView = scrollIntoView
+    const directory = screen.getByRole('navigation', { name: '设置目录' })
+    await userEvent.click(within(directory).getByRole('button', { name: /科目配置/ }))
+
+    expect(subjectPanel).toHaveAttribute('id', 'settings-subjects')
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      block: 'start',
+      behavior: 'smooth',
+    })
   })
 
   it('configures a skippable focus rhythm for new ordinary sessions', async () => {

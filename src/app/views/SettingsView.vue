@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { isTauri } from '@tauri-apps/api/core'
-import { Archive, ArchiveRestore, BookOpen, CloudOff, Database, FolderCheck, LockKeyhole, Plus, RotateCcw, ShieldCheck, Trash2, TriangleAlert, Volume2 } from '@lucide/vue'
-import { nextTick, onMounted, ref } from 'vue'
+import { Archive, ArchiveRestore, BookOpen, CheckCircle2, CloudOff, Database, FolderCheck, LockKeyhole, Plus, RotateCcw, ShieldCheck, Trash2, TriangleAlert, Volume2 } from '@lucide/vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import type { AppResult } from '../../shared/api/app-result'
 import { commands, type AuthStatusKind, type BackupRestoreCandidate, type BackupSummary, type CloudAuthState, type CloudBackendKind, type CloudBackendStatus, type ReviewFocusPolicy, type ReviewPreferences, type SettingsOverview, type SubjectPreferences } from '../../shared/api/bindings'
 import { normalizeAppResult } from '../../shared/api/normalize-result'
@@ -9,6 +9,7 @@ import { backendKindLabel, backendStatusLabel, loadSyncBackendStatus, setSyncBac
 import LegacyImportPanel from '../../modules/legacy/components/LegacyImportPanel.vue'
 import SyncConflictCenter from '../../modules/sync/components/SyncConflictCenter.vue'
 import BackupRestoreDialog from '../BackupRestoreDialog.vue'
+import SettingsSectionNav, { type SettingsSectionLink } from '../components/SettingsSectionNav.vue'
 
 const overview = ref<SettingsOverview>()
 const loading = ref(true)
@@ -50,6 +51,20 @@ const reviewFocusOptions: Array<{ value: ReviewFocusPolicy, title: string, hint:
   { value: 'session_start', title: '每轮开始前 · 推荐', hint: '进入普通训练时先完成一次 1–25 视线热身，节奏最自然。' },
   { value: 'every_10', title: '每完成 10 题', hint: '保存第 10、20…题后短暂停一下，再继续下一题。' },
 ]
+const settingsSections = computed<SettingsSectionLink[]>(() => [
+  { id: 'settings-sync', label: '同步账户', hint: '本地与云端' },
+  ...(overview.value
+    ? [{ id: 'settings-overview', label: '本机概况', hint: '题库与冲突' }]
+    : []),
+  ...(subjectPreferences.value
+    ? [{ id: 'settings-subjects', label: '科目配置', hint: '采集常用项' }]
+    : []),
+  ...(reviewPreferences.value
+    ? [{ id: 'settings-review', label: '训练节奏', hint: '专注插曲' }]
+    : []),
+  { id: 'settings-backup', label: '备份恢复', hint: '完整快照' },
+  { id: 'settings-migration', label: '旧版迁移', hint: '安全导入' },
+])
 
 function addCustomSubject() {
   const value = customSubject.value.trim()
@@ -383,6 +398,7 @@ onMounted(load)
         <RotateCcw :size="16" />刷新
       </button>
     </header>
+    <SettingsSectionNav :sections="settingsSections" />
     <p
       v-if="errorMessage"
       class="error-banner"
@@ -392,6 +408,7 @@ onMounted(load)
     </p>
 
     <section
+      id="settings-sync"
       class="backend-panel"
       aria-labelledby="backend-settings-title"
       :aria-busy="backendBusy"
@@ -571,6 +588,7 @@ onMounted(load)
 
     <section
       v-if="overview"
+      id="settings-overview"
       class="settings-grid"
       :aria-busy="loading"
     >
@@ -626,6 +644,7 @@ onMounted(load)
 
     <section
       v-if="subjectPreferences"
+      id="settings-subjects"
       class="subject-panel"
       aria-labelledby="subject-settings-title"
     >
@@ -705,6 +724,7 @@ onMounted(load)
 
     <section
       v-if="reviewPreferences"
+      id="settings-review"
       class="review-rhythm-panel"
       aria-labelledby="review-rhythm-title"
     >
@@ -754,7 +774,10 @@ onMounted(load)
       </footer>
     </section>
 
-    <section class="backup-panel">
+    <section
+      id="settings-backup"
+      class="backup-panel"
+    >
       <header>
         <div><p>备份与恢复 · 本机加密</p><h2>完整快照、双重校验与自动回滚</h2><span>数据库和原图密文会一起备份；清单仅记录密文哈希与大小，不包含题图明文、本机绝对路径或原始账户标识。</span></div>
         <div class="backup-actions">
@@ -805,7 +828,12 @@ onMounted(load)
       </div>
     </section>
 
-    <LegacyImportPanel @changed="load" />
+    <div
+      id="settings-migration"
+      class="settings-migration-anchor"
+    >
+      <LegacyImportPanel @changed="load" />
+    </div>
 
     <section class="roadmap-panel">
       <div><p>安全底座</p><h2>恢复已接通，设备与同步继续建立在真实状态上</h2></div>
@@ -827,6 +855,7 @@ onMounted(load)
 
 <style scoped>
 .settings-page { min-height: 100vh; padding: 42px clamp(24px,5vw,72px) 72px; background: radial-gradient(circle at 85% 0,rgba(33,51,45,.08),transparent 32%); }
+#settings-sync,#settings-overview,#settings-subjects,#settings-review,#settings-backup,.settings-migration-anchor { scroll-margin-top: 118px; }
 header { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; margin-bottom: 28px; } header p, .roadmap-panel p, .migration-panel header p { margin: 0 0 8px; color: var(--cinnabar); font-size: 12px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
 h1, h2 { margin: 0; font-family: Georgia,'Microsoft YaHei',serif; color: var(--green-deep); } h1 { font-size: clamp(28px,4vw,42px); } h2 { font-size: 21px; } header span { display: block; margin-top: 9px; color: var(--ink-muted); }
 button { display: inline-flex; gap: 7px; align-items: center; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper-raised); cursor: pointer; } button:disabled { opacity: .5; }
