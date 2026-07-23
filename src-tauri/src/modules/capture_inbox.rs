@@ -139,6 +139,7 @@ pub struct ApplyCaptureCrop {
     pub expected_revision: u32,
     pub item_id: String,
     pub recipes: Vec<CaptureCropRecipe>,
+    pub allow_collecting: bool,
     pub now_utc_ms: i64,
 }
 
@@ -149,6 +150,7 @@ pub struct RevertCaptureCrop {
     pub batch_id: String,
     pub expected_revision: u32,
     pub derivation_id: String,
+    pub allow_collecting: bool,
     pub now_utc_ms: i64,
 }
 
@@ -1501,7 +1503,7 @@ pub fn apply_capture_crop(
         &input.profile_id,
         &input.batch_id,
     )?;
-    ensure_organizing_revision(&batch, input.expected_revision)?;
+    ensure_crop_revision(&batch, input.expected_revision, input.allow_collecting)?;
     let source = connection
         .query_row(
             "SELECT i.asset_id, a.media_type, a.encrypted_path, i.source_name,
@@ -1774,7 +1776,7 @@ pub fn revert_capture_crop(
         &input.profile_id,
         &input.batch_id,
     )?;
-    ensure_organizing_revision(&batch, input.expected_revision)?;
+    ensure_crop_revision(&batch, input.expected_revision, input.allow_collecting)?;
     let (operation_id, source_item_id, source_asset_id): (String, String, String) = connection
         .query_row(
             "SELECT operation_id, source_capture_item_id, source_asset_id
@@ -2067,6 +2069,22 @@ fn ensure_organizing_revision(
     expected_revision: u32,
 ) -> Result<(), CaptureInboxError> {
     if batch.state != CaptureBatchState::Organizing {
+        return Err(CaptureInboxError::InvalidState);
+    }
+    if batch.revision != expected_revision {
+        return Err(CaptureInboxError::RevisionConflict);
+    }
+    Ok(())
+}
+
+fn ensure_crop_revision(
+    batch: &CaptureBatchSummary,
+    expected_revision: u32,
+    allow_collecting: bool,
+) -> Result<(), CaptureInboxError> {
+    let state_allowed = batch.state == CaptureBatchState::Organizing
+        || (allow_collecting && batch.state == CaptureBatchState::Collecting);
+    if !state_allowed {
         return Err(CaptureInboxError::InvalidState);
     }
     if batch.revision != expected_revision {

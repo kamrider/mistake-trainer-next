@@ -492,6 +492,7 @@ pub fn capture_crop_apply(
             expected_revision: input.expected_revision,
             item_id: input.item_id,
             recipes: input.recipes,
+            allow_collecting: false,
             now_utc_ms: current_utc_millis(),
         },
     ));
@@ -521,6 +522,7 @@ pub fn capture_crop_revert(
             batch_id: input.batch_id,
             expected_revision: input.expected_revision,
             derivation_id: input.derivation_id,
+            allow_collecting: false,
             now_utc_ms: current_utc_millis(),
         },
     ));

@@ -29,9 +29,10 @@ use tokio::{
 use uuid::Uuid;
 
 use crate::modules::capture_inbox::{
-    CaptureBatchState, CaptureInboxError, CaptureItemPreview, IngestCaptureItem,
+    ApplyCaptureCrop, CaptureBatchState, CaptureCropRecipe, CaptureInboxError, CaptureItemPreview,
+    IngestCaptureItem, NormalizedCropRect, RevertCaptureCrop, apply_capture_crop,
     get_capture_batch_detail, get_capture_item_preview, ingest_capture_item, remove_capture_item,
-    update_capture_batch,
+    revert_capture_crop, update_capture_batch,
 };
 
 const MOBILE_PAGE: &str = include_str!("../../mobile/capture.html");
@@ -418,6 +419,8 @@ fn build_router(state: Arc<ServerState>) -> Router {
         .route("/session/finish", post(finish_session))
         .route("/uploads/{client_upload_id}", put(upload_item))
         .route("/items/{item_id}/preview", get(item_preview))
+        .route("/items/{item_id}/crop", post(crop_item))
+        .route("/items/{item_id}/crop/revert", post(revert_item_crop))
         .route("/items/{item_id}", delete(delete_item))
         .layer(DefaultBodyLimit::max(
             usize::try_from(MAX_ORIGINAL_UPLOAD_BYTES).unwrap_or(usize::MAX),
@@ -480,6 +483,7 @@ struct MobileSessionItem {
     source_name: String,
     source_sequence: u32,
     byte_length: u64,
+    crop_derivation_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -488,6 +492,21 @@ struct MobileUploadPayload {
     item_id: String,
     byte_length: u64,
     duplicate: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MobileCropRequest {
+    rect: NormalizedCropRect,
+    rotation_degrees: u16,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MobileCropPayload {
+    item_id: String,
+    source_item_id: String,
+    crop_derivation_id: String,
 }
 
 #[derive(Deserialize)]
@@ -755,6 +774,117 @@ async fn item_preview(
     Ok(Json(preview))
 }
 
+async fn crop_item(
+    State(state): State<Arc<ServerState>>,
+    Path(item_id): Path<String>,
+    headers: HeaderMap,
+    Json(input): Json<MobileCropRequest>,
+) -> Result<Json<MobileCropPayload>, ApiError> {
+    authorize(&state, &headers)?;
+    let now = current_utc_millis();
+    let report = {
+        let mut connection = state
+            .context
+            .connection
+            .lock()
+            .map_err(|_| ApiError::internal())?;
+        let detail = get_capture_batch_detail(
+            &connection,
+            &state.context.account_id,
+            &state.context.profile_id,
+            &state.context.batch_id,
+        )
+        .map_err(ApiError::capture)?;
+        apply_capture_crop(
+            &mut connection,
+            &state.context.blob_root,
+            &state.context.asset_key,
+            ApplyCaptureCrop {
+                account_id: state.context.account_id.clone(),
+                profile_id: state.context.profile_id.clone(),
+                batch_id: state.context.batch_id.clone(),
+                expected_revision: detail.batch.revision,
+                item_id: item_id.clone(),
+                recipes: vec![CaptureCropRecipe {
+                    rect: input.rect,
+                    rotation_degrees: input.rotation_degrees,
+                    output_media_type: "image/png".to_owned(),
+                    max_edge: 4_096,
+                    jpeg_quality: 90,
+                }],
+                allow_collecting: true,
+                now_utc_ms: now,
+            },
+        )
+        .map_err(ApiError::capture)?
+    };
+    let derived_item_id = report
+        .derived_item_ids
+        .first()
+        .cloned()
+        .ok_or_else(ApiError::internal)?;
+    let derivation_id = report
+        .derivation_ids
+        .first()
+        .cloned()
+        .ok_or_else(ApiError::internal)?;
+    state.touch(now);
+    (state.context.notifier)(&state.context.batch_id);
+    Ok(Json(MobileCropPayload {
+        item_id: derived_item_id,
+        source_item_id: report.source_item_id,
+        crop_derivation_id: derivation_id,
+    }))
+}
+
+async fn revert_item_crop(
+    State(state): State<Arc<ServerState>>,
+    Path(item_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    authorize(&state, &headers)?;
+    let now = current_utc_millis();
+    {
+        let mut connection = state
+            .context
+            .connection
+            .lock()
+            .map_err(|_| ApiError::internal())?;
+        let detail = get_capture_batch_detail(
+            &connection,
+            &state.context.account_id,
+            &state.context.profile_id,
+            &state.context.batch_id,
+        )
+        .map_err(ApiError::capture)?;
+        let derivation_id = detail
+            .items
+            .iter()
+            .find(|item| item.id == item_id)
+            .and_then(|item| item.crop_derivation_id.clone())
+            .ok_or_else(|| {
+                ApiError::bad_request("crop_not_revertible", "这张图片没有可恢复的裁剪原图。")
+            })?;
+        revert_capture_crop(
+            &mut connection,
+            &state.context.blob_root,
+            RevertCaptureCrop {
+                account_id: state.context.account_id.clone(),
+                profile_id: state.context.profile_id.clone(),
+                batch_id: state.context.batch_id.clone(),
+                expected_revision: detail.batch.revision,
+                derivation_id,
+                allow_collecting: true,
+                now_utc_ms: now,
+            },
+        )
+        .map_err(ApiError::capture)?;
+    }
+    state.touch(now);
+    (state.context.notifier)(&state.context.batch_id);
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn finish_session(
     State(state): State<Arc<ServerState>>,
     headers: HeaderMap,
@@ -832,6 +962,7 @@ fn session_payload(state: &ServerState) -> Result<MobileSessionPayload, ApiError
                 source_name: item.source_name,
                 source_sequence: item.source_sequence,
                 byte_length: item.byte_length.max(0.0) as u64,
+                crop_derivation_id: item.crop_derivation_id,
             })
             .collect(),
     })
@@ -1065,6 +1196,12 @@ impl ApiError {
             CaptureInboxError::RevisionConflict => {
                 Self::conflict("batch_changed", "电脑端刚刚修改了这批内容，请重试。")
             }
+            CaptureInboxError::InvalidCrop => {
+                Self::bad_request("crop_invalid", "裁剪范围无效，请重新调整。")
+            }
+            CaptureInboxError::CropNotRevertible => {
+                Self::bad_request("crop_not_revertible", "这张图片的裁剪原图已经不能恢复。")
+            }
             _ => Self::internal(),
         }
     }
@@ -1218,6 +1355,21 @@ mod tests {
         image
             .write_to(&mut output, ImageFormat::Png)
             .expect("encode png");
+        output.into_inner()
+    }
+
+    fn split_color_png() -> Vec<u8> {
+        let image = ImageBuffer::from_fn(8, 4, |x, _| {
+            if x < 4 {
+                Rgba([220, 30, 20, 255])
+            } else {
+                Rgba([20, 40, 220, 255])
+            }
+        });
+        let mut output = Cursor::new(Vec::new());
+        DynamicImage::ImageRgba8(image)
+            .write_to(&mut output, ImageFormat::Png)
+            .expect("encode split color png");
         output.into_inner()
     }
 
@@ -1396,6 +1548,16 @@ mod tests {
         assert!(MOBILE_PAGE.contains("id=\"nextCamera\""));
         assert!(MOBILE_PAGE.contains("手机没有自动打开相机"));
         assert!(MOBILE_PAGE.contains("结束连拍"));
+        assert!(MOBILE_PAGE.contains("id=\"reviewCapture\""));
+        assert!(MOBILE_PAGE.contains("role=\"dialog\""));
+        assert!(MOBILE_PAGE.contains("aria-modal=\"true\""));
+        assert!(MOBILE_PAGE.contains("const openCropEditor="));
+        assert!(MOBILE_PAGE.contains("const applyMobileCrop="));
+        assert!(MOBILE_PAGE.contains("const restoreMobileCrop="));
+        assert!(MOBILE_PAGE.contains("setPointerCapture"));
+        assert!(MOBILE_PAGE.contains("/crop/revert"));
+        assert!(MOBILE_PAGE.contains("rotationDegrees"));
+        assert!(!MOBILE_PAGE.contains("body:croppedBlob"));
         assert!(MOBILE_PAGE.contains("animation:item-enter"));
         assert!(MOBILE_PAGE.contains("prefers-reduced-motion:reduce"));
 
@@ -1536,6 +1698,204 @@ mod tests {
                 .as_str()
                 .is_some_and(|value| value.starts_with("data:image/png;base64,"))
         );
+    }
+
+    #[test]
+    fn mobile_crop_is_non_destructive_and_reversible() {
+        let server = TestServer::new();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let upload_id = Uuid::now_v7();
+        let mut upload = server.request(
+            Method::PUT,
+            &format!("/api/v1/uploads/{upload_id}"),
+            Body::from(split_color_png()),
+        );
+        upload
+            .headers_mut()
+            .insert("x-source-sequence", "0".parse().expect("header"));
+        upload
+            .headers_mut()
+            .insert(header::CONTENT_TYPE, "image/png".parse().expect("header"));
+        upload
+            .headers_mut()
+            .insert("x-source-name", "worksheet.png".parse().expect("header"));
+        let upload_response = runtime
+            .block_on(server.router.clone().oneshot(upload))
+            .expect("upload response");
+        let upload_body = runtime
+            .block_on(axum::body::to_bytes(upload_response.into_body(), 1_000_000))
+            .expect("upload body");
+        let upload_json: serde_json::Value = serde_json::from_slice(&upload_body).expect("json");
+        let source_item_id = upload_json["itemId"]
+            .as_str()
+            .expect("source item id")
+            .to_owned();
+        let revision_before_invalid = {
+            let connection = server.state.context.connection.lock().expect("connection");
+            get_capture_batch_detail(
+                &connection,
+                &server.state.context.account_id,
+                &server.state.context.profile_id,
+                &server.state.context.batch_id,
+            )
+            .expect("detail")
+            .batch
+            .revision
+        };
+
+        let invalid_body = serde_json::json!({
+            "rect": { "x": 0.9, "y": 0.0, "width": 0.5, "height": 1.0 },
+            "rotationDegrees": 0
+        });
+        let mut invalid = server.request(
+            Method::POST,
+            &format!("/api/v1/items/{source_item_id}/crop"),
+            Body::from(invalid_body.to_string()),
+        );
+        invalid.headers_mut().insert(
+            header::CONTENT_TYPE,
+            "application/json".parse().expect("header"),
+        );
+        let invalid_response = runtime
+            .block_on(server.router.clone().oneshot(invalid))
+            .expect("invalid crop response");
+        assert_eq!(invalid_response.status(), StatusCode::BAD_REQUEST);
+        {
+            let connection = server.state.context.connection.lock().expect("connection");
+            let detail = get_capture_batch_detail(
+                &connection,
+                &server.state.context.account_id,
+                &server.state.context.profile_id,
+                &server.state.context.batch_id,
+            )
+            .expect("detail after invalid crop");
+            assert_eq!(detail.batch.revision, revision_before_invalid);
+            assert_eq!(detail.items[0].id, source_item_id);
+        }
+
+        let crop_body = serde_json::json!({
+            "rect": { "x": 0.0, "y": 0.0, "width": 0.5, "height": 1.0 },
+            "rotationDegrees": 0
+        });
+        let mut crop = server.request(
+            Method::POST,
+            &format!("/api/v1/items/{source_item_id}/crop"),
+            Body::from(crop_body.to_string()),
+        );
+        crop.headers_mut().insert(
+            header::CONTENT_TYPE,
+            "application/json".parse().expect("header"),
+        );
+        let crop_response = runtime
+            .block_on(server.router.clone().oneshot(crop))
+            .expect("crop response");
+        assert_eq!(crop_response.status(), StatusCode::OK);
+        let crop_body = runtime
+            .block_on(axum::body::to_bytes(crop_response.into_body(), 1_000_000))
+            .expect("crop response body");
+        let crop_json: serde_json::Value = serde_json::from_slice(&crop_body).expect("json");
+        let derived_item_id = crop_json["itemId"]
+            .as_str()
+            .expect("derived item id")
+            .to_owned();
+        let derivation_id = crop_json["cropDerivationId"]
+            .as_str()
+            .expect("crop derivation id")
+            .to_owned();
+        assert_ne!(derived_item_id, source_item_id);
+        assert_eq!(crop_json["sourceItemId"], source_item_id);
+
+        let session_response = runtime
+            .block_on(server.router.clone().oneshot(server.request(
+                Method::GET,
+                "/api/v1/session",
+                Body::empty(),
+            )))
+            .expect("session response");
+        let session_body = runtime
+            .block_on(axum::body::to_bytes(
+                session_response.into_body(),
+                1_000_000,
+            ))
+            .expect("session body");
+        let session_json: serde_json::Value = serde_json::from_slice(&session_body).expect("json");
+        assert_eq!(session_json["items"][0]["itemId"], derived_item_id);
+        assert_eq!(session_json["items"][0]["cropDerivationId"], derivation_id);
+
+        let preview_response = runtime
+            .block_on(server.router.clone().oneshot(server.request(
+                Method::GET,
+                &format!("/api/v1/items/{derived_item_id}/preview"),
+                Body::empty(),
+            )))
+            .expect("preview response");
+        let preview_body = runtime
+            .block_on(axum::body::to_bytes(
+                preview_response.into_body(),
+                2_000_000,
+            ))
+            .expect("preview body");
+        let preview_json: serde_json::Value = serde_json::from_slice(&preview_body).expect("json");
+        let preview_bytes = STANDARD
+            .decode(
+                preview_json["dataUrl"]
+                    .as_str()
+                    .expect("preview data url")
+                    .split_once(',')
+                    .expect("data url comma")
+                    .1,
+            )
+            .expect("preview base64");
+        assert_eq!(
+            image::load_from_memory(&preview_bytes)
+                .expect("preview image")
+                .to_rgba8()
+                .get_pixel(0, 0)
+                .0,
+            [220, 30, 20, 255]
+        );
+        {
+            let connection = server.state.context.connection.lock().expect("connection");
+            let counts: (i64, i64) = connection
+                .query_row(
+                    "SELECT (SELECT COUNT(*) FROM capture_items WHERE batch_id = ?1),
+                            (SELECT COUNT(*) FROM asset_derivations WHERE batch_id = ?1)",
+                    [&server.state.context.batch_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .expect("crop counts");
+            assert_eq!(counts, (2, 1), "source remains encrypted beside derivative");
+        }
+
+        let restore = server.request(
+            Method::POST,
+            &format!("/api/v1/items/{derived_item_id}/crop/revert"),
+            Body::empty(),
+        );
+        let restore_response = runtime
+            .block_on(server.router.clone().oneshot(restore))
+            .expect("restore response");
+        assert_eq!(restore_response.status(), StatusCode::NO_CONTENT);
+        let connection = server.state.context.connection.lock().expect("connection");
+        let detail = get_capture_batch_detail(
+            &connection,
+            &server.state.context.account_id,
+            &server.state.context.profile_id,
+            &server.state.context.batch_id,
+        )
+        .expect("restored detail");
+        assert_eq!(detail.batch.state, CaptureBatchState::Collecting);
+        assert_eq!(detail.items.len(), 1);
+        assert_eq!(detail.items[0].id, source_item_id);
+        let derivation_count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM asset_derivations", [], |row| {
+                row.get(0)
+            })
+            .expect("derivation count");
+        assert_eq!(derivation_count, 0);
     }
 
     #[test]

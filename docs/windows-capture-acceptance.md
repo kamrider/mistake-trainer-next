@@ -74,14 +74,28 @@ on an untrusted shared network.
    **相册多选**. During normalization or upload the summary must say **处理中**, the finish
    button must remain disabled, and no item may be marked complete before its own upload
    succeeds.
-2. Upload an image whose Unicode filename is at least 200 characters. Confirm the filename
+2. While earlier images continue uploading, confirm uploaded cards expose **裁剪** but pending
+   cards do not. Open one uploaded image, drag the crop region, resize all four corners, rotate
+   left and right, reset, and apply. Confirm the phone card is replaced by **已裁剪 · 可恢复原图**
+   and the desktop receives one active derived item without losing the encrypted source.
+3. Tap **拍完统一检查** with at least three uploads. Confirm the editor shows `N / total`,
+   **上一张**, **保留原图，下一张**, and **裁剪并下一张**; skipping must not mutate an image.
+   Reload the phone page after a crop and confirm the crop state remains. Tap **恢复原图** and
+   confirm the original returns in the same order and can be cropped again.
+4. During a crop request, interrupt Wi-Fi. Confirm the editor reports failure, remains usable,
+   and the source image is still present after reconnecting. Submit an invalid/out-of-bounds
+   recipe through the test client and confirm the batch revision and item list do not change.
+5. At 375×812 and 430×932 CSS pixels, confirm the queue, crop handles, tools, and fixed footer
+   never create horizontal scrolling or obscure the primary action. Enable Reduce Motion and
+   confirm modal/card transitions disappear without removing crop feedback or controls.
+6. Upload an image whose Unicode filename is at least 200 characters. Confirm the filename
    is ellipsized, the item remains inside the viewport, and the page never gains horizontal
    scrolling. Force a long failure message and confirm it wraps inside the same row.
-3. Change the batch subject, delete one upload, refresh the page, and confirm session state
+7. Change the batch subject, delete one upload, refresh the page, and confirm session state
    recovers. Interrupt Wi-Fi during upload and confirm retry is idempotent.
-4. Select HEIC/HEIF on iPhone. Conversion must load lazily, produce JPEG without external
+8. Select HEIC/HEIF on iPhone. Conversion must load lazily, produce JPEG without external
    requests, and leave a visible failed item if decoding fails.
-5. Finish shooting and confirm the desktop batch enters organizing. Stop a second session
+9. Finish shooting and confirm the desktop batch enters organizing. Stop a second session
    from Windows and confirm the old page can no longer call the API; repeat after expiry.
 
 ## Limits and release gates

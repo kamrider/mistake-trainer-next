@@ -111,6 +111,94 @@ fn crop_recipe(x: f64, width: f64) -> CaptureCropRecipe {
 }
 
 #[test]
+fn crop_collecting_requires_internal_permission() {
+    let library = TestLibrary::new();
+    let mut connection = library.open();
+    let batch = create_batch(
+        &library,
+        &mut connection,
+        "math",
+        CaptureBatchState::Collecting,
+    );
+    let source = ingest_capture_item(
+        &mut connection,
+        &library.blob_root(),
+        &ASSET_KEY,
+        IngestCaptureItem {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch.id.clone(),
+            client_upload_id: "mobile-crop-source".to_owned(),
+            source_name: "phone-photo.png".to_owned(),
+            source_sequence: None,
+            bytes: split_color_png(),
+            now_utc_ms: 20,
+        },
+    )
+    .expect("ingest mobile crop source");
+    let revision = get_capture_batch_detail(&connection, ACCOUNT, &library.profile_id, &batch.id)
+        .expect("collecting detail")
+        .batch
+        .revision;
+
+    let desktop_error = apply_capture_crop(
+        &mut connection,
+        &library.blob_root(),
+        &ASSET_KEY,
+        ApplyCaptureCrop {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch.id.clone(),
+            expected_revision: revision,
+            item_id: source.id.clone(),
+            recipes: vec![crop_recipe(0.0, 0.5)],
+            allow_collecting: false,
+            now_utc_ms: 30,
+        },
+    )
+    .expect_err("desktop crop must remain organizing-only");
+    assert!(matches!(desktop_error, CaptureInboxError::InvalidState));
+
+    let applied = apply_capture_crop(
+        &mut connection,
+        &library.blob_root(),
+        &ASSET_KEY,
+        ApplyCaptureCrop {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch.id.clone(),
+            expected_revision: revision,
+            item_id: source.id.clone(),
+            recipes: vec![crop_recipe(0.0, 0.5)],
+            allow_collecting: true,
+            now_utc_ms: 40,
+        },
+    )
+    .expect("authenticated LAN crop may run while collecting");
+    assert_eq!(applied.detail.batch.state, CaptureBatchState::Collecting);
+    assert_eq!(applied.detail.items.len(), 1);
+    assert_eq!(applied.derived_item_ids.len(), 1);
+
+    let restored = revert_capture_crop(
+        &mut connection,
+        &library.blob_root(),
+        RevertCaptureCrop {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch.id,
+            expected_revision: applied.detail.batch.revision,
+            derivation_id: applied.derivation_ids[0].clone(),
+            allow_collecting: true,
+            now_utc_ms: 50,
+        },
+    )
+    .expect("mobile crop is reversible while collecting");
+    assert_eq!(restored.batch.state, CaptureBatchState::Collecting);
+    assert_eq!(restored.items.len(), 1);
+    assert_eq!(restored.items[0].id, source.id);
+}
+
+#[test]
 fn multi_region_crop_is_atomic_non_destructive_and_reversible() {
     let library = TestLibrary::new();
     let mut connection = library.open();
@@ -151,6 +239,7 @@ fn multi_region_crop_is_atomic_non_destructive_and_reversible() {
             expected_revision: revision,
             item_id: source.id.clone(),
             recipes: vec![crop_recipe(0.0, 0.5), crop_recipe(0.5, 0.5)],
+            allow_collecting: false,
             now_utc_ms: 60,
         },
     )
@@ -222,6 +311,7 @@ fn multi_region_crop_is_atomic_non_destructive_and_reversible() {
             batch_id: batch.id.clone(),
             expected_revision: applied.detail.batch.revision,
             derivation_id: applied.derivation_ids[0].clone(),
+            allow_collecting: false,
             now_utc_ms: 70,
         },
     )
@@ -273,6 +363,7 @@ fn invalid_crop_recipe_changes_neither_database_nor_files() {
             expected_revision: revision,
             item_id: source.id,
             recipes: vec![crop_recipe(0.0, 0.5), crop_recipe(0.9, 0.5)],
+            allow_collecting: false,
             now_utc_ms: 60,
         },
     )
