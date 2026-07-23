@@ -1,8 +1,14 @@
 import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+
+import numpy as np
 
 from question_bakeoff.rapidocr_engine import (
     OcrBox,
+    engine_name_for,
     is_question_anchor,
+    make_analyzer,
     suggest_from_ocr_boxes,
 )
 
@@ -30,6 +36,71 @@ class QuestionAnchorTests(unittest.TestCase):
         for text in ("A. 选项", "H、选项", "一、选择题", "III. Reading", "3.14", "2026 年"):
             with self.subTest(text=text):
                 self.assertFalse(is_question_anchor(text))
+
+
+class AnalyzerConfigurationTests(unittest.TestCase):
+    @staticmethod
+    def _result() -> SimpleNamespace:
+        return SimpleNamespace(
+            boxes=np.asarray(
+                [
+                    [[10, 10], [90, 10], [90, 20], [10, 20]],
+                    [[10, 50], [90, 50], [90, 60], [10, 60]],
+                ],
+                dtype=np.float64,
+            ),
+            txts=["1. First", "2. Second"],
+            scores=np.asarray([0.99, 0.98], dtype=np.float64),
+        )
+
+    def test_small_and_medium_use_explicit_ppocrv6_models(self) -> None:
+        image = np.full((100, 100, 3), 255, dtype=np.uint8)
+        for model_type in ("small", "medium"):
+            with self.subTest(model_type=model_type):
+                runtime = Mock(return_value=self._result())
+                factory = Mock(return_value=runtime)
+                analyzer = make_analyzer(model_type, runtime_factory=factory)
+
+                with patch(
+                    "question_bakeoff.rapidocr_engine._decode_path",
+                    return_value=image,
+                ):
+                    result = analyzer("fixture.png")
+
+                factory.assert_called_once_with(
+                    params={
+                        "Det.ocr_version": "PP-OCRv6",
+                        "Det.model_type": model_type,
+                        "Rec.ocr_version": "PP-OCRv6",
+                        "Rec.model_type": model_type,
+                    }
+                )
+                self.assertEqual(result.engine, engine_name_for(model_type))
+                self.assertIn(f"ppocrv6-{model_type}", result.engine_version)
+                self.assertEqual(
+                    {item.engine for item in result.suggestions},
+                    {engine_name_for(model_type)},
+                )
+
+    def test_analyzer_reuses_one_runtime_between_images(self) -> None:
+        runtime = Mock(return_value=self._result())
+        factory = Mock(return_value=runtime)
+        analyzer = make_analyzer("small", runtime_factory=factory)
+        image = np.full((100, 100, 3), 255, dtype=np.uint8)
+
+        with patch(
+            "question_bakeoff.rapidocr_engine._decode_path",
+            return_value=image,
+        ):
+            analyzer("first.png")
+            analyzer("second.png")
+
+        self.assertEqual(factory.call_count, 1)
+        self.assertEqual(runtime.call_count, 2)
+
+    def test_rejects_an_unknown_model_tier_before_loading_a_runtime(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported PP-OCRv6 model tier"):
+            make_analyzer("server")
 
 
 class AnchorAssemblyTests(unittest.TestCase):

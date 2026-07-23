@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Callable, Iterable, Literal, Sequence
 
 import numpy as np
 
@@ -17,8 +17,11 @@ from .opencv_baseline import (
 from .schema import NormalizedPoint, NormalizedRect, Suggestion
 
 
-ENGINE_NAME = "rapidocr-anchor"
-ENGINE_VERSION = "rapidocr-3.9.2-anchor-1.0.0"
+ModelTier = Literal["small", "medium"]
+ENGINE_NAME = "ppocrv6-small-anchor"
+ENGINE_VERSION = (
+    "rapidocr-3.9.2+ppocrv6-small+onnxruntime-1.27.0+anchor-1.1.0"
+)
 MIN_ANCHOR_CONFIDENCE = 0.75
 QUESTION_ANCHOR = re.compile(
     r"^\s*(?:"
@@ -294,18 +297,39 @@ def _result_boxes(result: Any) -> tuple[OcrBox, ...]:
         raise ValueError("RapidOCR returned an unsupported result shape") from error
 
 
-def analyze_image(path: str | Path) -> Analysis:
-    try:
-        from rapidocr import RapidOCR
-    except ImportError as error:
-        raise ValueError("RapidOCR runtime is not installed in the isolated lab") from error
+def engine_name_for(model_type: ModelTier) -> str:
+    if model_type not in {"small", "medium"}:
+        raise ValueError(f"unsupported PP-OCRv6 model tier: {model_type}")
+    return f"ppocrv6-{model_type}-anchor"
 
-    started = time.perf_counter()
+
+def _engine_version_for(model_type: ModelTier) -> str:
+    return (
+        f"rapidocr-3.9.2+ppocrv6-{model_type}"
+        "+onnxruntime-1.27.0+anchor-1.1.0"
+    )
+
+
+def _analyze_with_runtime(
+    path: str | Path,
+    *,
+    runtime: Any,
+    engine_name: str,
+    engine_version: str,
+    started: float,
+) -> Analysis:
     image = _decode_path(Path(path))
     height, width = image.shape[:2]
-    result = RapidOCR()(image)
+    result = runtime(image)
     boxes = _result_boxes(result)
-    suggestions = suggest_from_ocr_boxes(width, height, boxes)
+    suggestions = tuple(
+        replace(
+            item,
+            engine=engine_name,
+            engine_version=engine_version,
+        )
+        for item in suggest_from_ocr_boxes(width, height, boxes)
+    )
     quad = detect_page_quad(image)
     normalized_quad: tuple[NormalizedPoint, ...] = ()
     if quad is not None:
@@ -313,8 +337,8 @@ def analyze_image(path: str | Path) -> Analysis:
             NormalizedPoint(float(x) / width, float(y) / height) for x, y in quad
         )
     return Analysis(
-        engine=ENGINE_NAME,
-        engine_version=ENGINE_VERSION,
+        engine=engine_name,
+        engine_version=engine_version,
         suggestions=suggestions,
         runtime_ms=(time.perf_counter() - started) * 1000,
         original_width=width,
@@ -322,3 +346,49 @@ def analyze_image(path: str | Path) -> Analysis:
         page_quad=normalized_quad,
         skew_degrees=estimate_skew_degrees(image),
     )
+
+
+def make_analyzer(
+    model_type: ModelTier,
+    *,
+    runtime_factory: Callable[..., Any] | None = None,
+) -> Callable[[str | Path], Analysis]:
+    engine_name = engine_name_for(model_type)
+    engine_version = _engine_version_for(model_type)
+    runtime: Any | None = None
+
+    def analyze(path: str | Path) -> Analysis:
+        nonlocal runtime
+        started = time.perf_counter()
+        if runtime is None:
+            factory = runtime_factory
+            if factory is None:
+                try:
+                    from rapidocr import RapidOCR
+                except ImportError as error:
+                    raise ValueError(
+                        "RapidOCR runtime is not installed in the isolated lab"
+                    ) from error
+                factory = RapidOCR
+            runtime = factory(
+                params={
+                    "Det.ocr_version": "PP-OCRv6",
+                    "Det.model_type": model_type,
+                    "Rec.ocr_version": "PP-OCRv6",
+                    "Rec.model_type": model_type,
+                }
+            )
+        return _analyze_with_runtime(
+            path,
+            runtime=runtime,
+            engine_name=engine_name,
+            engine_version=engine_version,
+            started=started,
+        )
+
+    analyze.model_type = model_type  # type: ignore[attr-defined]
+    analyze.engine_name = engine_name  # type: ignore[attr-defined]
+    return analyze
+
+
+analyze_image = make_analyzer("small")
