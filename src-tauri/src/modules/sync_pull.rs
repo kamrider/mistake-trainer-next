@@ -17,6 +17,11 @@ use crate::{
     },
     modules::{
         review::{ReviewUseCaseError, rebuild_schedule_for_problem},
+        sync_conflicts::{
+            FieldConflict, MergeAction, SyncConflictError, deletion_conflict, merge_remote_export,
+            merge_remote_problem, merge_remote_profile, record_conflicts, replace_entity_outbox,
+            store_remote_snapshot,
+        },
         sync_store::{
             SyncStoreError, WireAsset, WireExportSnapshot, WireProblemAggregate, WireProfile,
             WireReviewEvent, WireTombstone, pull_cursor, record_pull_success_tx,
@@ -49,6 +54,8 @@ pub enum SyncPullError {
     Encryption,
     #[error("review schedule rebuild failed")]
     Review(#[from] ReviewUseCaseError),
+    #[error("sync conflict merge failed")]
+    Conflict(#[from] SyncConflictError),
 }
 
 impl SyncPullError {
@@ -68,6 +75,7 @@ impl SyncPullError {
             Self::Blob(_) => "sync_blob_failed",
             Self::Encryption => "sync_encryption_failed",
             Self::Review(_) => "sync_schedule_rebuild_failed",
+            Self::Conflict(_) => "sync_conflict_merge_failed",
         }
     }
 }
@@ -398,19 +406,26 @@ fn apply_page(
     let mut orphan_blob_paths = Vec::new();
     for change in changes {
         match change {
-            DecodedChange::Profile(profile) => upsert_profile(&transaction, account_id, profile)?,
+            DecodedChange::Profile(profile) => {
+                apply_profile_merge(&transaction, account_id, profile, now_utc_ms)?
+            }
             DecodedChange::Asset(_) => {}
             DecodedChange::Problem(problem) => {
-                let local_id = upsert_problem(&transaction, account_id, problem, &asset_ids)?;
+                let local_id =
+                    apply_problem_merge(&transaction, account_id, problem, &asset_ids, now_utc_ms)?;
                 affected_problems.insert(local_id);
             }
             DecodedChange::Review(event) => {
                 insert_review_event(&transaction, account_id, event)?;
                 affected_problems.insert(event.problem_id.clone());
             }
-            DecodedChange::Export(snapshot) => upsert_export(&transaction, account_id, snapshot)?,
+            DecodedChange::Export(snapshot) => {
+                apply_export_merge(&transaction, account_id, snapshot, now_utc_ms)?
+            }
             DecodedChange::Tombstone(tombstone) => {
-                if let Some(relative_path) = apply_tombstone(&transaction, account_id, tombstone)? {
+                if let Some(relative_path) =
+                    apply_tombstone_merge(&transaction, account_id, tombstone, now_utc_ms)?
+                {
                     orphan_blob_paths.push(relative_path);
                 }
                 if tombstone.entity_type == "problem" {
@@ -428,6 +443,211 @@ fn apply_page(
         remove_orphan_blob(blob_root, &relative_path);
     }
     Ok(changes.len())
+}
+
+fn apply_profile_merge(
+    tx: &Transaction<'_>,
+    account_id: &str,
+    remote: &WireProfile,
+    now_utc_ms: i64,
+) -> Result<(), SyncPullError> {
+    let action = merge_remote_profile(tx, account_id, remote, now_utc_ms)?;
+    match action {
+        MergeAction::ApplyRemote(value) => {
+            upsert_profile(tx, account_id, &value)?;
+            replace_entity_outbox(
+                tx,
+                account_id,
+                Some(&value.id),
+                "learner_profile",
+                &value.id,
+                false,
+                now_utc_ms,
+            )?;
+        }
+        MergeAction::ApplyMergedAndEnqueue(value) => {
+            upsert_profile(tx, account_id, &value)?;
+            replace_entity_outbox(
+                tx,
+                account_id,
+                Some(&value.id),
+                "learner_profile",
+                &value.id,
+                true,
+                now_utc_ms,
+            )?;
+        }
+        MergeAction::ApplyPartialWithConflicts { value, conflicts } => {
+            upsert_profile(tx, account_id, &value)?;
+            record_conflicts(
+                tx,
+                account_id,
+                Some(&value.id),
+                "learner_profile",
+                &value.id,
+                &conflicts,
+                now_utc_ms,
+            )?;
+            replace_entity_outbox(
+                tx,
+                account_id,
+                Some(&value.id),
+                "learner_profile",
+                &value.id,
+                false,
+                now_utc_ms,
+            )?;
+        }
+    }
+    store_remote_snapshot(
+        tx,
+        account_id,
+        Some(&remote.id),
+        "learner_profile",
+        &remote.id,
+        remote.revision,
+        remote,
+        now_utc_ms,
+    )?;
+    Ok(())
+}
+
+fn apply_problem_merge(
+    tx: &Transaction<'_>,
+    account_id: &str,
+    remote: &WireProblemAggregate,
+    asset_ids: &HashMap<String, String>,
+    now_utc_ms: i64,
+) -> Result<String, SyncPullError> {
+    let action = merge_remote_problem(tx, account_id, remote, now_utc_ms)?;
+    let local_id = match action {
+        MergeAction::ApplyRemote(value) => {
+            let id = upsert_problem(tx, account_id, &value, asset_ids)?;
+            replace_entity_outbox(
+                tx,
+                account_id,
+                Some(&value.profile_id),
+                "problem",
+                &value.id,
+                false,
+                now_utc_ms,
+            )?;
+            id
+        }
+        MergeAction::ApplyMergedAndEnqueue(value) => {
+            let id = upsert_problem(tx, account_id, &value, asset_ids)?;
+            replace_entity_outbox(
+                tx,
+                account_id,
+                Some(&value.profile_id),
+                "problem",
+                &value.id,
+                true,
+                now_utc_ms,
+            )?;
+            id
+        }
+        MergeAction::ApplyPartialWithConflicts { value, conflicts } => {
+            let id = upsert_problem(tx, account_id, &value, asset_ids)?;
+            record_conflicts(
+                tx,
+                account_id,
+                Some(&value.profile_id),
+                "problem",
+                &value.id,
+                &conflicts,
+                now_utc_ms,
+            )?;
+            replace_entity_outbox(
+                tx,
+                account_id,
+                Some(&value.profile_id),
+                "problem",
+                &value.id,
+                false,
+                now_utc_ms,
+            )?;
+            id
+        }
+    };
+    store_remote_snapshot(
+        tx,
+        account_id,
+        Some(&remote.profile_id),
+        "problem",
+        &remote.id,
+        remote.revision,
+        remote,
+        now_utc_ms,
+    )?;
+    Ok(local_id)
+}
+
+fn apply_export_merge(
+    tx: &Transaction<'_>,
+    account_id: &str,
+    remote: &WireExportSnapshot,
+    now_utc_ms: i64,
+) -> Result<(), SyncPullError> {
+    let action = merge_remote_export(tx, account_id, remote)?;
+    match action {
+        MergeAction::ApplyRemote(value) => {
+            upsert_export(tx, account_id, &value)?;
+            replace_entity_outbox(
+                tx,
+                account_id,
+                Some(&value.profile_id),
+                "export_snapshot",
+                &value.id,
+                false,
+                now_utc_ms,
+            )?;
+        }
+        MergeAction::ApplyMergedAndEnqueue(value) => {
+            upsert_export(tx, account_id, &value)?;
+            replace_entity_outbox(
+                tx,
+                account_id,
+                Some(&value.profile_id),
+                "export_snapshot",
+                &value.id,
+                true,
+                now_utc_ms,
+            )?;
+        }
+        MergeAction::ApplyPartialWithConflicts { value, conflicts } => {
+            upsert_export(tx, account_id, &value)?;
+            record_conflicts(
+                tx,
+                account_id,
+                Some(&value.profile_id),
+                "export_snapshot",
+                &value.id,
+                &conflicts,
+                now_utc_ms,
+            )?;
+            replace_entity_outbox(
+                tx,
+                account_id,
+                Some(&value.profile_id),
+                "export_snapshot",
+                &value.id,
+                false,
+                now_utc_ms,
+            )?;
+        }
+    }
+    store_remote_snapshot(
+        tx,
+        account_id,
+        Some(&remote.profile_id),
+        "export_snapshot",
+        &remote.id,
+        remote.revision,
+        remote,
+        now_utc_ms,
+    )?;
+    Ok(())
 }
 
 fn upsert_profile(
@@ -574,11 +794,91 @@ fn upsert_export(
     Ok(())
 }
 
+fn apply_tombstone_merge(
+    tx: &Transaction<'_>,
+    account_id: &str,
+    tombstone: &WireTombstone,
+    now_utc_ms: i64,
+) -> Result<Option<String>, SyncPullError> {
+    if let Some(pending) = deletion_conflict(
+        tx,
+        account_id,
+        &tombstone.entity_type,
+        &tombstone.entity_id,
+        tombstone.deleted_revision,
+    )? {
+        upsert_tombstone_row(tx, account_id, tombstone)?;
+        record_conflicts(
+            tx,
+            account_id,
+            pending.profile_id.as_deref(),
+            &tombstone.entity_type,
+            &tombstone.entity_id,
+            &[FieldConflict {
+                field_name: "__deleted__",
+                local_value: pending.local_value,
+                remote_value: Value::Bool(true),
+                base_revision: pending.base_revision,
+            }],
+            now_utc_ms,
+        )?;
+        replace_entity_outbox(
+            tx,
+            account_id,
+            pending.profile_id.as_deref(),
+            &tombstone.entity_type,
+            &tombstone.entity_id,
+            false,
+            now_utc_ms,
+        )?;
+        return Ok(None);
+    }
+    let removed = apply_tombstone(tx, account_id, tombstone)?;
+    tx.execute(
+        "DELETE FROM sync_entity_snapshots
+         WHERE account_id = ?1 AND entity_type = ?2 AND entity_id = ?3",
+        params![account_id, tombstone.entity_type, tombstone.entity_id],
+    )?;
+    Ok(removed)
+}
+
 fn apply_tombstone(
     tx: &Transaction<'_>,
     account_id: &str,
     tombstone: &WireTombstone,
 ) -> Result<Option<String>, SyncPullError> {
+    upsert_tombstone_row(tx, account_id, tombstone)?;
+    match tombstone.entity_type.as_str() {
+        "problem" => {
+            tx.execute(
+                "UPDATE problems SET status = 'trashed', updated_at_utc_ms = ?1, revision = max(revision, ?2) WHERE id = ?3 AND account_id = ?4",
+                params![tombstone.deleted_at_utc_ms, tombstone.deleted_revision, tombstone.entity_id, account_id],
+            )?;
+        }
+        "learner_profile" => apply_profile_tombstone(tx, account_id, tombstone)?,
+        "asset" => return apply_asset_tombstone(tx, account_id, tombstone),
+        "export_snapshot" => {
+            tx.execute(
+                "DELETE FROM sync_operations
+                 WHERE account_id = ?1 AND entity_type = 'export_snapshot' AND entity_id = ?2",
+                params![account_id, tombstone.entity_id],
+            )?;
+            tx.execute(
+                "DELETE FROM export_snapshots WHERE id = ?1 AND account_id = ?2",
+                params![tombstone.entity_id, account_id],
+            )?;
+        }
+        "review_event" => {}
+        _ => return Err(SyncPullError::InvalidChange),
+    }
+    Ok(None)
+}
+
+fn upsert_tombstone_row(
+    tx: &Transaction<'_>,
+    account_id: &str,
+    tombstone: &WireTombstone,
+) -> Result<(), SyncPullError> {
     validate_uuid(&tombstone.tombstone_id)?;
     validate_uuid(&tombstone.entity_id)?;
     if let Some(profile_id) = &tombstone.profile_id {
@@ -594,19 +894,7 @@ fn apply_tombstone(
          WHERE tombstones.account_id = excluded.account_id AND excluded.revision > tombstones.revision",
         params![tombstone.tombstone_id, account_id, tombstone.profile_id, tombstone.entity_type, tombstone.entity_id, tombstone.deleted_at_utc_ms, tombstone.purge_after_utc_ms, tombstone.deleted_revision],
     )?;
-    match tombstone.entity_type.as_str() {
-        "problem" => {
-            tx.execute(
-                "UPDATE problems SET status = 'trashed', updated_at_utc_ms = ?1, revision = max(revision, ?2) WHERE id = ?3 AND account_id = ?4",
-                params![tombstone.deleted_at_utc_ms, tombstone.deleted_revision, tombstone.entity_id, account_id],
-            )?;
-        }
-        "learner_profile" => apply_profile_tombstone(tx, account_id, tombstone)?,
-        "asset" => return apply_asset_tombstone(tx, account_id, tombstone),
-        "review_event" | "export_snapshot" => {}
-        _ => return Err(SyncPullError::InvalidChange),
-    }
-    Ok(None)
+    Ok(())
 }
 
 fn apply_profile_tombstone(
