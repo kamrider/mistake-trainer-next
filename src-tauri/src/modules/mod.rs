@@ -13,6 +13,7 @@ pub mod profiles;
 pub mod review;
 pub mod review_focus;
 pub mod review_history;
+pub mod storage_migration;
 pub mod sync_conflicts;
 pub mod sync_pull;
 pub mod sync_push;

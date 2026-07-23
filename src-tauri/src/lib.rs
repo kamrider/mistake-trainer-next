@@ -46,6 +46,9 @@ pub fn run() {
                             application::startup::StartupAccessUnavailable::Storage(_) => {
                                 commands::access::LibraryAccessGate::storage_unavailable()
                             }
+                            application::startup::StartupAccessUnavailable::StorageMigration(_) => {
+                                commands::access::LibraryAccessGate::storage_unavailable()
+                            }
                         }
                     }
                 };

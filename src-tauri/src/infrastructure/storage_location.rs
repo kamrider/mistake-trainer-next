@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
@@ -50,6 +51,8 @@ pub enum StorageLocationError {
     InvalidPointer,
     #[error("the configured storage location is unavailable")]
     Unavailable,
+    #[error("a storage control operation is already pending")]
+    ControlFileExists,
 }
 
 impl StorageLocationError {
@@ -58,6 +61,7 @@ impl StorageLocationError {
             Self::File(_) => "storage_pointer_io_failed",
             Self::InvalidPointer => "storage_pointer_invalid",
             Self::Unavailable => "storage_location_unavailable",
+            Self::ControlFileExists => "storage_control_file_exists",
         }
     }
 }
@@ -88,28 +92,48 @@ pub fn write_storage_pointer(
     validate_control_root(control_root)?;
     validate_custom_library_root(control_root, library_root)?;
 
-    let pointer = StoragePointer {
-        schema_version: STORAGE_POINTER_SCHEMA_VERSION,
-        library_root: library_root.to_path_buf(),
-    };
+    write_control_json(
+        control_root,
+        STORAGE_POINTER_FILE,
+        &StoragePointer {
+            schema_version: STORAGE_POINTER_SCHEMA_VERSION,
+            library_root: library_root.to_path_buf(),
+        },
+        true,
+    )
+}
+
+pub(crate) fn write_control_json<T: Serialize>(
+    control_root: &Path,
+    file_name: &str,
+    value: &T,
+    replace: bool,
+) -> Result<(), StorageLocationError> {
+    validate_control_file_name(file_name)?;
+    validate_control_root(control_root)?;
     let bytes =
-        serde_json::to_vec_pretty(&pointer).map_err(|_| StorageLocationError::InvalidPointer)?;
+        serde_json::to_vec_pretty(value).map_err(|_| StorageLocationError::InvalidPointer)?;
     if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_CONTROL_FILE_BYTES {
         return Err(StorageLocationError::InvalidPointer);
     }
 
-    let target = control_root.join(STORAGE_POINTER_FILE);
-    if let Ok(metadata) = fs::symlink_metadata(&target)
-        && (!metadata.is_file()
-            || metadata.file_type().is_symlink()
-            || is_windows_reparse_point(&metadata))
-    {
-        return Err(StorageLocationError::InvalidPointer);
+    let target = control_root.join(file_name);
+    match fs::symlink_metadata(&target) {
+        Ok(metadata) => {
+            if !metadata.is_file()
+                || metadata.file_type().is_symlink()
+                || is_windows_reparse_point(&metadata)
+            {
+                return Err(StorageLocationError::InvalidPointer);
+            }
+            if !replace {
+                return Err(StorageLocationError::ControlFileExists);
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(StorageLocationError::File(error)),
     }
-    let temporary = control_root.join(format!(
-        ".{STORAGE_POINTER_FILE}.{}.tmp",
-        Uuid::now_v7().simple()
-    ));
+    let temporary = control_root.join(format!(".{file_name}.{}.tmp", Uuid::now_v7().simple()));
     write_new_synced(&temporary, &bytes)?;
     let replace_result = replace_file_atomically(&temporary, &target);
     if replace_result.is_err() {
@@ -120,7 +144,55 @@ pub fn write_storage_pointer(
     Ok(())
 }
 
+pub(crate) fn read_control_json<T: DeserializeOwned>(
+    control_root: &Path,
+    file_name: &str,
+) -> Result<Option<T>, StorageLocationError> {
+    validate_control_file_name(file_name)?;
+    validate_control_root(control_root)?;
+    let path = control_root.join(file_name);
+    match fs::symlink_metadata(&path) {
+        Ok(_) => read_json_strict(&path).map(Some),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(StorageLocationError::File(error)),
+    }
+}
+
+pub(crate) fn remove_control_file(
+    control_root: &Path,
+    file_name: &str,
+) -> Result<(), StorageLocationError> {
+    validate_control_file_name(file_name)?;
+    validate_control_root(control_root)?;
+    let path = control_root.join(file_name);
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(StorageLocationError::File(error)),
+    };
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || is_windows_reparse_point(&metadata)
+    {
+        return Err(StorageLocationError::InvalidPointer);
+    }
+    fs::remove_file(path)?;
+    sync_parent_directory(control_root)?;
+    Ok(())
+}
+
 fn read_pointer_strict(path: &Path) -> Result<StoragePointer, StorageLocationError> {
+    let pointer: StoragePointer = read_json_strict(path)?;
+    if pointer.schema_version != STORAGE_POINTER_SCHEMA_VERSION
+        || !pointer.library_root.is_absolute()
+        || !has_product_owned_suffix(&pointer.library_root)
+    {
+        return Err(StorageLocationError::InvalidPointer);
+    }
+    Ok(pointer)
+}
+
+fn read_json_strict<T: DeserializeOwned>(path: &Path) -> Result<T, StorageLocationError> {
     let metadata = fs::symlink_metadata(path).map_err(StorageLocationError::File)?;
     if !metadata.is_file()
         || metadata.file_type().is_symlink()
@@ -143,15 +215,7 @@ fn read_pointer_strict(path: &Path) -> Result<StoragePointer, StorageLocationErr
         return Err(StorageLocationError::InvalidPointer);
     }
 
-    let pointer: StoragePointer =
-        serde_json::from_slice(&bytes).map_err(|_| StorageLocationError::InvalidPointer)?;
-    if pointer.schema_version != STORAGE_POINTER_SCHEMA_VERSION
-        || !pointer.library_root.is_absolute()
-        || !has_product_owned_suffix(&pointer.library_root)
-    {
-        return Err(StorageLocationError::InvalidPointer);
-    }
-    Ok(pointer)
+    serde_json::from_slice(&bytes).map_err(|_| StorageLocationError::InvalidPointer)
 }
 
 fn validate_control_root(control_root: &Path) -> Result<(), StorageLocationError> {
@@ -249,6 +313,17 @@ fn has_product_owned_suffix(path: &Path) -> bool {
             .and_then(Path::file_name)
             .and_then(|name| name.to_str())
             == Some(PRODUCT_DIRECTORY)
+}
+
+fn validate_control_file_name(file_name: &str) -> Result<(), StorageLocationError> {
+    if matches!(
+        file_name,
+        STORAGE_POINTER_FILE | STORAGE_PENDING_FILE | STORAGE_RECEIPT_FILE
+    ) {
+        Ok(())
+    } else {
+        Err(StorageLocationError::InvalidPointer)
+    }
 }
 
 fn write_new_synced(path: &Path, bytes: &[u8]) -> Result<(), StorageLocationError> {

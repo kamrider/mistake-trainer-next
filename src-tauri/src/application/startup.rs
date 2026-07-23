@@ -10,7 +10,10 @@ use crate::{
         },
         storage_location::{StorageLocationError, resolve_storage},
     },
-    modules::backup::{BackupError, begin_pending_restore, record_failed_restore},
+    modules::{
+        backup::{BackupError, begin_pending_restore, record_failed_restore},
+        storage_migration::{StorageMigrationError, apply_pending_storage_migration},
+    },
 };
 
 #[derive(Debug, Error)]
@@ -43,6 +46,8 @@ pub enum StartupAccessUnavailable {
     Credentials(#[source] RuntimeError),
     #[error("configured library storage is unavailable")]
     Storage(#[source] StorageLocationError),
+    #[error("a pending storage migration could not be applied")]
+    StorageMigration(#[source] StorageMigrationError),
 }
 
 impl StartupAccessUnavailable {
@@ -50,6 +55,7 @@ impl StartupAccessUnavailable {
         match self {
             Self::Credentials(error) => error.code(),
             Self::Storage(error) => error.code(),
+            Self::StorageMigration(error) => error.code(),
         }
     }
 }
@@ -87,6 +93,15 @@ pub fn initialize_configured_application_library_if_accessible(
             StartupAccessUnavailable::Credentials(error),
         )),
         Ok(false) => {
+            match apply_pending_storage_migration(control_root, secrets, now_utc_ms) {
+                Ok(Some(runtime)) => return Ok(LibraryStartup::Ready(runtime)),
+                Ok(None) => {}
+                Err(error) => {
+                    return Ok(LibraryStartup::AccessUnavailable(
+                        StartupAccessUnavailable::StorageMigration(error),
+                    ));
+                }
+            }
             let storage = match resolve_storage(control_root) {
                 Ok(storage) => storage,
                 Err(error) => {
