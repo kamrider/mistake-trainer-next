@@ -6,7 +6,7 @@
 
 **Architecture:** Keep mobile capture fast: the phone may offer the existing optional quick crop, but never forces editing after every shot. Run automatic region suggestions on the Windows app after upload, using a separately benchmarked OpenCV + RapidOCR/ONNX pipeline; suggestions are only normalized rectangles and confidence metadata that feed the existing non-destructive crop editor. OCR text, formula reconstruction, handwriting erasure, and cloud education APIs remain separate derived/experimental layers.
 
-**Tech Stack:** Existing Vue 3 crop workbench, Tauri/Rust command boundary, SQLCipher/AES-GCM assets, isolated Python 3.12 bake-off, OpenCV 5.0.0.93, RapidOCR 3.9.2, ONNX Runtime 1.27.0.
+**Tech Stack:** Existing Vue 3 crop workbench, Tauri/Rust command boundary, SQLCipher/AES-GCM assets, isolated Python 3.12 bake-off, OpenCV 5.0.0.93, RapidOCR 3.9.2 hosting explicit PP-OCRv6 small/medium models, ONNX Runtime 1.27.0.
 
 ## Global Constraints
 
@@ -35,7 +35,7 @@
 - Modify: `labs/question-region-bakeoff/requirements.txt` — pin the OCR comparison runtime.
 - Create: `labs/question-region-bakeoff/question_bakeoff/engine.py` — common analysis protocol and engine resolver.
 - Create: `labs/question-region-bakeoff/question_bakeoff/rapidocr_engine.py` — OCR boxes, question-anchor rules, and conservative region assembly.
-- Modify: `labs/question-region-bakeoff/question_bakeoff/cli.py` — add `--engine opencv-whitespace|rapidocr-anchor`.
+- Modify: `labs/question-region-bakeoff/question_bakeoff/cli.py` — add `--engine opencv-whitespace|ppocrv6-small-anchor|ppocrv6-medium-anchor`.
 - Modify: `labs/question-region-bakeoff/question_bakeoff/report.py` — run a selected engine and persist comparable runtime/model metadata.
 - Create: `labs/question-region-bakeoff/tests/test_rapidocr_engine.py` — deterministic box-to-region tests without loading a real model.
 - Modify: `labs/question-region-bakeoff/README.md` — exact consented 60/300-image comparison workflow.
@@ -114,7 +114,7 @@ git add labs/question-region-bakeoff
 git commit -m "test: make question region engines comparable"
 ```
 
-### Task 2: Add RapidOCR anchor-based question suggestions
+### Task 2: Add PP-OCRv6 anchor-based question suggestions through RapidOCR
 
 **Files:**
 - Modify: `labs/question-region-bakeoff/requirements.txt`
@@ -124,7 +124,7 @@ git commit -m "test: make question region engines comparable"
 
 **Interfaces:**
 - Consumes: OCR rows shaped as polygon, text, confidence; normalized source dimensions.
-- Produces: `suggest_from_ocr_boxes(width, height, boxes) -> tuple[Suggestion, ...]` and `analyze_image(path) -> Analysis` using engine `rapidocr-anchor`.
+- Produces: `suggest_from_ocr_boxes(width, height, boxes) -> tuple[Suggestion, ...]` and model-explicit analyzers using engines `ppocrv6-small-anchor` and `ppocrv6-medium-anchor`.
 
 - [ ] **Step 1: Pin the isolated dependencies**
 
@@ -199,7 +199,8 @@ git commit -m "feat: benchmark local OCR question anchors"
 - Modify: `labs/question-region-bakeoff/README.md`
 - Create locally but keep ignored: `labs/question-region-bakeoff/data/manifest.json`
 - Create locally but keep ignored: `labs/question-region-bakeoff/output-opencv/`
-- Create locally but keep ignored: `labs/question-region-bakeoff/output-rapidocr/`
+- Create locally but keep ignored: `labs/question-region-bakeoff/output-ppocr-small/`
+- Create locally but keep ignored: `labs/question-region-bakeoff/output-ppocr-medium/`
 
 **Interfaces:**
 - Consumes: anonymized photos and human-labeled normalized question rectangles/anchors.
@@ -219,7 +220,8 @@ Expected: `validated 60 consented sample(s)`.
 
 ```powershell
 .\scripts\question-bakeoff.ps1 run labs/question-region-bakeoff/data/manifest.json --output labs/question-region-bakeoff/output-opencv --engine opencv-whitespace
-.\scripts\question-bakeoff.ps1 run labs/question-region-bakeoff/data/manifest.json --output labs/question-region-bakeoff/output-rapidocr --engine rapidocr-anchor
+.\scripts\question-bakeoff.ps1 run labs/question-region-bakeoff/data/manifest.json --output labs/question-region-bakeoff/output-ppocr-small --engine ppocrv6-small-anchor
+.\scripts\question-bakeoff.ps1 run labs/question-region-bakeoff/data/manifest.json --output labs/question-region-bakeoff/output-ppocr-medium --engine ppocrv6-medium-anchor
 ```
 
 - [ ] **Step 4: Inspect every overlay and classify failures**
@@ -228,7 +230,7 @@ Record `cut_formula`, `cut_figure`, `merged_questions`, `false_option_split`, `c
 
 - [ ] **Step 5: Apply the gate**
 
-Continue to 300 images only if RapidOCR materially improves question-start recall over OpenCV, creates no regression in content-cut rate, and keeps p95 latency under 2 seconds. Otherwise stop production automation, retain the current manual crop as canonical, and evaluate one opt-in domestic education API on a non-sensitive 20-image subset before reconsidering.
+Continue to 300 images only if at least one PP-OCRv6 tier materially improves question-start recall over OpenCV, creates no regression in content-cut rate, and keeps p95 warm latency under 2 seconds. Prefer small unless medium improves question-start recall by at least two percentage points. Otherwise stop production automation, retain the current manual crop as canonical, and evaluate one opt-in domestic education API on a non-sensitive 20-image subset before reconsidering.
 
 - [ ] **Step 6: Commit only documentation and aggregate metrics**
 

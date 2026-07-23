@@ -19,7 +19,9 @@ $env:QUESTION_BAKEOFF_PYTHON='C:\path\to\python.exe' # omit when py -3.12 works
 ```
 
 Expected output contains Python, NumPy, OpenCV, Pillow, RapidOCR `3.9.2`, ONNX Runtime
-`1.27.0`, and both `opencv-whitespace` and `rapidocr-anchor`.
+`1.27.0`, and `opencv-whitespace`, `ppocrv6-small-anchor`, and
+`ppocrv6-medium-anchor`. RapidOCR is the isolated runtime host; the actual OCR
+models compared here are PP-OCRv6 small and medium.
 This does not modify `package.json`, `Cargo.toml`, the app bundle, or Windows-wide Python.
 The lab dependencies remain development-only: OpenCV is Apache-2.0, the Python wheel wrapper is
 MIT, NumPy uses BSD-3-Clause, and Pillow uses HPND/MIT-CMU terms. They are not redistributed by
@@ -75,7 +77,7 @@ Validate before running:
 Validation rejects missing consent, absolute/escaping paths, duplicate IDs, missing images,
 non-finite coordinates, and out-of-bounds rectangles.
 
-## 4. Run both engines and inspect every overlay
+## 4. Run all three engines and inspect every overlay
 
 ```powershell
 .\scripts\question-bakeoff.ps1 run `
@@ -85,8 +87,13 @@ non-finite coordinates, and out-of-bounds rectangles.
 
 .\scripts\question-bakeoff.ps1 run `
   labs/question-region-bakeoff/data/manifest.json `
-  --output labs/question-region-bakeoff/output-rapidocr `
-  --engine rapidocr-anchor
+  --output labs/question-region-bakeoff/output-ppocr-small `
+  --engine ppocrv6-small-anchor
+
+.\scripts\question-bakeoff.ps1 run `
+  labs/question-region-bakeoff/data/manifest.json `
+  --output labs/question-region-bakeoff/output-ppocr-medium `
+  --engine ppocrv6-medium-anchor
 ```
 
 Open both `index.html` reports side by side. Green rectangles are human ground truth; amber
@@ -102,8 +109,12 @@ Inspect every overlay and record one or more failure labels per image:
 - `false_option_split`
 - `column_order`
 - `handwriting_confusion`
+- `pen_mark_confusion`
+- `printed_anchor_miss`
 - `no_anchor`
-- `latency`
+- `cold_start`
+- `warm_latency`
+- `peak_working_set`
 
 A crop that loses an exponent, unit, charge, graph label, diagram edge, or answer-work stroke is a
 content-cut failure even when the remaining crop looks plausible.
@@ -125,8 +136,35 @@ question-start recall `>= 95%`, content-cut rate `< 0.5%`, false split rate `< 3
 of every uncertain case, and responsive performance on the 4-core/8 GB Windows reference PC.
 
 Passing synthetic tests does **not** pass either gate. Continue from 60 to 300 images only when
-`rapidocr-anchor` materially improves question-start recall over `opencv-whitespace`, does not
-regress content-cut rate, and keeps p95 one-image latency below two seconds on the reference PC.
+at least one PP-OCRv6 tier materially improves question-start recall over `opencv-whitespace`,
+does not regress content-cut rate, and keeps p95 warm one-image latency below two seconds on the
+reference PC. Prefer small for question splitting unless medium improves question-start recall by
+at least two percentage points. Transcription needs separately labeled character/word accuracy;
+region metrics cannot prove printed or handwritten OCR quality.
+
 If the real dataset fails, automatic splitting stays out of the product and the existing
 non-destructive manual crop remains canonical. Unlimited-OCR and PaddleOCR-VL remain optional
 heavyweight comparison engines; they are not bundled into the Windows v1 installer.
+
+## 6. Local runtime evidence
+
+The ignored `.tools/question-bakeoff-python/rapidocr/models` directory currently contains these
+RapidOCR 3.9.2 PP-OCRv6 ONNX files:
+
+| Model | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `PP-OCRv6_det_small.onnx` | 9,929,594 | `090f04abcd9d9a7498bc4ebf677e4cb9bdce1fe4197ddb7e529f1ef44e1ff94f` |
+| `PP-OCRv6_rec_small.onnx` | 21,234,383 | `6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884` |
+| `PP-OCRv6_det_medium.onnx` | 62,119,454 | `92078b7355007ccfffcd4c8cd441a3afd4538904d06881b29a155e1e679907c2` |
+| `PP-OCRv6_rec_medium.onnx` | 76,629,984 | `eef444829dbbe18d7fea59a3f6eb75647518d2b3a9568d27c92e42940204894b` |
+
+On the development PC, one synthetic two-question image with a red pen circle produced:
+
+| Engine | Cached cold start | Warm run | Suggested regions |
+| --- | ---: | ---: | ---: |
+| `ppocrv6-small-anchor` | 731.1 ms | 188.9 ms | 1 uncertain full-source fallback |
+| `ppocrv6-medium-anchor` | 912.8 ms | 411.0 ms | 2 |
+
+This is only a runtime-integrity observation. One synthetic image is not accuracy evidence and
+must not be used to select a production model. Model files are not committed and may be removed
+without affecting the application.
