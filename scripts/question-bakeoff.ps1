@@ -44,7 +44,7 @@ if ($InstallDependencies) {
     }
 }
 
-$requiredModules = @('cv2', 'numpy', 'PIL')
+$requiredModules = @('cv2', 'numpy', 'PIL', 'rapidocr', 'onnxruntime')
 foreach ($module in $requiredModules) {
     if (-not (Test-Path -LiteralPath (Join-Path $dependencyRoot $module))) {
         throw 'The isolated question bake-off runtime is incomplete. Run this script once with -InstallDependencies.'

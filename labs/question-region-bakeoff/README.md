@@ -18,7 +18,8 @@ $env:QUESTION_BAKEOFF_PYTHON='C:\path\to\python.exe' # omit when py -3.12 works
 .\scripts\question-bakeoff.ps1 -InstallDependencies -SelfCheck
 ```
 
-Expected output contains Python, NumPy, OpenCV, Pillow, `opencv-whitespace`, and engine version `1.0.0`.
+Expected output contains Python, NumPy, OpenCV, Pillow, RapidOCR `3.9.2`, ONNX Runtime
+`1.27.0`, and both `opencv-whitespace` and `rapidocr-anchor`.
 This does not modify `package.json`, `Cargo.toml`, the app bundle, or Windows-wide Python.
 The lab dependencies remain development-only: OpenCV is Apache-2.0, the Python wheel wrapper is
 MIT, NumPy uses BSD-3-Clause, and Pillow uses HPND/MIT-CMU terms. They are not redistributed by
@@ -74,18 +75,38 @@ Validate before running:
 Validation rejects missing consent, absolute/escaping paths, duplicate IDs, missing images,
 non-finite coordinates, and out-of-bounds rectangles.
 
-## 4. Run and inspect every overlay
+## 4. Run both engines and inspect every overlay
 
 ```powershell
 .\scripts\question-bakeoff.ps1 run `
   labs/question-region-bakeoff/data/manifest.json `
-  --output labs/question-region-bakeoff/output
+  --output labs/question-region-bakeoff/output-opencv `
+  --engine opencv-whitespace
+
+.\scripts\question-bakeoff.ps1 run `
+  labs/question-region-bakeoff/data/manifest.json `
+  --output labs/question-region-bakeoff/output-rapidocr `
+  --engine rapidocr-anchor
 ```
 
-Open `labs/question-region-bakeoff/output/index.html`. Green rectangles are human ground truth;
-amber rectangles are suggestions at or above the review threshold; red rectangles are explicitly
+Open both `index.html` reports side by side. Green rectangles are human ground truth; amber
+rectangles are suggestions at or above the review threshold; red rectangles are explicitly
 uncertain. Blue outlines are page-quadrilateral observations. The source filename and absolute
 path are never written into `report.json` or HTML.
+
+Inspect every overlay and record one or more failure labels per image:
+
+- `cut_formula`
+- `cut_figure`
+- `merged_questions`
+- `false_option_split`
+- `column_order`
+- `handwriting_confusion`
+- `no_anchor`
+- `latency`
+
+A crop that loses an exponent, unit, charge, graph label, diagram edge, or answer-work stroke is a
+content-cut failure even when the remaining crop looks plausible.
 
 The output directory has an ownership marker. The runner replaces only a previous report carrying
 that exact marker; it refuses to delete or overwrite an arbitrary directory. A failed run keeps the
@@ -103,6 +124,9 @@ The 60-image run is only an early bake-off. A production decision requires at le
 question-start recall `>= 95%`, content-cut rate `< 0.5%`, false split rate `< 3%`, manual review
 of every uncertain case, and responsive performance on the 4-core/8 GB Windows reference PC.
 
-Passing synthetic tests does **not** pass either gate. If the real dataset fails, automatic splitting
-stays out of the product and the existing non-destructive manual crop remains canonical. RapidOCR
-and larger OCR/VL candidates are compared only after this baseline produces a trustworthy report.
+Passing synthetic tests does **not** pass either gate. Continue from 60 to 300 images only when
+`rapidocr-anchor` materially improves question-start recall over `opencv-whitespace`, does not
+regress content-cut rate, and keeps p95 one-image latency below two seconds on the reference PC.
+If the real dataset fails, automatic splitting stays out of the product and the existing
+non-destructive manual crop remains canonical. Unlimited-OCR and PaddleOCR-VL remain optional
+heavyweight comparison engines; they are not bundled into the Windows v1 installer.

@@ -1,6 +1,8 @@
+import io
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -10,6 +12,7 @@ import numpy as np
 from question_bakeoff.cli import main
 from question_bakeoff.engine import resolve_engine
 from question_bakeoff.opencv_baseline import analyze_image
+from question_bakeoff.rapidocr_engine import analyze_image as analyze_with_rapidocr
 from question_bakeoff.report import OUTPUT_MARKER_VALUE
 
 
@@ -51,7 +54,24 @@ def write_fixture(root: Path) -> Path:
 
 
 class CliReportTests(unittest.TestCase):
+    def test_self_check_reports_both_pinned_engines(self) -> None:
+        output = io.StringIO()
+
+        with redirect_stdout(output):
+            exit_code = main(["self-check"])
+
+        report = json.loads(output.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(report["rapidocr"], "3.9.2")
+        self.assertEqual(report["onnxruntime"], "1.27.0")
+        self.assertEqual(
+            report["availableEngines"],
+            ["opencv-whitespace", "rapidocr-anchor"],
+        )
+
     def test_resolve_engine_rejects_unknown_name(self) -> None:
+        self.assertIs(resolve_engine("opencv-whitespace"), analyze_image)
+        self.assertIs(resolve_engine("rapidocr-anchor"), analyze_with_rapidocr)
         with self.assertRaisesRegex(ValueError, "unsupported question-region engine"):
             resolve_engine("chat-model")
 

@@ -34,7 +34,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.command == "self-check":
             import cv2
             import numpy
+            import onnxruntime
             import PIL
+            from importlib.metadata import version
 
             print(
                 json.dumps(
@@ -43,8 +45,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "numpy": numpy.__version__,
                         "opencv": cv2.__version__,
                         "pillow": PIL.__version__,
+                        "rapidocr": version("rapidocr"),
+                        "onnxruntime": onnxruntime.__version__,
                         "engine": ENGINE_NAME,
                         "engineVersion": ENGINE_VERSION,
+                        "availableEngines": [
+                            "opencv-whitespace",
+                            "rapidocr-anchor",
+                        ],
                     },
                     ensure_ascii=False,
                 )
