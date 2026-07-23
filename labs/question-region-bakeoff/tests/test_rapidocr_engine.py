@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import numpy as np
+from rapidocr import ModelType, OCRVersion
 
 from question_bakeoff.rapidocr_engine import (
     OcrBox,
@@ -69,10 +70,18 @@ class AnalyzerConfigurationTests(unittest.TestCase):
 
                 factory.assert_called_once_with(
                     params={
-                        "Det.ocr_version": "PP-OCRv6",
-                        "Det.model_type": model_type,
-                        "Rec.ocr_version": "PP-OCRv6",
-                        "Rec.model_type": model_type,
+                        "Det.ocr_version": OCRVersion.PPOCRV6,
+                        "Det.model_type": (
+                            ModelType.SMALL
+                            if model_type == "small"
+                            else ModelType.MEDIUM
+                        ),
+                        "Rec.ocr_version": OCRVersion.PPOCRV6,
+                        "Rec.model_type": (
+                            ModelType.SMALL
+                            if model_type == "small"
+                            else ModelType.MEDIUM
+                        ),
                     }
                 )
                 self.assertEqual(result.engine, engine_name_for(model_type))

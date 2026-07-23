@@ -362,20 +362,23 @@ def make_analyzer(
         started = time.perf_counter()
         if runtime is None:
             factory = runtime_factory
+            try:
+                from rapidocr import ModelType, OCRVersion, RapidOCR
+            except ImportError as error:
+                raise ValueError(
+                    "RapidOCR runtime is not installed in the isolated lab"
+                ) from error
             if factory is None:
-                try:
-                    from rapidocr import RapidOCR
-                except ImportError as error:
-                    raise ValueError(
-                        "RapidOCR runtime is not installed in the isolated lab"
-                    ) from error
                 factory = RapidOCR
+            model_tier = (
+                ModelType.SMALL if model_type == "small" else ModelType.MEDIUM
+            )
             runtime = factory(
                 params={
-                    "Det.ocr_version": "PP-OCRv6",
-                    "Det.model_type": model_type,
-                    "Rec.ocr_version": "PP-OCRv6",
-                    "Rec.model_type": model_type,
+                    "Det.ocr_version": OCRVersion.PPOCRV6,
+                    "Det.model_type": model_tier,
+                    "Rec.ocr_version": OCRVersion.PPOCRV6,
+                    "Rec.model_type": model_tier,
                 }
             )
         return _analyze_with_runtime(
