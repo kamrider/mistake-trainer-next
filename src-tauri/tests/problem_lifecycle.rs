@@ -47,6 +47,78 @@ fn fixture() -> (tempfile::TempDir, rusqlite::Connection, String, String) {
     (directory, connection, profile.id, problem.id)
 }
 
+fn insert_open_problem_conflict(
+    connection: &rusqlite::Connection,
+    profile_id: &str,
+    problem_id: &str,
+) {
+    connection
+        .execute(
+            "INSERT INTO sync_conflicts(
+               id, account_id, profile_id, entity_type, entity_id, field_name,
+               local_value_json, remote_value_json, base_revision, created_at_utc_ms
+             ) VALUES(
+               '0191365e-2f2f-7b89-b3b0-444444444444',
+               'account-1', ?1, 'problem', ?2, 'note',
+               '\"旧笔记\"', '\"云端笔记\"', 1, 25
+             )",
+            rusqlite::params![profile_id, problem_id],
+        )
+        .expect("open conflict");
+}
+
+#[test]
+fn unresolved_conflict_blocks_problem_edits_and_status_changes() {
+    let (_directory, mut connection, profile_id, problem_id) = fixture();
+    insert_open_problem_conflict(&connection, &profile_id, &problem_id);
+
+    let update_error = update_problem(
+        &mut connection,
+        UpdateProblem {
+            account_id: "account-1".to_owned(),
+            profile_id: profile_id.clone(),
+            problem_id: problem_id.clone(),
+            subject: "物理".to_owned(),
+            tags: vec![],
+            note: "不应写入".to_owned(),
+            time_limit_seconds: None,
+            now_utc_ms: 30,
+        },
+    )
+    .expect_err("open conflict must block editing");
+    assert!(matches!(update_error, ProblemUseCaseError::ConflictPending));
+
+    let status_error = change_problem_status(
+        &mut connection,
+        ChangeProblemStatus {
+            account_id: "account-1".to_owned(),
+            profile_id,
+            problem_ids: vec![problem_id.clone()],
+            target_status: ProblemStatusFilter::Archived,
+            now_utc_ms: 31,
+        },
+    )
+    .expect_err("open conflict must block status changes");
+    assert!(matches!(status_error, ProblemUseCaseError::ConflictPending));
+
+    let unchanged: (String, String, String, i64) = connection
+        .query_row(
+            "SELECT subject, note, status, revision FROM problems WHERE id = ?1",
+            [&problem_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("unchanged problem");
+    assert_eq!(
+        unchanged,
+        (
+            "数学".to_owned(),
+            "旧笔记".to_owned(),
+            "active".to_owned(),
+            1
+        )
+    );
+}
+
 #[test]
 fn edit_updates_revision_and_outbox_in_one_transaction() {
     let (_directory, mut connection, profile_id, problem_id) = fixture();

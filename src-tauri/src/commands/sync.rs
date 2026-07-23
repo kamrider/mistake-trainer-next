@@ -3,6 +3,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::State;
+use uuid::Uuid;
 
 use crate::{
     application::result::AppResult,
@@ -11,7 +12,14 @@ use crate::{
     },
     modules::auth_sync::{AuthStatus, AuthStatusKind, AuthSyncManager, CloudAuthRuntime},
     modules::{
-        capture_lan::CaptureLanManager, profiles::list_profiles, sync_pull::pull_until_current,
+        capture_lan::CaptureLanManager,
+        profiles::list_profiles,
+        sync_conflicts::{
+            ResolveSyncConflictEntityInput, ResolveSyncConflictFieldInput, SyncConflictError,
+            SyncConflictSummary, list_sync_conflicts, resolve_sync_conflict_entity,
+            resolve_sync_conflict_field,
+        },
+        sync_pull::pull_until_current,
         sync_push::push_once,
     },
 };
@@ -406,6 +414,121 @@ pub async fn sync_now(
     }
 }
 
+#[tauri::command]
+#[specta::specta]
+pub fn sync_conflict_list(
+    state: State<'_, crate::infrastructure::runtime::LibraryRuntime>,
+) -> AppResult<Vec<SyncConflictSummary>> {
+    let profile = state.active_profile();
+    let mut connection = match state.connection.lock() {
+        Ok(connection) => connection,
+        Err(_) => return sync_conflict_failure(SyncConflictError::NotFound),
+    };
+    let transaction = match connection.transaction() {
+        Ok(transaction) => transaction,
+        Err(error) => return sync_conflict_failure(SyncConflictError::Database(error)),
+    };
+    match list_sync_conflicts(&transaction, state.account_id(), &profile.id) {
+        Ok(conflicts) => AppResult::success(conflicts),
+        Err(error) => sync_conflict_failure(error),
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn sync_conflict_resolve(
+    state: State<'_, crate::infrastructure::runtime::LibraryRuntime>,
+    input: ResolveSyncConflictFieldInput,
+) -> AppResult<Vec<SyncConflictSummary>> {
+    let profile = state.active_profile();
+    let mut connection = match state.connection.lock() {
+        Ok(connection) => connection,
+        Err(_) => return sync_conflict_failure(SyncConflictError::NotFound),
+    };
+    let result = resolve_sync_conflict_field(
+        &mut connection,
+        state.account_id(),
+        &profile.id,
+        input,
+        current_utc_millis(),
+    );
+    drop(connection);
+    if result.is_ok() {
+        refresh_active_profile(&state);
+    }
+    match result {
+        Ok(conflicts) => AppResult::success(conflicts),
+        Err(error) => sync_conflict_failure(error),
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn sync_conflict_resolve_entity(
+    state: State<'_, crate::infrastructure::runtime::LibraryRuntime>,
+    input: ResolveSyncConflictEntityInput,
+) -> AppResult<Vec<SyncConflictSummary>> {
+    let profile = state.active_profile();
+    let mut connection = match state.connection.lock() {
+        Ok(connection) => connection,
+        Err(_) => return sync_conflict_failure(SyncConflictError::NotFound),
+    };
+    let result = resolve_sync_conflict_entity(
+        &mut connection,
+        state.account_id(),
+        &profile.id,
+        input,
+        current_utc_millis(),
+    );
+    drop(connection);
+    if result.is_ok() {
+        refresh_active_profile(&state);
+    }
+    match result {
+        Ok(conflicts) => AppResult::success(conflicts),
+        Err(error) => sync_conflict_failure(error),
+    }
+}
+
+fn refresh_active_profile(state: &State<'_, crate::infrastructure::runtime::LibraryRuntime>) {
+    let Ok(connection) = state.connection.lock() else {
+        return;
+    };
+    let Ok(profiles) = list_profiles(&connection, state.account_id()) else {
+        return;
+    };
+    let current_id = state.active_profile().id;
+    if let Some(active) = profiles
+        .iter()
+        .find(|candidate| candidate.id == current_id)
+        .or_else(|| profiles.first())
+    {
+        state.replace_active_profile(active);
+    }
+}
+
+fn sync_conflict_failure<T>(error: SyncConflictError) -> AppResult<T> {
+    let (code, message) = match error {
+        SyncConflictError::NotFound => (
+            "SYNC_CONFLICT_NOT_FOUND",
+            "这条冲突已处理或不属于当前学习档案，请刷新后再试。",
+        ),
+        SyncConflictError::InvalidValue => (
+            "SYNC_CONFLICT_VALUE_INVALID",
+            "所选版本的数据格式无效，未修改本地内容。",
+        ),
+        SyncConflictError::LastProfile => (
+            "SYNC_CONFLICT_LAST_PROFILE",
+            "不能采用删除版本：账户至少需要保留一个学习档案。",
+        ),
+        _ => (
+            "SYNC_CONFLICT_OPERATION_FAILED",
+            "冲突暂时无法处理，本地内容保持不变，请稍后重试。",
+        ),
+    };
+    AppResult::failure(code, message, false, Uuid::now_v7().to_string())
+}
+
 pub fn specta_commands<R: tauri::Runtime>() -> tauri_specta::Commands<R> {
     tauri_specta::collect_commands![
         sync_backend_status,
@@ -415,7 +538,10 @@ pub fn specta_commands<R: tauri::Runtime>() -> tauri_specta::Commands<R> {
         auth_sign_in,
         auth_restore,
         auth_disconnect,
-        sync_now
+        sync_now,
+        sync_conflict_list,
+        sync_conflict_resolve,
+        sync_conflict_resolve_entity
     ]
 }
 

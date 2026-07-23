@@ -82,6 +82,9 @@ export const commands = {
 	authRestore: () => typedError<AppResult<CloudAuthState>, null>(__TAURI_INVOKE("auth_restore")),
 	authDisconnect: () => typedError<AppResult<CloudAuthState>, null>(__TAURI_INVOKE("auth_disconnect")),
 	syncNow: () => typedError<AppResult<SyncNowReport>, null>(__TAURI_INVOKE("sync_now")),
+	syncConflictList: () => __TAURI_INVOKE<AppResult<SyncConflictSummary[]>>("sync_conflict_list"),
+	syncConflictResolve: (input: ResolveSyncConflictFieldInput) => __TAURI_INVOKE<AppResult<SyncConflictSummary[]>>("sync_conflict_resolve", { input }),
+	syncConflictResolveEntity: (input: ResolveSyncConflictEntityInput) => __TAURI_INVOKE<AppResult<SyncConflictSummary[]>>("sync_conflict_resolve_entity", { input }),
 };
 
 /* Types */
@@ -418,6 +421,8 @@ export type GeneratedExportSummary = {
 	layout: ExportLayout,
 };
 
+export type JsonValue = { kind: "null" } | { kind: "bool"; value: boolean } | { kind: "number"; value: string } | { kind: "string"; value: string } | { kind: "array"; value: JsonValue[] } | { kind: "object"; value: { [key in string]: JsonValue } };
+
 export type LegacyImportCandidate = {
 	candidateId: string,
 	report: LegacyScanReport,
@@ -568,6 +573,17 @@ export type ReportSummary = {
 	currentStreakDays: number,
 	dailyActivity: DailyActivity[],
 	subjectActivity: SubjectActivity[],
+};
+
+export type ResolveSyncConflictEntityInput = {
+	entityType: string,
+	entityId: string,
+	choice: SyncConflictChoice,
+};
+
+export type ResolveSyncConflictFieldInput = {
+	conflictId: string,
+	choice: SyncConflictChoice,
 };
 
 export type ReviewExamNavigateInput = {
@@ -729,6 +745,19 @@ export type SubjectPreferencesInput = {
 	enabledSubjects: string[],
 	customSubjects: string[],
 	captureSoundEnabled: boolean,
+};
+
+export type SyncConflictChoice = "local" | "remote";
+
+export type SyncConflictSummary = {
+	id: string,
+	entityType: string,
+	entityId: string,
+	entityLabel: string,
+	fieldName: string,
+	localValue: JsonValue,
+	remoteValue: JsonValue,
+	createdAtUtcMs: number | null,
 };
 
 export type SyncNowReport = {

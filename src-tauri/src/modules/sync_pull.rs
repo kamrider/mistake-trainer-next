@@ -18,9 +18,10 @@ use crate::{
     modules::{
         review::{ReviewUseCaseError, rebuild_schedule_for_problem},
         sync_conflicts::{
-            FieldConflict, MergeAction, SyncConflictError, deletion_conflict, merge_remote_export,
-            merge_remote_problem, merge_remote_profile, record_conflicts, replace_entity_outbox,
-            store_remote_snapshot,
+            FieldConflict, MergeAction, SyncConflictError, cleanup_deleted_profile_sync_state,
+            deletion_conflict, export_content, merge_remote_export, merge_remote_problem,
+            merge_remote_profile, problem_content, profile_content, record_conflicts,
+            replace_entity_outbox, store_remote_snapshot,
         },
         sync_store::{
             SyncStoreError, WireAsset, WireExportSnapshot, WireProblemAggregate, WireProfile,
@@ -455,6 +456,16 @@ fn apply_profile_merge(
     match action {
         MergeAction::ApplyRemote(value) => {
             upsert_profile(tx, account_id, &value)?;
+            record_conflicts(
+                tx,
+                account_id,
+                Some(&value.id),
+                "learner_profile",
+                &value.id,
+                &[],
+                &profile_content(&value),
+                now_utc_ms,
+            )?;
             replace_entity_outbox(
                 tx,
                 account_id,
@@ -467,6 +478,16 @@ fn apply_profile_merge(
         }
         MergeAction::ApplyMergedAndEnqueue(value) => {
             upsert_profile(tx, account_id, &value)?;
+            record_conflicts(
+                tx,
+                account_id,
+                Some(&value.id),
+                "learner_profile",
+                &value.id,
+                &[],
+                &profile_content(&value),
+                now_utc_ms,
+            )?;
             replace_entity_outbox(
                 tx,
                 account_id,
@@ -486,6 +507,7 @@ fn apply_profile_merge(
                 "learner_profile",
                 &value.id,
                 &conflicts,
+                &profile_content(&value),
                 now_utc_ms,
             )?;
             replace_entity_outbox(
@@ -523,6 +545,16 @@ fn apply_problem_merge(
     let local_id = match action {
         MergeAction::ApplyRemote(value) => {
             let id = upsert_problem(tx, account_id, &value, asset_ids)?;
+            record_conflicts(
+                tx,
+                account_id,
+                Some(&value.profile_id),
+                "problem",
+                &value.id,
+                &[],
+                &problem_content(&value),
+                now_utc_ms,
+            )?;
             replace_entity_outbox(
                 tx,
                 account_id,
@@ -536,6 +568,16 @@ fn apply_problem_merge(
         }
         MergeAction::ApplyMergedAndEnqueue(value) => {
             let id = upsert_problem(tx, account_id, &value, asset_ids)?;
+            record_conflicts(
+                tx,
+                account_id,
+                Some(&value.profile_id),
+                "problem",
+                &value.id,
+                &[],
+                &problem_content(&value),
+                now_utc_ms,
+            )?;
             replace_entity_outbox(
                 tx,
                 account_id,
@@ -556,6 +598,7 @@ fn apply_problem_merge(
                 "problem",
                 &value.id,
                 &conflicts,
+                &problem_content(&value),
                 now_utc_ms,
             )?;
             replace_entity_outbox(
@@ -593,6 +636,16 @@ fn apply_export_merge(
     match action {
         MergeAction::ApplyRemote(value) => {
             upsert_export(tx, account_id, &value)?;
+            record_conflicts(
+                tx,
+                account_id,
+                Some(&value.profile_id),
+                "export_snapshot",
+                &value.id,
+                &[],
+                &export_content(&value),
+                now_utc_ms,
+            )?;
             replace_entity_outbox(
                 tx,
                 account_id,
@@ -605,6 +658,16 @@ fn apply_export_merge(
         }
         MergeAction::ApplyMergedAndEnqueue(value) => {
             upsert_export(tx, account_id, &value)?;
+            record_conflicts(
+                tx,
+                account_id,
+                Some(&value.profile_id),
+                "export_snapshot",
+                &value.id,
+                &[],
+                &export_content(&value),
+                now_utc_ms,
+            )?;
             replace_entity_outbox(
                 tx,
                 account_id,
@@ -624,6 +687,7 @@ fn apply_export_merge(
                 "export_snapshot",
                 &value.id,
                 &conflicts,
+                &export_content(&value),
                 now_utc_ms,
             )?;
             replace_entity_outbox(
@@ -808,6 +872,7 @@ fn apply_tombstone_merge(
         tombstone.deleted_revision,
     )? {
         upsert_tombstone_row(tx, account_id, tombstone)?;
+        let local_value = pending.local_value;
         record_conflicts(
             tx,
             account_id,
@@ -816,10 +881,11 @@ fn apply_tombstone_merge(
             &tombstone.entity_id,
             &[FieldConflict {
                 field_name: "__deleted__",
-                local_value: pending.local_value,
+                local_value: local_value.clone(),
                 remote_value: Value::Bool(true),
                 base_revision: pending.base_revision,
             }],
+            &local_value,
             now_utc_ms,
         )?;
         replace_entity_outbox(
@@ -944,27 +1010,12 @@ fn apply_profile_tombstone(
             tombstone.entity_id
         ],
     )?;
-    tx.execute(
-        "DELETE FROM sync_operations
-         WHERE account_id = ?1 AND (
-           (entity_type = 'learner_profile' AND entity_id = ?2)
-           OR (profile_id = ?2 AND entity_type <> 'asset')
-         )",
-        params![account_id, tombstone.entity_id],
-    )?;
-    tx.execute(
-        "UPDATE sync_operations SET profile_id = NULL
-         WHERE account_id = ?1 AND profile_id = ?2 AND entity_type = 'asset'",
-        params![account_id, tombstone.entity_id],
-    )?;
-    tx.execute(
-        "DELETE FROM sync_conflicts WHERE account_id = ?1 AND profile_id = ?2",
-        params![account_id, tombstone.entity_id],
-    )?;
-    tx.execute(
-        "DELETE FROM tombstones
-         WHERE account_id = ?1 AND profile_id = ?2",
-        params![account_id, tombstone.entity_id],
+    cleanup_deleted_profile_sync_state(
+        tx,
+        account_id,
+        &tombstone.entity_id,
+        false,
+        tombstone.deleted_at_utc_ms,
     )?;
     tx.execute(
         "DELETE FROM learner_profiles WHERE id = ?1 AND account_id = ?2",

@@ -298,6 +298,7 @@ fn profile_error<T>(error: &ProfileUseCaseError) -> AppResult<T> {
         ProfileUseCaseError::NotFound => "profile_not_found",
         ProfileUseCaseError::LastProfile => "profile_last_cannot_delete",
         ProfileUseCaseError::ConfirmationMismatch => "profile_delete_confirmation_mismatch",
+        ProfileUseCaseError::ConflictPending => "profile_conflict_pending",
         ProfileUseCaseError::Database(_) | ProfileUseCaseError::Serialization(_) => {
             "profile_operation_failed"
         }
@@ -320,6 +321,10 @@ fn profile_error_code<T>(code: &str, error: Option<&ProfileUseCaseError>) -> App
         "profile_delete_confirmation_mismatch" => {
             ("输入的档案名称不一致；没有删除任何资料。", false)
         }
+        "profile_conflict_pending" => (
+            "这个学习档案有尚未处理的同步冲突，请先到“设置 → 同步冲突”完成选择。",
+            false,
+        ),
         "library_lock_poisoned" => ("本地题库暂时不可用，请重新打开应用后重试。", true),
         _ => (
             "学习档案没有完成这次操作，原有数据保持不变，请稍后重试。",

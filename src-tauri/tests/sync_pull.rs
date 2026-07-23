@@ -356,6 +356,15 @@ fn profile_and_orphan_asset_tombstones_delete_locally_and_select_a_replacement()
         .unwrap();
     connection
         .execute(
+            "INSERT INTO sync_entity_snapshots(
+               account_id, profile_id, entity_type, entity_id, revision,
+               payload_json, updated_at_utc_ms
+             ) VALUES(?1, ?2, 'problem', ?3, 1, '{}', 10)",
+            rusqlite::params![ACCOUNT_ID, PROFILE_ID, PROBLEM_ID],
+        )
+        .unwrap();
+    connection
+        .execute(
             "INSERT INTO sync_operations(
            id, account_id, profile_id, entity_type, entity_id, operation,
            payload_json, status, attempt_count, created_at_utc_ms, next_attempt_at_utc_ms
@@ -383,6 +392,28 @@ fn profile_and_orphan_asset_tombstones_delete_locally_and_select_a_replacement()
          VALUES(?1, ?2, ?3, '数学', 10, 10, 1)",
         rusqlite::params![PROBLEM_ID, ACCOUNT_ID, PROFILE_ID],
     ).unwrap();
+    connection
+        .execute(
+            "INSERT INTO sync_conflicts(
+               id, account_id, profile_id, entity_type, entity_id, field_name,
+               local_value_json, remote_value_json, base_revision, created_at_utc_ms
+             ) VALUES
+               ('0191365e-2f2f-7b89-b3b0-121212121211', ?1, ?2, 'problem', ?3,
+                'note', '\"本机\"', '\"云端\"', 1, 30),
+               ('0191365e-2f2f-7b89-b3b0-121212121212', ?1, ?2, 'problem', ?3,
+                'subject', '\"数学\"', '\"物理\"', 1, 31)",
+            rusqlite::params![ACCOUNT_ID, PROFILE_ID, PROBLEM_ID],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE sync_conflicts
+             SET resolution = 'local', resolved_value_json = '\"数学\"',
+                 resolved_at_utc_ms = 40
+             WHERE id = '0191365e-2f2f-7b89-b3b0-121212121212'",
+            [],
+        )
+        .unwrap();
     connection
         .execute(
             "INSERT INTO problem_assets(problem_id, asset_id, role, position)
@@ -463,6 +494,52 @@ fn profile_and_orphan_asset_tombstones_delete_locally_and_select_a_replacement()
             .unwrap(),
         0,
         "an authoritative profile tombstone must discard a stale high-revision upsert"
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sync_entity_snapshots WHERE profile_id = ?1",
+                [PROFILE_ID],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0,
+        "deleting a profile must not leave snapshots for its deleted children"
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sync_conflicts WHERE profile_id = ?1",
+                [PROFILE_ID],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        2,
+        "profile deletion must preserve child conflict audit rows"
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sync_conflicts
+                 WHERE profile_id = ?1 AND resolved_at_utc_ms IS NULL",
+                [PROFILE_ID],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0,
+        "profile deletion must close unresolved child conflicts"
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT resolution, resolved_value_json
+                 FROM sync_conflicts
+                 WHERE id = '0191365e-2f2f-7b89-b3b0-121212121211'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .unwrap(),
+        ("remote".to_owned(), "null".to_owned())
     );
     assert_eq!(
         connection
@@ -667,6 +744,123 @@ fn concurrent_problem_edits_on_the_same_field_create_one_true_conflict() {
             )
             .unwrap(),
         0
+    );
+}
+
+#[test]
+fn a_newer_matching_remote_revision_closes_an_obsolete_open_conflict() {
+    let (transport, _) = fixture();
+    let mut connection = database();
+    let root = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime
+        .block_on(pull_until_current(
+            &mut connection,
+            &transport,
+            ACCOUNT_ID,
+            REMOTE_USER_ID,
+            "access-token",
+            root.path(),
+            &ASSET_KEY,
+            10_000,
+        ))
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE problems
+             SET note = 'settled note', revision = 2, updated_at_utc_ms = 60
+             WHERE id = ?1",
+            [PROBLEM_ID],
+        )
+        .unwrap();
+
+    let mut conflicting_remote = transport.changes.lock().unwrap()[2].payload.clone();
+    conflicting_remote["note"] = json!("cloud note");
+    conflicting_remote["revision"] = json!(2);
+    conflicting_remote["updatedAtUtcMs"] = json!(70);
+    transport
+        .changes
+        .lock()
+        .unwrap()
+        .push(change(5, "problem", PROBLEM_ID, conflicting_remote));
+    runtime
+        .block_on(pull_until_current(
+            &mut connection,
+            &transport,
+            ACCOUNT_ID,
+            REMOTE_USER_ID,
+            "access-token",
+            root.path(),
+            &ASSET_KEY,
+            20_000,
+        ))
+        .unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sync_conflicts
+                 WHERE entity_id = ?1 AND resolved_at_utc_ms IS NULL",
+                [PROBLEM_ID],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+
+    let mut converged_remote = transport.changes.lock().unwrap()[2].payload.clone();
+    converged_remote["note"] = json!("settled note");
+    converged_remote["revision"] = json!(3);
+    converged_remote["updatedAtUtcMs"] = json!(80);
+    transport
+        .changes
+        .lock()
+        .unwrap()
+        .push(change(6, "problem", PROBLEM_ID, converged_remote));
+    runtime
+        .block_on(pull_until_current(
+            &mut connection,
+            &transport,
+            ACCOUNT_ID,
+            REMOTE_USER_ID,
+            "access-token",
+            root.path(),
+            &ASSET_KEY,
+            30_000,
+        ))
+        .unwrap();
+
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT note, revision FROM problems WHERE id = ?1",
+                [PROBLEM_ID],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .unwrap(),
+        ("settled note".to_owned(), 3)
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sync_conflicts
+                 WHERE entity_id = ?1 AND resolved_at_utc_ms IS NULL",
+                [PROBLEM_ID],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sync_conflicts
+                 WHERE entity_id = ?1 AND resolution IS NOT NULL",
+                [PROBLEM_ID],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1,
+        "the closed conflict remains available as an audit record"
     );
 }
 

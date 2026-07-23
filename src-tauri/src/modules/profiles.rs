@@ -71,6 +71,8 @@ pub enum ProfileUseCaseError {
     Database(#[from] rusqlite::Error),
     #[error("profile outbox serialization failed")]
     Serialization(#[from] serde_json::Error),
+    #[error("profile has unresolved sync conflicts")]
+    ConflictPending,
 }
 
 pub fn create_profile(
@@ -143,6 +145,14 @@ pub fn rename_profile(
     }
 
     let transaction = connection.transaction()?;
+    if crate::modules::sync_conflicts::has_open_conflict(
+        &transaction,
+        &input.account_id,
+        "learner_profile",
+        &input.profile_id,
+    )? {
+        return Err(ProfileUseCaseError::ConflictPending);
+    }
     let updated = transaction.execute(
         "UPDATE learner_profiles
          SET name = ?3, updated_at_utc_ms = ?4, revision = revision + 1

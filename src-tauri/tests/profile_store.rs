@@ -9,6 +9,57 @@ use rusqlite::params;
 use tempfile::tempdir;
 
 #[test]
+fn unresolved_conflict_blocks_profile_rename() {
+    let directory = tempdir().expect("temp directory");
+    let mut connection =
+        open_encrypted_database(&directory.path().join("library.db"), "profile-conflict-key")
+            .expect("open encrypted database");
+    run_migrations(&mut connection).expect("migrate database");
+    let profile = create_profile(
+        &mut connection,
+        CreateProfile {
+            account_id: "account-1".to_owned(),
+            name: "小树".to_owned(),
+            now_utc_ms: 10,
+        },
+    )
+    .expect("create profile");
+    connection
+        .execute(
+            "INSERT INTO sync_conflicts(
+               id, account_id, profile_id, entity_type, entity_id, field_name,
+               local_value_json, remote_value_json, base_revision, created_at_utc_ms
+             ) VALUES(
+               '0191365e-2f2f-7b89-b3b0-555555555555',
+               'account-1', ?1, 'learner_profile', ?1, 'name',
+               '\"小树\"', '\"云端档案\"', 1, 20
+             )",
+            [&profile.id],
+        )
+        .expect("open conflict");
+
+    let error = rename_profile(
+        &mut connection,
+        RenameProfile {
+            account_id: "account-1".to_owned(),
+            profile_id: profile.id.clone(),
+            name: "不应写入".to_owned(),
+            now_utc_ms: 30,
+        },
+    )
+    .expect_err("open conflict must block rename");
+    assert!(matches!(error, ProfileUseCaseError::ConflictPending));
+    let unchanged: (String, i64) = connection
+        .query_row(
+            "SELECT name, revision FROM learner_profiles WHERE id = ?1",
+            [&profile.id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("unchanged profile");
+    assert_eq!(unchanged, ("小树".to_owned(), 1));
+}
+
+#[test]
 fn creating_a_profile_commits_the_profile_and_outbox_together() {
     let directory = tempdir().expect("temp directory");
     let mut connection =

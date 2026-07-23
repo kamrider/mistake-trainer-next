@@ -191,6 +191,8 @@ pub enum ProblemUseCaseError {
     File(#[from] std::io::Error),
     #[error("problem outbox serialization failed")]
     Serialization(#[from] serde_json::Error),
+    #[error("problem has unresolved sync conflicts")]
+    ConflictPending,
 }
 
 pub fn list_problem_summaries(
@@ -510,6 +512,14 @@ pub fn update_problem(
         return Err(ProblemUseCaseError::InvalidTimeLimit);
     }
     let transaction = connection.transaction()?;
+    if crate::modules::sync_conflicts::has_open_conflict(
+        &transaction,
+        &input.account_id,
+        "problem",
+        &input.problem_id,
+    )? {
+        return Err(ProblemUseCaseError::ConflictPending);
+    }
     let base_revision = transaction
         .query_row(
             "SELECT revision FROM problems WHERE id = ?1 AND account_id = ?2 AND profile_id = ?3",
@@ -575,6 +585,14 @@ pub fn change_problem_status(
     }
     let transaction = connection.transaction()?;
     for problem_id in &problem_ids {
+        if crate::modules::sync_conflicts::has_open_conflict(
+            &transaction,
+            &input.account_id,
+            "problem",
+            problem_id,
+        )? {
+            return Err(ProblemUseCaseError::ConflictPending);
+        }
         let current = transaction
             .query_row(
                 "SELECT status, revision FROM problems

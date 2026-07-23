@@ -827,7 +827,8 @@ fn version_twelve_library_adds_sync_merge_state_without_changing_open_conflicts(
     );
     assert_eq!(
         connection
-            .query_row("SELECT COUNT(*) FROM sync_conflicts", [], |row| row.get::<_, i64>(0))
+            .query_row("SELECT COUNT(*) FROM sync_conflicts", [], |row| row
+                .get::<_, i64>(0))
             .unwrap(),
         1
     );

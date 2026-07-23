@@ -1,11 +1,18 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use rusqlite::{OptionalExtension, Transaction, params};
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
+use specta::Type;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::modules::sync_store::{
-    WireExportSnapshot, WireProblemAggregate, WireProblemAsset, WireProfile,
+use crate::{
+    domain::profile::ProfileName,
+    modules::{
+        exports::ExportLayout,
+        sync_store::{WireExportSnapshot, WireProblemAggregate, WireProblemAsset, WireProfile},
+    },
 };
 
 #[derive(Debug, Error)]
@@ -14,6 +21,108 @@ pub enum SyncConflictError {
     Database(#[from] rusqlite::Error),
     #[error("sync conflict payload is invalid")]
     Json(#[from] serde_json::Error),
+    #[error("sync conflict was not found")]
+    NotFound,
+    #[error("sync conflict value is invalid")]
+    InvalidValue,
+    #[error("the last profile cannot be deleted")]
+    LastProfile,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncConflictChoice {
+    Local,
+    Remote,
+}
+
+impl SyncConflictChoice {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Remote => "remote",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Type, PartialEq)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum JsonValue {
+    Null,
+    Bool(bool),
+    Number(String),
+    String(String),
+    Array(Vec<JsonValue>),
+    Object(BTreeMap<String, JsonValue>),
+}
+
+impl JsonValue {
+    fn from_serde(value: Value) -> Result<Self, SyncConflictError> {
+        Ok(match value {
+            Value::Null => Self::Null,
+            Value::Bool(value) => Self::Bool(value),
+            Value::Number(value) => Self::Number(value.to_string()),
+            Value::String(value) => Self::String(value),
+            Value::Array(values) => Self::Array(
+                values
+                    .into_iter()
+                    .map(Self::from_serde)
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
+            Value::Object(values) => Self::Object(
+                values
+                    .into_iter()
+                    .map(|(key, value)| Ok((key, Self::from_serde(value)?)))
+                    .collect::<Result<BTreeMap<_, _>, SyncConflictError>>()?,
+            ),
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Type, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncConflictSummary {
+    pub id: String,
+    pub entity_type: String,
+    pub entity_id: String,
+    pub entity_label: String,
+    pub field_name: String,
+    pub local_value: JsonValue,
+    pub remote_value: JsonValue,
+    pub created_at_utc_ms: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolveSyncConflictFieldInput {
+    pub conflict_id: String,
+    pub choice: SyncConflictChoice,
+}
+
+#[derive(Clone, Debug, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolveSyncConflictEntityInput {
+    pub entity_type: String,
+    pub entity_id: String,
+    pub choice: SyncConflictChoice,
+}
+
+#[derive(Clone, Debug)]
+struct ConflictRow {
+    id: String,
+    profile_id: Option<String>,
+    entity_type: String,
+    entity_id: String,
+    field_name: String,
+    local_value: Value,
+    remote_value: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ValidExportConfiguration {
+    #[allow(dead_code)]
+    layout: ExportLayout,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -347,8 +456,50 @@ pub(crate) fn record_conflicts(
     entity_type: &str,
     entity_id: &str,
     conflicts: &[FieldConflict],
+    resolved_content: &Value,
     now_utc_ms: i64,
 ) -> Result<(), SyncConflictError> {
+    let active_fields = conflicts
+        .iter()
+        .map(|conflict| conflict.field_name)
+        .collect::<BTreeSet<_>>();
+    let mut stale_statement = tx.prepare(
+        "SELECT id, field_name, local_value_json, remote_value_json
+         FROM sync_conflicts
+         WHERE account_id = ?1 AND entity_type = ?2 AND entity_id = ?3
+           AND resolved_at_utc_ms IS NULL
+         ORDER BY created_at_utc_ms, id",
+    )?;
+    let stale = stale_statement
+        .query_map(params![account_id, entity_type, entity_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(stale_statement);
+    for (id, field_name, local_json, remote_json) in stale {
+        if active_fields.contains(field_name.as_str()) {
+            continue;
+        }
+        let local = serde_json::from_str::<Value>(&local_json)?;
+        let remote = serde_json::from_str::<Value>(&remote_json)?;
+        let resolved = if field_name == "__deleted__" {
+            Value::Bool(false)
+        } else {
+            resolved_content.get(&field_name).cloned().unwrap_or(remote)
+        };
+        let resolution = if resolved == local { "local" } else { "remote" };
+        tx.execute(
+            "UPDATE sync_conflicts
+             SET resolution = ?1, resolved_value_json = ?2, resolved_at_utc_ms = ?3
+             WHERE id = ?4 AND account_id = ?5 AND resolved_at_utc_ms IS NULL",
+            params![resolution, resolved.to_string(), now_utc_ms, id, account_id],
+        )?;
+    }
     for conflict in conflicts {
         let updated = tx.execute(
             "UPDATE sync_conflicts
@@ -403,8 +554,7 @@ pub(crate) fn replace_entity_outbox(
 ) -> Result<(), SyncConflictError> {
     tx.execute(
         "DELETE FROM sync_operations
-         WHERE account_id = ?1 AND entity_type = ?2 AND entity_id = ?3
-           AND operation = 'upsert'",
+         WHERE account_id = ?1 AND entity_type = ?2 AND entity_id = ?3",
         params![account_id, entity_type, entity_id],
     )?;
     if enqueue {
@@ -425,6 +575,81 @@ pub(crate) fn replace_entity_outbox(
         )?;
     }
     Ok(())
+}
+
+pub(crate) fn cleanup_deleted_profile_sync_state(
+    tx: &Transaction<'_>,
+    account_id: &str,
+    profile_id: &str,
+    preserve_profile_entity_conflicts: bool,
+    now_utc_ms: i64,
+) -> Result<(), rusqlite::Error> {
+    tx.execute(
+        "DELETE FROM sync_operations
+         WHERE account_id = ?1 AND (
+           (entity_type = 'learner_profile' AND entity_id = ?2)
+           OR (profile_id = ?2 AND entity_type <> 'asset')
+         )",
+        params![account_id, profile_id],
+    )?;
+    tx.execute(
+        "UPDATE sync_operations SET profile_id = NULL
+         WHERE account_id = ?1 AND profile_id = ?2 AND entity_type = 'asset'",
+        params![account_id, profile_id],
+    )?;
+    if preserve_profile_entity_conflicts {
+        tx.execute(
+            "UPDATE sync_conflicts
+             SET resolution = 'remote', resolved_value_json = 'null',
+                 resolved_at_utc_ms = ?3
+             WHERE account_id = ?1 AND profile_id = ?2
+               AND resolved_at_utc_ms IS NULL
+               AND NOT (
+                 entity_type = 'learner_profile' AND entity_id = ?2
+               )",
+            params![account_id, profile_id, now_utc_ms],
+        )?;
+    } else {
+        tx.execute(
+            "UPDATE sync_conflicts
+             SET resolution = 'remote', resolved_value_json = 'null',
+                 resolved_at_utc_ms = ?3
+             WHERE account_id = ?1 AND profile_id = ?2
+               AND resolved_at_utc_ms IS NULL",
+            params![account_id, profile_id, now_utc_ms],
+        )?;
+    }
+    tx.execute(
+        "DELETE FROM sync_entity_snapshots
+         WHERE account_id = ?1 AND (
+           profile_id = ?2
+           OR (entity_type = 'learner_profile' AND entity_id = ?2)
+         )",
+        params![account_id, profile_id],
+    )?;
+    tx.execute(
+        "DELETE FROM tombstones
+         WHERE account_id = ?1 AND profile_id = ?2",
+        params![account_id, profile_id],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn has_open_conflict(
+    tx: &Transaction<'_>,
+    account_id: &str,
+    entity_type: &str,
+    entity_id: &str,
+) -> Result<bool, rusqlite::Error> {
+    tx.query_row(
+        "SELECT EXISTS(
+           SELECT 1 FROM sync_conflicts
+           WHERE account_id = ?1 AND entity_type = ?2 AND entity_id = ?3
+             AND resolved_at_utc_ms IS NULL
+         )",
+        params![account_id, entity_type, entity_id],
+        |row| row.get(0),
+    )
 }
 
 pub(crate) fn deletion_conflict(
@@ -502,7 +727,11 @@ pub(crate) fn deletion_conflict(
     }
 }
 
-fn problem_content(value: &WireProblemAggregate) -> Value {
+pub(crate) fn profile_content(value: &WireProfile) -> Value {
+    serde_json::json!({ "name": value.name })
+}
+
+pub(crate) fn problem_content(value: &WireProblemAggregate) -> Value {
     serde_json::json!({
         "subject": value.subject,
         "tags": value.tags,
@@ -513,12 +742,700 @@ fn problem_content(value: &WireProblemAggregate) -> Value {
     })
 }
 
-fn export_content(value: &WireExportSnapshot) -> Value {
+pub(crate) fn export_content(value: &WireExportSnapshot) -> Value {
     serde_json::json!({
         "title": value.title,
         "problemIds": value.problem_ids,
         "configuration": value.configuration,
     })
+}
+
+pub fn list_sync_conflicts(
+    tx: &Transaction<'_>,
+    account_id: &str,
+    profile_id: &str,
+) -> Result<Vec<SyncConflictSummary>, SyncConflictError> {
+    let mut statement = tx.prepare(
+        "SELECT c.id, c.entity_type, c.entity_id,
+                CASE c.entity_type
+                  WHEN 'learner_profile' THEN COALESCE(p.name, '已删除学习档案')
+                  WHEN 'problem' THEN COALESCE(problem.subject, '已删除错题')
+                  WHEN 'export_snapshot' THEN COALESCE(e.title, '已删除导出批次')
+                  ELSE '同步内容'
+                END,
+                c.field_name, c.local_value_json, c.remote_value_json,
+                c.created_at_utc_ms
+         FROM sync_conflicts c
+         LEFT JOIN learner_profiles p
+           ON c.entity_type = 'learner_profile' AND p.id = c.entity_id
+              AND p.account_id = c.account_id
+         LEFT JOIN problems problem
+           ON c.entity_type = 'problem' AND problem.id = c.entity_id
+              AND problem.account_id = c.account_id
+         LEFT JOIN export_snapshots e
+           ON c.entity_type = 'export_snapshot' AND e.id = c.entity_id
+              AND e.account_id = c.account_id
+         WHERE c.account_id = ?1 AND c.profile_id = ?2
+           AND c.resolved_at_utc_ms IS NULL
+         ORDER BY c.created_at_utc_ms, c.entity_type, c.entity_id, c.field_name, c.id",
+    )?;
+    let rows = statement
+        .query_map(params![account_id, profile_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, i64>(7)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    rows.into_iter()
+        .map(
+            |(
+                id,
+                entity_type,
+                entity_id,
+                entity_label,
+                field_name,
+                local_value,
+                remote_value,
+                created_at_utc_ms,
+            )| {
+                Ok(SyncConflictSummary {
+                    id,
+                    entity_type,
+                    entity_id,
+                    entity_label,
+                    field_name,
+                    local_value: JsonValue::from_serde(serde_json::from_str(&local_value)?)?,
+                    remote_value: JsonValue::from_serde(serde_json::from_str(&remote_value)?)?,
+                    created_at_utc_ms: created_at_utc_ms as f64,
+                })
+            },
+        )
+        .collect()
+}
+
+pub fn resolve_sync_conflict_field(
+    connection: &mut rusqlite::Connection,
+    account_id: &str,
+    profile_id: &str,
+    input: ResolveSyncConflictFieldInput,
+    now_utc_ms: i64,
+) -> Result<Vec<SyncConflictSummary>, SyncConflictError> {
+    let transaction = connection.transaction()?;
+    let row = load_conflict_by_id(&transaction, account_id, profile_id, &input.conflict_id)?;
+    let rows = if row.field_name == "__deleted__" && input.choice == SyncConflictChoice::Remote {
+        load_conflicts_for_entity(
+            &transaction,
+            account_id,
+            profile_id,
+            &row.entity_type,
+            &row.entity_id,
+        )?
+    } else {
+        vec![row]
+    };
+    resolve_rows(
+        &transaction,
+        account_id,
+        profile_id,
+        &rows,
+        input.choice,
+        now_utc_ms,
+    )?;
+    let remaining = list_sync_conflicts(&transaction, account_id, profile_id)?;
+    transaction.commit()?;
+    Ok(remaining)
+}
+
+pub fn resolve_sync_conflict_entity(
+    connection: &mut rusqlite::Connection,
+    account_id: &str,
+    profile_id: &str,
+    input: ResolveSyncConflictEntityInput,
+    now_utc_ms: i64,
+) -> Result<Vec<SyncConflictSummary>, SyncConflictError> {
+    let transaction = connection.transaction()?;
+    let rows = load_conflicts_for_entity(
+        &transaction,
+        account_id,
+        profile_id,
+        &input.entity_type,
+        &input.entity_id,
+    )?;
+    if rows.is_empty() {
+        return Err(SyncConflictError::NotFound);
+    }
+    resolve_rows(
+        &transaction,
+        account_id,
+        profile_id,
+        &rows,
+        input.choice,
+        now_utc_ms,
+    )?;
+    let remaining = list_sync_conflicts(&transaction, account_id, profile_id)?;
+    transaction.commit()?;
+    Ok(remaining)
+}
+
+fn load_conflict_by_id(
+    tx: &Transaction<'_>,
+    account_id: &str,
+    profile_id: &str,
+    conflict_id: &str,
+) -> Result<ConflictRow, SyncConflictError> {
+    tx.query_row(
+        "SELECT id, profile_id, entity_type, entity_id, field_name,
+                local_value_json, remote_value_json
+         FROM sync_conflicts
+         WHERE id = ?1 AND account_id = ?2 AND profile_id = ?3
+           AND resolved_at_utc_ms IS NULL",
+        params![conflict_id, account_id, profile_id],
+        conflict_row,
+    )
+    .optional()?
+    .ok_or(SyncConflictError::NotFound)
+}
+
+fn load_conflicts_for_entity(
+    tx: &Transaction<'_>,
+    account_id: &str,
+    profile_id: &str,
+    entity_type: &str,
+    entity_id: &str,
+) -> Result<Vec<ConflictRow>, SyncConflictError> {
+    let mut statement = tx.prepare(
+        "SELECT id, profile_id, entity_type, entity_id, field_name,
+                local_value_json, remote_value_json
+         FROM sync_conflicts
+         WHERE account_id = ?1 AND profile_id = ?2 AND entity_type = ?3
+           AND entity_id = ?4 AND resolved_at_utc_ms IS NULL
+         ORDER BY created_at_utc_ms, field_name, id",
+    )?;
+    Ok(statement
+        .query_map(
+            params![account_id, profile_id, entity_type, entity_id],
+            conflict_row,
+        )?
+        .collect::<Result<Vec<_>, _>>()?)
+}
+
+fn conflict_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ConflictRow> {
+    let local_value_json = row.get::<_, String>(5)?;
+    let remote_value_json = row.get::<_, String>(6)?;
+    let local_value = serde_json::from_str(&local_value_json).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            local_value_json.len(),
+            rusqlite::types::Type::Text,
+            Box::new(error),
+        )
+    })?;
+    let remote_value = serde_json::from_str(&remote_value_json).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            remote_value_json.len(),
+            rusqlite::types::Type::Text,
+            Box::new(error),
+        )
+    })?;
+    Ok(ConflictRow {
+        id: row.get(0)?,
+        profile_id: row.get(1)?,
+        entity_type: row.get(2)?,
+        entity_id: row.get(3)?,
+        field_name: row.get(4)?,
+        local_value,
+        remote_value,
+    })
+}
+
+fn resolve_rows(
+    tx: &Transaction<'_>,
+    account_id: &str,
+    profile_id: &str,
+    rows: &[ConflictRow],
+    choice: SyncConflictChoice,
+    now_utc_ms: i64,
+) -> Result<(), SyncConflictError> {
+    let first = rows.first().ok_or(SyncConflictError::NotFound)?;
+    if rows.iter().any(|row| {
+        row.entity_type != first.entity_type
+            || row.entity_id != first.entity_id
+            || row.profile_id.as_deref() != Some(profile_id)
+    }) {
+        return Err(SyncConflictError::NotFound);
+    }
+    let mut accepted_remote_delete = false;
+    let mut kept_local_delete = false;
+    for row in rows {
+        let chosen = match choice {
+            SyncConflictChoice::Local => &row.local_value,
+            SyncConflictChoice::Remote => &row.remote_value,
+        };
+        if row.field_name == "__deleted__" {
+            if choice == SyncConflictChoice::Remote {
+                apply_remote_delete(tx, account_id, row, now_utc_ms)?;
+                accepted_remote_delete = true;
+            } else {
+                kept_local_delete = true;
+            }
+        } else {
+            apply_field_value(tx, account_id, row, chosen, now_utc_ms)?;
+        }
+        let changed = tx.execute(
+            "UPDATE sync_conflicts
+             SET resolution = ?1, resolved_value_json = ?2, resolved_at_utc_ms = ?3
+             WHERE id = ?4 AND account_id = ?5 AND resolved_at_utc_ms IS NULL",
+            params![
+                choice.as_str(),
+                chosen.to_string(),
+                now_utc_ms,
+                row.id,
+                account_id
+            ],
+        )?;
+        if changed != 1 {
+            return Err(SyncConflictError::NotFound);
+        }
+    }
+    let remaining: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM sync_conflicts
+         WHERE account_id = ?1 AND entity_type = ?2 AND entity_id = ?3
+           AND resolved_at_utc_ms IS NULL",
+        params![account_id, first.entity_type, first.entity_id],
+        |row| row.get(0),
+    )?;
+    if remaining == 0 {
+        if accepted_remote_delete {
+            replace_entity_outbox(
+                tx,
+                account_id,
+                first.profile_id.as_deref(),
+                &first.entity_type,
+                &first.entity_id,
+                false,
+                now_utc_ms,
+            )?;
+            tx.execute(
+                "DELETE FROM sync_entity_snapshots
+                 WHERE account_id = ?1 AND entity_type = ?2 AND entity_id = ?3",
+                params![account_id, first.entity_type, first.entity_id],
+            )?;
+        } else {
+            finalize_resolved_entity(tx, account_id, first, now_utc_ms)?;
+            if kept_local_delete {
+                tx.execute(
+                    "DELETE FROM tombstones
+                     WHERE account_id = ?1 AND entity_type = ?2 AND entity_id = ?3",
+                    params![account_id, first.entity_type, first.entity_id],
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn apply_field_value(
+    tx: &Transaction<'_>,
+    account_id: &str,
+    row: &ConflictRow,
+    value: &Value,
+    now_utc_ms: i64,
+) -> Result<(), SyncConflictError> {
+    match row.entity_type.as_str() {
+        "learner_profile" if row.field_name == "name" => {
+            let name = value.as_str().ok_or(SyncConflictError::InvalidValue)?;
+            let name = ProfileName::parse(name).map_err(|_| SyncConflictError::InvalidValue)?;
+            tx.execute(
+                "UPDATE learner_profiles SET name = ?1, updated_at_utc_ms = ?2
+                 WHERE id = ?3 AND account_id = ?4",
+                params![name.as_str(), now_utc_ms, row.entity_id, account_id],
+            )?;
+        }
+        "problem" => apply_problem_field(tx, account_id, row, value, now_utc_ms)?,
+        "export_snapshot" => apply_export_field(tx, account_id, row, value)?,
+        _ => return Err(SyncConflictError::InvalidValue),
+    }
+    Ok(())
+}
+
+fn apply_problem_field(
+    tx: &Transaction<'_>,
+    account_id: &str,
+    row: &ConflictRow,
+    value: &Value,
+    now_utc_ms: i64,
+) -> Result<(), SyncConflictError> {
+    match row.field_name.as_str() {
+        "subject" | "note" => {
+            let text = value
+                .as_str()
+                .ok_or(SyncConflictError::InvalidValue)?
+                .trim();
+            let max = if row.field_name == "subject" {
+                40
+            } else {
+                2_000
+            };
+            if text.chars().count() > max {
+                return Err(SyncConflictError::InvalidValue);
+            }
+            let column = if row.field_name == "subject" {
+                "subject"
+            } else {
+                "note"
+            };
+            tx.execute(
+                &format!(
+                    "UPDATE problems SET {column} = ?1, updated_at_utc_ms = ?2
+                     WHERE id = ?3 AND account_id = ?4"
+                ),
+                params![text, now_utc_ms, row.entity_id, account_id],
+            )?;
+        }
+        "tags" => {
+            let tags = serde_json::from_value::<Vec<String>>(value.clone())
+                .map_err(|_| SyncConflictError::InvalidValue)?;
+            if tags.len() > 20 {
+                return Err(SyncConflictError::InvalidValue);
+            }
+            let mut seen = BTreeSet::new();
+            let tags = tags
+                .into_iter()
+                .map(|tag| tag.trim().to_owned())
+                .filter(|tag| !tag.is_empty())
+                .map(|tag| {
+                    if tag.chars().count() > 30 {
+                        Err(SyncConflictError::InvalidValue)
+                    } else {
+                        Ok(tag)
+                    }
+                })
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .filter(|tag| seen.insert(tag.clone()))
+                .collect::<Vec<_>>();
+            tx.execute(
+                "UPDATE problems SET tags_json = ?1, updated_at_utc_ms = ?2
+                 WHERE id = ?3 AND account_id = ?4",
+                params![
+                    serde_json::to_string(&tags)?,
+                    now_utc_ms,
+                    row.entity_id,
+                    account_id
+                ],
+            )?;
+        }
+        "status" => {
+            let status = value.as_str().ok_or(SyncConflictError::InvalidValue)?;
+            let status = match status {
+                "active" | "archived" | "trashed" => status,
+                "deleted" => "trashed",
+                _ => return Err(SyncConflictError::InvalidValue),
+            };
+            tx.execute(
+                "UPDATE problems SET status = ?1, updated_at_utc_ms = ?2
+                 WHERE id = ?3 AND account_id = ?4",
+                params![status, now_utc_ms, row.entity_id, account_id],
+            )?;
+        }
+        "timeLimitSeconds" => {
+            let seconds = if value.is_null() {
+                None
+            } else {
+                Some(value.as_i64().ok_or(SyncConflictError::InvalidValue)?)
+            };
+            if seconds.is_some_and(|value| !(1..=86_400).contains(&value)) {
+                return Err(SyncConflictError::InvalidValue);
+            }
+            tx.execute(
+                "UPDATE problems SET time_limit_seconds = ?1, updated_at_utc_ms = ?2
+                 WHERE id = ?3 AND account_id = ?4",
+                params![seconds, now_utc_ms, row.entity_id, account_id],
+            )?;
+        }
+        "assets" => {
+            let links = serde_json::from_value::<Vec<WireProblemAsset>>(value.clone())
+                .map_err(|_| SyncConflictError::InvalidValue)?;
+            tx.execute(
+                "DELETE FROM problem_assets WHERE problem_id = ?1",
+                [&row.entity_id],
+            )?;
+            for link in links {
+                if !matches!(link.role.as_str(), "question" | "answer") || link.position < 0 {
+                    return Err(SyncConflictError::InvalidValue);
+                }
+                let exists: bool = tx.query_row(
+                    "SELECT EXISTS(
+                       SELECT 1 FROM assets WHERE id = ?1 AND account_id = ?2
+                     )",
+                    params![link.asset_id, account_id],
+                    |row| row.get(0),
+                )?;
+                if !exists {
+                    return Err(SyncConflictError::InvalidValue);
+                }
+                tx.execute(
+                    "INSERT INTO problem_assets(problem_id, asset_id, role, position)
+                     VALUES(?1, ?2, ?3, ?4)",
+                    params![row.entity_id, link.asset_id, link.role, link.position],
+                )?;
+            }
+        }
+        _ => return Err(SyncConflictError::InvalidValue),
+    }
+    Ok(())
+}
+
+fn apply_export_field(
+    tx: &Transaction<'_>,
+    account_id: &str,
+    row: &ConflictRow,
+    value: &Value,
+) -> Result<(), SyncConflictError> {
+    match row.field_name.as_str() {
+        "title" => {
+            let title = value
+                .as_str()
+                .ok_or(SyncConflictError::InvalidValue)?
+                .trim();
+            if title.is_empty() || title.chars().count() > 80 {
+                return Err(SyncConflictError::InvalidValue);
+            }
+            tx.execute(
+                "UPDATE export_snapshots SET title = ?1
+                 WHERE id = ?2 AND account_id = ?3",
+                params![title, row.entity_id, account_id],
+            )?;
+        }
+        "problemIds" => {
+            let ids = serde_json::from_value::<Vec<String>>(value.clone())
+                .map_err(|_| SyncConflictError::InvalidValue)?;
+            let mut seen = BTreeSet::new();
+            let ids = ids
+                .into_iter()
+                .filter(|id| seen.insert(id.clone()))
+                .collect::<Vec<_>>();
+            if ids.is_empty() || ids.len() > 500 {
+                return Err(SyncConflictError::InvalidValue);
+            }
+            let profile_id = row
+                .profile_id
+                .as_deref()
+                .ok_or(SyncConflictError::InvalidValue)?;
+            for id in &ids {
+                let exists: bool = tx.query_row(
+                    "SELECT EXISTS(
+                       SELECT 1 FROM problems
+                       WHERE id = ?1 AND account_id = ?2 AND profile_id = ?3
+                         AND status != 'trashed'
+                     )",
+                    params![id, account_id, profile_id],
+                    |record| record.get(0),
+                )?;
+                if !exists {
+                    return Err(SyncConflictError::InvalidValue);
+                }
+            }
+            tx.execute(
+                "UPDATE export_snapshots SET problem_ids_json = ?1
+                 WHERE id = ?2 AND account_id = ?3",
+                params![serde_json::to_string(&ids)?, row.entity_id, account_id],
+            )?;
+        }
+        "configuration" => {
+            serde_json::from_value::<ValidExportConfiguration>(value.clone())
+                .map_err(|_| SyncConflictError::InvalidValue)?;
+            tx.execute(
+                "UPDATE export_snapshots SET configuration_json = ?1
+                 WHERE id = ?2 AND account_id = ?3",
+                params![value.to_string(), row.entity_id, account_id],
+            )?;
+        }
+        _ => return Err(SyncConflictError::InvalidValue),
+    }
+    Ok(())
+}
+
+fn apply_remote_delete(
+    tx: &Transaction<'_>,
+    account_id: &str,
+    row: &ConflictRow,
+    now_utc_ms: i64,
+) -> Result<(), SyncConflictError> {
+    let deleted_revision = tx
+        .query_row(
+            "SELECT revision FROM tombstones
+             WHERE account_id = ?1 AND entity_type = ?2 AND entity_id = ?3",
+            params![account_id, row.entity_type, row.entity_id],
+            |record| record.get::<_, i64>(0),
+        )
+        .optional()?
+        .ok_or(SyncConflictError::NotFound)?;
+    match row.entity_type.as_str() {
+        "problem" => {
+            tx.execute(
+                "UPDATE problems
+                 SET status = 'trashed', revision = max(revision, ?1),
+                     updated_at_utc_ms = ?2
+                 WHERE id = ?3 AND account_id = ?4",
+                params![deleted_revision, now_utc_ms, row.entity_id, account_id],
+            )?;
+        }
+        "export_snapshot" => {
+            tx.execute(
+                "DELETE FROM export_snapshots WHERE id = ?1 AND account_id = ?2",
+                params![row.entity_id, account_id],
+            )?;
+        }
+        "learner_profile" => {
+            let replacement = tx
+                .query_row(
+                    "SELECT id FROM learner_profiles
+                     WHERE account_id = ?1 AND id <> ?2
+                     ORDER BY created_at_utc_ms, id LIMIT 1",
+                    params![account_id, row.entity_id],
+                    |record| record.get::<_, String>(0),
+                )
+                .optional()?
+                .ok_or(SyncConflictError::LastProfile)?;
+            tx.execute(
+                "UPDATE account_preferences
+                 SET active_profile_id = CASE
+                   WHEN active_profile_id = ?1 THEN ?2 ELSE active_profile_id END,
+                   updated_at_utc_ms = ?3
+                 WHERE account_id = ?4",
+                params![row.entity_id, replacement, now_utc_ms, account_id],
+            )?;
+            cleanup_deleted_profile_sync_state(tx, account_id, &row.entity_id, true, now_utc_ms)?;
+            tx.execute(
+                "DELETE FROM learner_profiles WHERE id = ?1 AND account_id = ?2",
+                params![row.entity_id, account_id],
+            )?;
+        }
+        _ => return Err(SyncConflictError::InvalidValue),
+    }
+    Ok(())
+}
+
+fn finalize_resolved_entity(
+    tx: &Transaction<'_>,
+    account_id: &str,
+    row: &ConflictRow,
+    now_utc_ms: i64,
+) -> Result<(), SyncConflictError> {
+    let snapshot = tx
+        .query_row(
+            "SELECT revision, payload_json FROM sync_entity_snapshots
+             WHERE account_id = ?1 AND entity_type = ?2 AND entity_id = ?3",
+            params![account_id, row.entity_type, row.entity_id],
+            |record| Ok((record.get::<_, i64>(0)?, record.get::<_, String>(1)?)),
+        )
+        .optional()?;
+    let tombstone_revision = tx
+        .query_row(
+            "SELECT revision FROM tombstones
+             WHERE account_id = ?1 AND entity_type = ?2 AND entity_id = ?3",
+            params![account_id, row.entity_type, row.entity_id],
+            |record| record.get::<_, i64>(0),
+        )
+        .optional()?
+        .unwrap_or(0);
+    let remote_revision = snapshot
+        .as_ref()
+        .map_or(tombstone_revision, |value| value.0.max(tombstone_revision));
+    let (profile_id, local_revision, local_content, remote_content) = match row.entity_type.as_str()
+    {
+        "learner_profile" => {
+            let local = load_local_profile(tx, account_id, &row.entity_id)?
+                .ok_or(SyncConflictError::NotFound)?;
+            let remote = snapshot
+                .as_ref()
+                .map(|value| serde_json::from_str::<WireProfile>(&value.1))
+                .transpose()?;
+            (
+                Some(local.id.clone()),
+                local.revision,
+                serde_json::json!({ "name": local.name }),
+                remote.map(|value| serde_json::json!({ "name": value.name })),
+            )
+        }
+        "problem" => {
+            let local = load_local_problem(tx, account_id, &row.entity_id)?
+                .ok_or(SyncConflictError::NotFound)?;
+            let remote = snapshot
+                .as_ref()
+                .map(|value| serde_json::from_str::<WireProblemAggregate>(&value.1))
+                .transpose()?;
+            (
+                Some(local.profile_id.clone()),
+                local.revision,
+                problem_content(&local),
+                remote.map(|value| problem_content(&value)),
+            )
+        }
+        "export_snapshot" => {
+            let local = load_local_export(tx, account_id, &row.entity_id)?
+                .ok_or(SyncConflictError::NotFound)?;
+            let remote = snapshot
+                .as_ref()
+                .map(|value| serde_json::from_str::<WireExportSnapshot>(&value.1))
+                .transpose()?;
+            (
+                Some(local.profile_id.clone()),
+                local.revision,
+                export_content(&local),
+                remote.map(|value| export_content(&value)),
+            )
+        }
+        _ => return Err(SyncConflictError::InvalidValue),
+    };
+    let needs_push = remote_content.as_ref() != Some(&local_content);
+    let revision = if needs_push {
+        local_revision.max(remote_revision).saturating_add(1)
+    } else {
+        remote_revision
+    };
+    match row.entity_type.as_str() {
+        "learner_profile" => {
+            tx.execute(
+                "UPDATE learner_profiles
+                 SET revision = ?1, updated_at_utc_ms = ?2
+                 WHERE id = ?3 AND account_id = ?4",
+                params![revision, now_utc_ms, row.entity_id, account_id],
+            )?;
+        }
+        "problem" => {
+            tx.execute(
+                "UPDATE problems SET revision = ?1, updated_at_utc_ms = ?2
+                 WHERE id = ?3 AND account_id = ?4",
+                params![revision, now_utc_ms, row.entity_id, account_id],
+            )?;
+        }
+        "export_snapshot" => {
+            tx.execute(
+                "UPDATE export_snapshots SET revision = ?1
+                 WHERE id = ?2 AND account_id = ?3",
+                params![revision, row.entity_id, account_id],
+            )?;
+        }
+        _ => unreachable!(),
+    }
+    replace_entity_outbox(
+        tx,
+        account_id,
+        profile_id.as_deref(),
+        &row.entity_type,
+        &row.entity_id,
+        needs_push,
+        now_utc_ms,
+    )?;
+    Ok(())
 }
 
 fn load_snapshot<T: DeserializeOwned>(

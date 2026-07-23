@@ -85,6 +85,9 @@ pub fn builder() -> Builder<tauri::Wry> {
         commands::sync::auth_restore,
         commands::sync::auth_disconnect,
         commands::sync::sync_now,
+        commands::sync::sync_conflict_list,
+        commands::sync::sync_conflict_resolve,
+        commands::sync::sync_conflict_resolve_entity,
     ])
 }
 

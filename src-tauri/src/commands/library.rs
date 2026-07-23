@@ -133,6 +133,7 @@ pub fn problem_update_for(
             false,
             Uuid::now_v7().to_string(),
         ),
+        Err(crate::modules::problems::ProblemUseCaseError::ConflictPending) => conflict_pending(),
         Err(_) => internal_library_error("problem_update_failed"),
     }
 }
@@ -158,6 +159,7 @@ pub fn problem_change_status_for(
         },
     ) {
         Ok(count) => AppResult::success(i32::try_from(count).unwrap_or(i32::MAX)),
+        Err(crate::modules::problems::ProblemUseCaseError::ConflictPending) => conflict_pending(),
         Err(_) => internal_library_error("problem_status_failed"),
     }
 }
@@ -210,6 +212,15 @@ fn current_utc_millis() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
         .unwrap_or_default()
+}
+
+fn conflict_pending<T>() -> AppResult<T> {
+    AppResult::failure(
+        "problem_conflict_pending",
+        "这道题有尚未处理的同步冲突，请先到“设置 → 同步冲突”选择保留本机或云端版本。",
+        false,
+        Uuid::now_v7().to_string(),
+    )
 }
 
 fn internal_library_error<T>(code: &str) -> AppResult<T> {
