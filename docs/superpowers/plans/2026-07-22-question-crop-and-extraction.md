@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Do not ship automatic splitting before the manual workflow has real-device acceptance data and the suggestion benchmark passes.
 
-**Current status (2026-07-22):** Desktop non-destructive 1–10 region crop, encrypted derived assets, atomic apply, and revert are implemented in commit `3020025`. The mobile quick-crop entry, real-device crop acceptance, automatic region suggestions, OCR, and structured reconstruction are not implemented. This document is the decision record and next-stage plan; completed Phase 1 work must not be rebuilt.
+**Current status (2026-07-22):** Desktop non-destructive 1–10 region crop is implemented in `3020025`; mobile optional crop, unified review, and recovery are implemented in `135455b`. The isolated OpenCV bake-off harness is available under `labs/question-region-bakeoff`, but no consented 60-image run has been completed. Real-device crop acceptance, RapidOCR comparison, production automatic suggestions, OCR, and structured reconstruction remain pending. Completed Phase 1 work must not be rebuilt, and the lab must not be wired into the signed application before its gates pass.
 
 **Goal:** Let one phone photo safely become one or more clean question/answer assets, then optionally derive searchable and editable content without ever trusting OCR or generative reconstruction as the only copy.
 
@@ -66,6 +66,11 @@ Primary references:
 ---
 
 ## Phase 0: Disposable model and workflow spike
+
+**Harness status:** The consent-first manifest validator, deterministic OpenCV page/whitespace
+baseline, safety metrics, atomic JSON/HTML report, and visual overlays are implemented as an
+isolated developer lab. Synthetic tests prove mechanics only. The 60-image evaluation, RapidOCR
+PP-OCRv6 comparison, memory/installer measurements, and 300-image decision gate are still open.
 
 **Goal:** Validate the smallest local pipeline before adding a runtime dependency to the product.
 

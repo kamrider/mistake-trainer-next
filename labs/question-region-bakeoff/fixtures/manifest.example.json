@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "consent": {
+    "anonymized": true,
+    "authorizedForLocalEvaluation": true,
+    "recordedAt": "2026-07-22"
+  },
+  "samples": [
+    {
+      "id": "math-single-001",
+      "image": "images/replace-with-consented-copy.png",
+      "layout": "single-column",
+      "tags": ["math", "formula", "handwriting"],
+      "regions": [
+        { "x": 0.04, "y": 0.08, "width": 0.92, "height": 0.38 },
+        { "x": 0.04, "y": 0.51, "width": 0.92, "height": 0.41 }
+      ],
+      "anchors": [
+        { "x": 0.06, "y": 0.09 },
+        { "x": 0.06, "y": 0.52 }
+      ]
+    }
+  ]
+}
