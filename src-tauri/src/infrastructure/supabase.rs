@@ -387,7 +387,11 @@ impl AuthTransport for SupabaseClient {
             let url = self
                 .config
                 .base_url
-                .join("/auth/v1/logout")
+                // Supabase defaults logout to `global`, which would revoke
+                // every session on the account. Desktop sign-out is explicitly
+                // scoped to this Windows session so other trusted devices keep
+                // working.
+                .join("/auth/v1/logout?scope=local")
                 .map_err(|_| CloudError::InvalidConfiguration)?;
             let response = self
                 .http

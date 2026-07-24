@@ -109,6 +109,35 @@ fn password_sign_in_uses_the_exact_auth_endpoint_without_exposing_secrets() {
 }
 
 #[test]
+fn sign_out_revokes_only_the_current_supabase_session() {
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let (request_tx, request_rx) = oneshot::channel();
+        let request_tx = Arc::new(Mutex::new(Some(request_tx)));
+        let app = Router::new()
+            .fallback(any(capture_logout_request))
+            .with_state(request_tx);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let client = SupabaseClient::new(
+            SupabaseConfig::for_loopback_test(&format!("http://{address}"), "publishable").unwrap(),
+        )
+        .unwrap();
+        client.revoke("access-secret").await.unwrap();
+        let captured = request_rx.await.unwrap();
+
+        assert_eq!(captured.path_and_query, "/auth/v1/logout?scope=local");
+        assert_eq!(captured.api_key, "publishable");
+        assert_eq!(
+            captured.authorization.as_deref(),
+            Some("Bearer access-secret")
+        );
+        assert!(captured.body.is_empty());
+    });
+}
+
+#[test]
 fn oversized_auth_responses_are_rejected_before_deserialization() {
     tokio::runtime::Runtime::new().unwrap().block_on(async {
         let app = Router::new().fallback(any(|| async {
@@ -255,6 +284,45 @@ fn storage_collision_requires_caller_side_metadata_revalidation() {
             ObjectUploadResult::AlreadyExists
         );
     });
+}
+
+async fn capture_logout_request(
+    State(sender): State<Arc<Mutex<Option<oneshot::Sender<CapturedRequest>>>>>,
+    request: Request<Body>,
+) -> Response<Body> {
+    let path_and_query = request
+        .uri()
+        .path_and_query()
+        .map(ToString::to_string)
+        .unwrap_or_default();
+    let api_key = request
+        .headers()
+        .get("apikey")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    let authorization = request
+        .headers()
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .map(ToOwned::to_owned);
+    let body = to_bytes(request.into_body(), 1024).await.unwrap();
+    sender
+        .lock()
+        .unwrap()
+        .take()
+        .unwrap()
+        .send(CapturedRequest {
+            path_and_query,
+            api_key,
+            authorization,
+            body: String::from_utf8(body.to_vec()).unwrap(),
+        })
+        .unwrap();
+    Response::builder()
+        .status(StatusCode::NO_CONTENT)
+        .body(Body::empty())
+        .unwrap()
 }
 
 async fn capture_auth_request(

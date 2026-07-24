@@ -32,7 +32,9 @@ describe('LibraryLockDialog', () => {
     })
 
     expect(screen.getByRole('heading', { name: '退出云端并锁定本机？' })).toBeVisible()
-    expect(screen.getByText(/断网也不会阻止本机退出/)).toBeVisible()
+    expect(screen.getByText(/只会退出这台电脑的云端会话/)).toBeVisible()
+    expect(screen.getByText(/其他设备保持登录/)).toBeVisible()
+    expect(screen.getByText(/断网也不会阻止本机清除登录凭据/)).toBeVisible()
     expect(screen.getByRole('button', { name: '退出并锁定' })).toBeVisible()
   })
 
