@@ -1,15 +1,16 @@
 <script setup lang="ts">
 import { isTauri } from '@tauri-apps/api/core'
 import { CheckCircle2, ShieldAlert, X } from '@lucide/vue'
-import { computed, onErrorCaptured, onMounted, provide, ref, watch } from 'vue'
+import { computed, onErrorCaptured, onMounted, onUnmounted, provide, ref, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import { failure, type AppResult } from '../shared/api/app-result'
-import { commands, type BackupRestoreReceipt, type ProfileOverview, type ProfileSummary, type SystemStatus } from '../shared/api/bindings'
+import { commands, type BackupRestoreReceipt, type ProfileOverview, type ProfileSummary, type SyncNowReport, type SystemStatus } from '../shared/api/bindings'
 import { normalizeAppResult } from '../shared/api/normalize-result'
-import { loadSystemStatus, systemStatusLabel } from '../shared/api/system-status'
+import { loadSystemStatus } from '../shared/api/system-status'
 import AppShell, { type AppPage } from './AppShell.vue'
 import LibraryAccessScreen from './LibraryAccessScreen.vue'
 import { libraryAccessControllerKey } from './library-access-controller'
+import { createSyncController, syncControllerKey, syncStatusCopy, type SyncPhase, type SyncTrigger } from './sync-controller'
 
 const route = useRoute()
 const router = useRouter()
@@ -38,7 +39,21 @@ const pageOrder: Record<AppPage, number> = {
 const pageDirection = ref<PageDirection>('forward')
 const pageTransitionName = computed(() => `page-${pageDirection.value}`)
 const systemStatus = ref<AppResult<SystemStatus>>()
-const statusLabel = computed(() => systemStatusLabel(systemStatus.value))
+const syncPhase = ref<SyncPhase>(desktopRuntime ? 'idle' : 'local_only')
+const automaticSyncCooldownMs = 15_000
+let lastSuccessfulSyncAtUtcMs = 0
+const shellSyncStatus = computed(() => {
+  if (systemStatus.value === undefined) {
+    return { label: '正在检查资料库', tone: 'neutral' as const }
+  }
+  if (!systemStatus.value.ok) {
+    return { label: '状态检查失败', tone: 'warning' as const }
+  }
+  if (systemStatus.value.data.storage === 'preview') {
+    return { label: '浏览器设计预览', tone: 'neutral' as const }
+  }
+  return syncStatusCopy(syncPhase.value)
+})
 const profiles = ref<ProfileSummary[]>([])
 const activeProfileId = ref('')
 const profileBusy = ref(false)
@@ -47,6 +62,8 @@ const profileEpoch = ref(0)
 const restoreNotice = ref<BackupRestoreReceipt>()
 const routeError = ref('')
 const routeErrorDetail = ref('')
+const syncController = createSyncController(performSync)
+provide(syncControllerKey, syncController)
 const previewProfile: ProfileSummary = {
   id: 'preview-profile',
   name: '本机学习档案',
@@ -82,7 +99,16 @@ onErrorCaptured((error, _instance, info) => {
   return false
 })
 
-onMounted(loadLibraryAccess)
+onMounted(() => {
+  window.addEventListener('online', handleOnline)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+  void loadLibraryAccess()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('online', handleOnline)
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+})
 
 async function initializeWorkspace() {
   if (workspaceInitialized) return
@@ -98,6 +124,126 @@ async function initializeWorkspace() {
   }
   await Promise.all([loadProfiles(), loadRestoreReceipt()])
   workspaceInitialized = true
+  void restoreCloudAndSync('startup')
+}
+
+function handleOnline() {
+  if (libraryAccessPhase.value !== 'unlocked' || !workspaceInitialized) return
+  void restoreCloudAndSync('online')
+}
+
+function handleVisibilityChange() {
+  if (
+    document.visibilityState !== 'visible'
+    || libraryAccessPhase.value !== 'unlocked'
+    || !workspaceInitialized
+  ) return
+  void restoreCloudAndSync('visible')
+}
+
+function isNetworkFailure(code: string): boolean {
+  return [
+    'AUTH_NETWORK',
+    'AUTH_TIMEOUT',
+    'cloud_network',
+    'cloud_timeout',
+    'cloud_unavailable',
+  ].includes(code)
+}
+
+async function restoreCloudAndSync(reason: SyncTrigger) {
+  if (!desktopRuntime) {
+    syncPhase.value = 'local_only'
+    return
+  }
+  if (
+    reason === 'visible'
+    && lastSuccessfulSyncAtUtcMs > 0
+    && Date.now() - lastSuccessfulSyncAtUtcMs < automaticSyncCooldownMs
+  ) {
+    return
+  }
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    syncPhase.value = 'offline'
+    return
+  }
+
+  try {
+    const invocation = await commands.authRestore()
+    if (invocation.status === 'error') {
+      syncPhase.value = 'retry_waiting'
+      return
+    }
+    const result = normalizeAppResult(invocation.data)
+    if (!result.ok) {
+      syncPhase.value = isNetworkFailure(result.error.code) ? 'offline' : 'retry_waiting'
+      return
+    }
+    switch (result.data.status.kind) {
+      case 'connected':
+        syncPhase.value = 'idle'
+        await syncController.run(reason)
+        return
+      case 'offline':
+        syncPhase.value = 'offline'
+        return
+      case 'unconfigured':
+        syncPhase.value = 'local_only'
+        return
+      case 'signed_out':
+      case 'verification_required':
+        syncPhase.value = 'signed_out'
+        return
+    }
+  }
+  catch {
+    syncPhase.value = 'offline'
+  }
+}
+
+async function performSync(): Promise<AppResult<SyncNowReport>> {
+  syncPhase.value = 'syncing'
+  try {
+    const invocation = await commands.syncNow()
+    if (invocation.status === 'error') {
+      const result = failure(
+        'SYNC_COMMAND_UNAVAILABLE',
+        '同步请求没有启动，本地内容已经保存。',
+        true,
+        'sync-command-unavailable',
+      )
+      syncPhase.value = 'retry_waiting'
+      return result
+    }
+    const result = normalizeAppResult(invocation.data)
+    if (!result.ok) {
+      if (result.error.code === 'SYNC_CAPTURE_ACTIVE') {
+        syncPhase.value = 'deferred_capture'
+      }
+      else if (result.error.code === 'SYNC_ALREADY_RUNNING') {
+        syncPhase.value = 'syncing'
+      }
+      else {
+        syncPhase.value = isNetworkFailure(result.error.code) ? 'offline' : 'retry_waiting'
+      }
+      return result
+    }
+
+    syncPhase.value = 'synced'
+    lastSuccessfulSyncAtUtcMs = Date.now()
+    await loadProfiles()
+    profileEpoch.value += 1
+    return result
+  }
+  catch {
+    syncPhase.value = 'offline'
+    return failure(
+      'SYNC_REQUEST_FAILED',
+      '暂时无法连接云端，本地内容已经保存并会等待重试。',
+      true,
+      'sync-request-failed',
+    )
+  }
 }
 
 async function loadLibraryAccess() {
@@ -255,7 +401,7 @@ function selectProfile(profileId: string) {
     :profile-busy="profileBusy"
     :profile-error="profileError"
     :active-page="activePage"
-    :system-status="statusLabel"
+    :sync-status="shellSyncStatus"
     @navigate="router.push({ name: $event })"
     @profile-select="selectProfile"
     @profile-create="createProfile"

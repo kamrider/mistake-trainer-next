@@ -12,6 +12,7 @@ import BackupRestoreDialog from '../BackupRestoreDialog.vue'
 import SettingsSectionNav, { type SettingsSectionLink } from '../components/SettingsSectionNav.vue'
 import LibraryLockDialog from '../LibraryLockDialog.vue'
 import { libraryAccessControllerKey } from '../library-access-controller'
+import { syncControllerKey } from '../sync-controller'
 import StorageMigrationDialog from '../StorageMigrationDialog.vue'
 
 const overview = ref<SettingsOverview>()
@@ -32,6 +33,7 @@ const lockReturnFocus = ref<HTMLButtonElement>()
 const deviceAccessStatus = ref<LibraryAccessStatus>()
 const deviceAccessError = ref('')
 const libraryAccessController = inject(libraryAccessControllerKey, undefined)
+const globalSyncController = inject(syncControllerKey, undefined)
 const builtinSubjects = ['语文', '数学', '英语', '政治', '历史', '地理', '物理', '化学', '生物']
 const subjectPreferences = ref<SubjectPreferences>()
 const customSubject = ref('')
@@ -485,7 +487,10 @@ async function signIn() {
       cloudAuth.value = result.data
       authMessage.value = result.data.status.kind === 'verification_required'
         ? '注册成功，请先完成邮箱验证，再回来登录。'
-        : result.data.status.kind === 'connected' ? '已连接，之后可在本页手动同步。' : '登录状态已更新。'
+        : result.data.status.kind === 'connected' ? '已连接，正在开始第一次安全同步。' : '登录状态已更新。'
+      if (result.data.status.kind === 'connected') {
+        void globalSyncController?.run('manual')
+      }
     }
     else authMessage.value = result.error.userMessage
   }
@@ -565,12 +570,17 @@ async function syncNow() {
   syncBusy.value = true
   syncMessage.value = ''
   try {
-    const invocation = await commands.syncNow()
-    if (invocation.status === 'error') throw new Error('sync command rejected')
-    const result = normalizeAppResult(invocation.data)
+    const result = globalSyncController
+      ? await globalSyncController.run('manual')
+      : await (async () => {
+          const invocation = await commands.syncNow()
+          if (invocation.status === 'error') throw new Error('sync command rejected')
+          return normalizeAppResult(invocation.data)
+        })()
     if (result.ok) {
       syncMessage.value = `同步完成：上传 ${result.data.pushedOperationCount} 项，拉取 ${result.data.pulledChangeCount} 项。`
-      await load()
+      const overviewResult = normalizeAppResult(await commands.settingsOverview())
+      if (overviewResult.ok) overview.value = overviewResult.data
       await nextTick()
       await conflictCenter.value?.reload()
     }

@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/vue
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { libraryAccessControllerKey } from '../library-access-controller'
+import { syncControllerKey } from '../sync-controller'
 import SettingsView from './SettingsView.vue'
 
 const api = vi.hoisted(() => ({
@@ -30,6 +31,7 @@ const api = vi.hoisted(() => ({
   syncConflictList: vi.fn(),
   syncConflictResolve: vi.fn(),
   syncConflictResolveEntity: vi.fn(),
+  syncNow: vi.fn(),
 }))
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => true }))
 vi.mock('../../shared/api/bindings', () => ({ commands: api }))
@@ -78,6 +80,53 @@ describe('SettingsView', () => {
     api.syncConflictList.mockResolvedValue({ ok: true, data: [] })
     api.syncConflictResolve.mockResolvedValue({ ok: true, data: [] })
     api.syncConflictResolveEntity.mockResolvedValue({ ok: true, data: [] })
+    api.syncNow.mockResolvedValue({
+      status: 'ok',
+      data: {
+        ok: true,
+        data: {
+          pushedOperationCount: 0,
+          uploadedAssetCount: 0,
+          pulledChangeCount: 0,
+          downloadedAssetCount: 0,
+          finalCursor: 0,
+        },
+      },
+    })
+  })
+
+  it('delegates manual sync to the global controller without a duplicate native call', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 1, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 1, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: true,
+    } })
+    api.authStatusCommand.mockResolvedValue({ ok: true, data: {
+      configured: true, status: { kind: 'connected', emailHint: 's***@example.test' },
+    } })
+    const run = vi.fn().mockResolvedValue({
+      ok: true,
+      data: {
+        pushedOperationCount: 1,
+        uploadedAssetCount: 0,
+        pulledChangeCount: 2,
+        downloadedAssetCount: 0,
+        finalCursor: 3,
+      },
+    })
+    render(SettingsView, {
+      global: {
+        provide: {
+          [syncControllerKey as symbol]: { run },
+        },
+      },
+    })
+
+    await userEvent.click(await screen.findByRole('button', { name: '立即同步' }))
+
+    expect(run).toHaveBeenCalledWith('manual')
+    expect(api.syncNow).not.toHaveBeenCalled()
+    expect(await screen.findByText('同步完成：上传 1 项，拉取 2 项。')).toBeVisible()
   })
 
   it('places real unresolved sync choices below the library overview', async () => {

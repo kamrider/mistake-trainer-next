@@ -444,7 +444,7 @@ pub async fn sync_now(
         }
         Ok(Err("sync_capture_active")) => Ok(AppResult::failure(
             "SYNC_CAPTURE_ACTIVE",
-            "手机采集正在进行；结束拍摄后会自动继续同步，当前上传不会被打断。",
+            "手机采集正在进行；结束拍摄后，应用回到前台或网络恢复时会继续同步，当前上传不会被打断。",
             true,
             "sync-capture-active",
         )),

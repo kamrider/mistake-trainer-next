@@ -13,13 +13,14 @@ describe('AppShell', () => {
         profileBusy: false,
         profileError: '',
         activePage: 'dashboard',
-        systemStatus: '资料库已锁定',
+        syncStatus: { label: '正在安全同步', tone: 'active' },
       },
       slots: { default: '<p>内容</p>' },
     })
 
     expect(screen.getByLabelText(/当前学习档案：小树/)).toBeVisible()
-    expect(screen.getByText('资料库已锁定')).toBeVisible()
+    expect(screen.getByRole('status')).toHaveTextContent('正在安全同步')
+    expect(screen.getByRole('status')).toHaveAttribute('data-tone', 'active')
     const navigation = screen.getByRole('navigation', { name: '主导航' })
     expect(navigation).toHaveStyle('--active-index: 0')
     expect(view.container.querySelector('.nav-indicator')).toHaveAttribute('aria-hidden', 'true')

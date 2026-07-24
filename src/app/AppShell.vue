@@ -11,6 +11,7 @@ import {
 } from '@lucide/vue'
 import ProfileSwitcher from '../modules/profiles/components/ProfileSwitcher.vue'
 import type { ProfileSummary } from '../shared/api/bindings'
+import type { SyncStatusCopy } from './sync-controller'
 
 export type AppPage = 'dashboard' | 'inbox' | 'library' | 'review' | 'report' | 'settings'
 
@@ -20,7 +21,7 @@ const props = defineProps<{
   profileBusy: boolean
   profileError: string
   activePage: AppPage
-  systemStatus: string
+  syncStatus: SyncStatusCopy
 }>()
 
 const emit = defineEmits<{
@@ -97,12 +98,15 @@ const activeNavigationIndex = computed(() =>
       <div class="rail-footer">
         <div
           class="sync-state"
+          role="status"
           aria-live="polite"
+          :data-tone="syncStatus.tone"
         >
           <Cloud
             :size="15"
             aria-hidden="true"
-          /><span>{{ systemStatus }}</span>
+          />
+          <span>{{ syncStatus.label }}</span>
         </div>
         <ProfileSwitcher
           :profiles="profiles"
@@ -140,9 +144,16 @@ nav { position: relative; display: grid; gap: 5px; isolation: isolate; }
 .nav-item svg { transition: transform var(--motion-standard) var(--ease-standard); }
 .nav-item.active svg { transform: scale(1.06); }
 .rail-footer { display: grid; gap: 12px; margin-top: auto; }
-.sync-state { display: flex; gap: 7px; align-items: center; padding: 0 11px; color: var(--ink-muted); font-size: 12px; }
-.sync-state svg { color: #657f70; }
+.sync-state { display: flex; gap: 7px; align-items: center; min-height: 19px; padding: 0 11px; color: var(--ink-muted); font-size: 12px; }
+.sync-state svg { flex: 0 0 auto; color: #657f70; transition: color var(--motion-standard) var(--ease-standard), transform var(--motion-standard) var(--ease-standard), opacity var(--motion-standard) var(--ease-standard); }
+.sync-state[data-tone="active"] svg { color: var(--cinnabar); transform: scale(1.08); }
+.sync-state[data-tone="success"] { color: #557263; }
+.sync-state[data-tone="success"] svg { color: #557263; }
+.sync-state[data-tone="waiting"] { color: #8a653c; }
+.sync-state[data-tone="waiting"] svg { color: #9a7143; }
+.sync-state[data-tone="warning"] { color: #8d4635; }
+.sync-state[data-tone="warning"] svg { color: var(--cinnabar); }
 .app-content { min-width: 0; }
 @media (max-width: 760px) { .app-frame { grid-template-columns: 1fr; padding-bottom: 68px; } .side-rail { position: fixed; z-index: 20; top: auto; right: 0; bottom: 0; left: 0; height: 68px; padding: 8px 10px; border-top: 1px solid var(--line); border-right: 0; } .brand, .rail-footer { display: none; } nav { display: grid; grid-template-columns: repeat(6,1fr); } .nav-indicator { width: calc(100% / 6); height: 50px; transform: translate3d(var(--active-x),0,0); } .nav-item { justify-content: center; min-height: 50px; padding: 0; } .nav-item span { display: none; } }
-@media (prefers-reduced-motion: reduce) { .nav-indicator, .nav-item, .nav-item svg { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .nav-indicator, .nav-item, .nav-item svg, .sync-state svg { transition: none; } .sync-state[data-tone="active"] svg { transform: none; } }
 </style>

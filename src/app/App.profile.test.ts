@@ -17,6 +17,8 @@ const commandMocks = vi.hoisted(() => ({
   profileRename: vi.fn(),
   profileSelect: vi.fn(),
   backupRestoreStatus: vi.fn(),
+  authRestore: vi.fn(),
+  syncNow: vi.fn(),
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => true }))
@@ -45,6 +47,29 @@ describe('App profile orchestration', () => {
       data: { activeProfileId: daily.id, profiles: [daily, contest] },
     })
     commandMocks.backupRestoreStatus.mockResolvedValue({ ok: true, data: null })
+    commandMocks.authRestore.mockResolvedValue({
+      status: 'ok',
+      data: {
+        ok: true,
+        data: {
+          configured: false,
+          status: { kind: 'unconfigured', emailHint: null },
+        },
+      },
+    })
+    commandMocks.syncNow.mockResolvedValue({
+      status: 'ok',
+      data: {
+        ok: true,
+        data: {
+          pushedOperationCount: 0,
+          uploadedAssetCount: 0,
+          pulledChangeCount: 0,
+          downloadedAssetCount: 0,
+          finalCursor: 0,
+        },
+      },
+    })
     commandMocks.profileSelect.mockResolvedValue({
       ok: true,
       data: { activeProfileId: contest.id, profiles: [daily, contest] },
@@ -71,6 +96,130 @@ describe('App profile orchestration', () => {
       expect(router.currentRoute.value.name).toBe('dashboard')
       expect(screen.getByRole('button', { name: /当前学习档案：竞赛强化/ })).toBeVisible()
     })
+  })
+
+  it('restores a connected session and starts one background sync after unlock', async () => {
+    commandMocks.authRestore.mockResolvedValue({
+      status: 'ok',
+      data: {
+        ok: true,
+        data: {
+          configured: true,
+          status: { kind: 'connected', emailHint: 's***@example.test' },
+        },
+      },
+    })
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/')
+    await router.isReady()
+    render(App, { global: { plugins: [router], stubs: { transition: false } } })
+
+    await waitFor(() => {
+      expect(commandMocks.authRestore).toHaveBeenCalledOnce()
+      expect(commandMocks.syncNow).toHaveBeenCalledOnce()
+      expect(screen.getByText('本地与云端已同步')).toBeVisible()
+    })
+
+    document.dispatchEvent(new Event('visibilitychange'))
+    await Promise.resolve()
+
+    expect(commandMocks.authRestore).toHaveBeenCalledOnce()
+    expect(commandMocks.syncNow).toHaveBeenCalledOnce()
+  })
+
+  it('keeps the local workspace usable when session restore reports offline', async () => {
+    commandMocks.authRestore.mockResolvedValue({
+      status: 'ok',
+      data: {
+        ok: true,
+        data: {
+          configured: true,
+          status: { kind: 'offline', emailHint: 's***@example.test' },
+        },
+      },
+    })
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/')
+    await router.isReady()
+    render(App, { global: { plugins: [router], stubs: { transition: false } } })
+
+    expect(await screen.findByText('本地已保存 · 当前离线')).toBeVisible()
+    expect(commandMocks.syncNow).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: '训练台' })).toBeVisible()
+  })
+
+  it('defers background sync while phone capture is active', async () => {
+    commandMocks.authRestore.mockResolvedValue({
+      status: 'ok',
+      data: {
+        ok: true,
+        data: {
+          configured: true,
+          status: { kind: 'connected', emailHint: 's***@example.test' },
+        },
+      },
+    })
+    commandMocks.syncNow.mockResolvedValue({
+      status: 'ok',
+      data: {
+        ok: false,
+        error: {
+          code: 'SYNC_CAPTURE_ACTIVE',
+          userMessage: '手机采集正在进行，当前上传不会被打断。',
+          retryable: true,
+          diagnosticId: 'capture-active',
+        },
+      },
+    })
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/')
+    await router.isReady()
+    render(App, { global: { plugins: [router], stubs: { transition: false } } })
+
+    expect(await screen.findByText('手机采集中 · 稍后同步')).toBeVisible()
+    expect(commandMocks.syncNow).toHaveBeenCalledOnce()
+    expect(screen.getByRole('button', { name: '训练台' })).toBeVisible()
+  })
+
+  it('coalesces a network recovery trigger with an in-flight startup sync', async () => {
+    commandMocks.authRestore.mockResolvedValue({
+      status: 'ok',
+      data: {
+        ok: true,
+        data: {
+          configured: true,
+          status: { kind: 'connected', emailHint: 's***@example.test' },
+        },
+      },
+    })
+    let finishSync!: () => void
+    commandMocks.syncNow.mockReturnValue(new Promise(resolve => {
+      finishSync = () => resolve({
+        status: 'ok',
+        data: {
+          ok: true,
+          data: {
+            pushedOperationCount: 0,
+            uploadedAssetCount: 0,
+            pulledChangeCount: 0,
+            downloadedAssetCount: 0,
+            finalCursor: 0,
+          },
+        },
+      })
+    }))
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/')
+    await router.isReady()
+    render(App, { global: { plugins: [router], stubs: { transition: false } } })
+
+    await waitFor(() => expect(commandMocks.syncNow).toHaveBeenCalledOnce())
+    window.dispatchEvent(new Event('online'))
+    await waitFor(() => expect(commandMocks.authRestore).toHaveBeenCalledTimes(2))
+    expect(commandMocks.syncNow).toHaveBeenCalledOnce()
+
+    finishSync()
+    expect(await screen.findByText('本地与云端已同步')).toBeVisible()
   })
 
   it('keeps every workspace command behind the persistent library lock', async () => {
