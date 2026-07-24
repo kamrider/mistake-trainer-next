@@ -36,36 +36,29 @@
 
 ---
 
-### Task 2: Expose a redacted current-device security status
+### Task 2: Compose a redacted current-device security status
 
 **Files:**
-- Create: `src-tauri/src/commands/device_security.rs`
-- Modify: `src-tauri/src/commands/mod.rs`
-- Modify: `src-tauri/src/bindings.rs`
-- Modify: `src-tauri/src/infrastructure/runtime.rs`
-- Modify: `src/shared/api/bindings.ts` through generation
-- Create: `src-tauri/tests/device_security.rs`
+- Reuse: `src-tauri/src/commands/access.rs`
+- Reuse: `src-tauri/src/commands/sync.rs`
+- Reuse: generated `LibraryAccessStatus` and `CloudAuthState`
+- Modify: `src/app/views/SettingsView.vue`
+- Modify: `src/app/views/SettingsView.test.ts`
 
-**Interface:**
+Adding a third command would duplicate two existing authoritative states and create drift. The Settings boundary instead composes:
 
-```rust
-#[derive(Clone, Debug, Serialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct CurrentDeviceSecurityStatus {
-    pub platform_label: String,
-    pub trusted_windows_account: bool,
-    pub offline_unlock_available: bool,
-    pub library_locked: bool,
-    pub cloud_session: CurrentCloudSessionState,
+```ts
+type CurrentDeviceProtection = {
+  access: LibraryAccessStatus
+  cloud: CloudAuthState
 }
-
-current_device_security_status() -> AppResult<CurrentDeviceSecurityStatus>
 ```
 
-- [ ] Add failing tests for unlocked, locked, missing-envelope, and credential-read-failure states.
-- [ ] Derive the status from the existing lock marker, credential envelope, and in-memory auth state.
-- [ ] Return a fixed platform label and booleans only; do not return the credential-store device UUID.
-- [ ] Register the command, regenerate bindings, and run binding drift checks.
+- [x] Read `libraryAccessStatus` through the generated client; do not touch credential entries from Vue.
+- [x] Combine it with the existing `CloudAuthState` already loaded for the account panel.
+- [x] Keep the platform label fixed to “这台 Windows 电脑” and never expose the credential-store device UUID.
+- [x] Treat command failure as unavailable and show the returned safe user message instead of inventing readiness.
+- [x] Add success and credential-read-failure UI tests.
 
 ---
 
@@ -75,13 +68,14 @@ current_device_security_status() -> AppResult<CurrentDeviceSecurityStatus>
 - Modify: `src/app/views/SettingsView.vue`
 - Modify: `src/app/views/SettingsView.test.ts`
 
-- [ ] Replace “可信设备（未来）” with a live “当前 Windows 设备” panel.
-- [ ] Show three explicit rows: encrypted local library, offline unlock by current Windows account, and current cloud-session state.
-- [ ] Keep “立即锁定资料库” and “退出这台电脑并锁定” as separate actions with distinct confirmation copy.
-- [ ] Explain that managing other computers requires a future device-key upgrade; do not render a disabled fake revoke button.
-- [ ] Restore focus after dialogs, guard duplicate actions, and announce status changes through an `aria-live` region.
-- [ ] Animate status changes with opacity/transform only, up to 240 ms, and remove motion under `prefers-reduced-motion`.
-- [ ] Add keyboard, failure, cancellation, duplicate-click, and reduced-motion tests.
+- [x] Replace “可信设备（未来）” with a live “当前 Windows 设备” panel.
+- [x] Show three explicit rows: encrypted local library, offline unlock by current Windows account, and current cloud-session state.
+- [x] Keep “立即锁定资料库” and “退出这台电脑并锁定” as separate actions with distinct confirmation copy.
+- [x] Explain that managing other computers requires a future device-key upgrade; do not render a disabled fake revoke button.
+- [x] Restore focus after dialogs, guard duplicate actions, and announce failures through an `aria-live` region.
+- [x] Animate status changes with opacity/transform only, up to 240 ms, and remove motion under `prefers-reduced-motion`.
+- [x] Add keyboard, failure, cancellation, and duplicate-click tests.
+- [ ] Add an explicit reduced-motion visual snapshot to the release visual-regression suite.
 
 ---
 

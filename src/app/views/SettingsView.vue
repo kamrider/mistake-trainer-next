@@ -3,7 +3,7 @@ import { isTauri } from '@tauri-apps/api/core'
 import { Archive, ArchiveRestore, BookOpen, CheckCircle2, CloudOff, Database, FileJson2, FolderCheck, LockKeyhole, Plus, RotateCcw, ShieldCheck, Trash2, TriangleAlert, Volume2 } from '@lucide/vue'
 import { computed, inject, nextTick, onMounted, ref } from 'vue'
 import type { AppResult } from '../../shared/api/app-result'
-import { commands, type AuthStatusKind, type BackupRestoreCandidate, type BackupSummary, type CloudAuthState, type CloudBackendKind, type CloudBackendStatus, type DiagnosticExportReceipt, type ReviewFocusPolicy, type ReviewPreferences, type SettingsOverview, type StorageLocationStatus, type StorageMigrationReceipt, type SubjectPreferences } from '../../shared/api/bindings'
+import { commands, type AuthStatusKind, type BackupRestoreCandidate, type BackupSummary, type CloudAuthState, type CloudBackendKind, type CloudBackendStatus, type DiagnosticExportReceipt, type LibraryAccessStatus, type ReviewFocusPolicy, type ReviewPreferences, type SettingsOverview, type StorageLocationStatus, type StorageMigrationReceipt, type SubjectPreferences } from '../../shared/api/bindings'
 import { normalizeAppResult } from '../../shared/api/normalize-result'
 import { backendKindLabel, backendStatusLabel, loadSyncBackendStatus, setSyncBackend } from '../../shared/api/sync-backend'
 import LegacyImportPanel from '../../modules/legacy/components/LegacyImportPanel.vue'
@@ -29,6 +29,8 @@ const lockDialogMode = ref<'lock' | 'sign-out'>('lock')
 const lockingLibrary = ref(false)
 const lockErrorMessage = ref('')
 const lockReturnFocus = ref<HTMLButtonElement>()
+const deviceAccessStatus = ref<LibraryAccessStatus>()
+const deviceAccessError = ref('')
 const libraryAccessController = inject(libraryAccessControllerKey, undefined)
 const builtinSubjects = ['语文', '数学', '英语', '政治', '历史', '地理', '物理', '化学', '生物']
 const subjectPreferences = ref<SubjectPreferences>()
@@ -87,6 +89,11 @@ const settingsSections = computed<SettingsSectionLink[]>(() => [
   { id: 'settings-diagnostics', label: '安全诊断', hint: '隐私报告' },
   { id: 'settings-migration', label: '旧版迁移', hint: '安全导入' },
 ])
+const deviceStatusKey = computed(() => [
+  deviceAccessStatus.value?.trustedWindowsAccount ? 'trusted' : 'unavailable',
+  cloudAuth.value?.status.kind ?? 'checking',
+  deviceAccessError.value ? 'error' : 'ready',
+].join(':'))
 
 function addCustomSubject() {
   const value = customSubject.value.trim()
@@ -351,6 +358,22 @@ async function loadStorageMigrationReceipt() {
   }
 }
 
+async function loadDeviceAccessStatus() {
+  deviceAccessError.value = ''
+  try {
+    const result = normalizeAppResult(await commands.libraryAccessStatus())
+    if (result.ok) deviceAccessStatus.value = result.data
+    else {
+      deviceAccessStatus.value = undefined
+      deviceAccessError.value = result.error.userMessage
+    }
+  }
+  catch {
+    deviceAccessStatus.value = undefined
+    deviceAccessError.value = '当前设备的离线解锁状态暂时无法读取；资料库仍保持本机加密。'
+  }
+}
+
 function openStorageMigration(event: Event) {
   if (storageMigrating.value) return
   storageMigrationError.value = ''
@@ -424,7 +447,11 @@ async function load() {
     const reviewPreferenceResult = normalizeAppResult(await commands.reviewPreferencesGet())
     if (reviewPreferenceResult.ok) reviewPreferences.value = reviewPreferenceResult.data
     else errorMessage.value = reviewPreferenceResult.error.userMessage
-    await Promise.all([loadStorageStatus(), loadStorageMigrationReceipt()])
+    await Promise.all([
+      loadStorageStatus(),
+      loadStorageMigrationReceipt(),
+      loadDeviceAccessStatus(),
+    ])
   }
   catch {
     errorMessage.value = '设置状态暂时无法读取，请重新打开应用后再试。'
@@ -800,14 +827,46 @@ onMounted(load)
       class="settings-grid"
       :aria-busy="loading"
     >
-      <article class="setting-card encryption-card">
+      <article class="setting-card encryption-card device-security-card">
         <div class="icon">
           <LockKeyhole :size="22" />
         </div>
-        <div>
-          <p>本地加密</p>
-          <h2>{{ overview?.localEncryptionReady ? 'SQLCipher 已启用' : '正在检查' }}</h2>
-          <span>数据库与原图使用独立密钥；锁定后新进程不会打开 SQLCipher，当前 Windows 账户可重新解锁。</span>
+        <div class="device-security-copy">
+          <p>当前设备保护</p>
+          <h2>这台 Windows 电脑</h2>
+          <span>这里只显示当前设备的真实保护状态，不暴露设备编号、密钥或本机路径。</span>
+          <Transition
+            name="device-status"
+            mode="out-in"
+          >
+            <dl
+              :key="deviceStatusKey"
+              class="device-security-list"
+            >
+              <div>
+                <dt>本地资料库</dt>
+                <dd>{{ overview?.localEncryptionReady ? 'SQLCipher 与原图独立加密' : '正在检查加密状态' }}</dd>
+              </div>
+              <div>
+                <dt>离线解锁</dt>
+                <dd>{{ deviceAccessStatus?.trustedWindowsAccount ? '当前 Windows 账户可解锁' : '状态暂不可用' }}</dd>
+              </div>
+              <div>
+                <dt>云端会话</dt>
+                <dd>{{ cloudAuth ? authStatusLabel(cloudAuth.status.kind) : '正在检查' }}</dd>
+              </div>
+            </dl>
+          </Transition>
+          <span
+            v-if="cloudAuth?.status.kind === 'connected' || cloudAuth?.status.kind === 'offline'"
+            class="device-scope-note"
+          >退出云端只影响这台电脑，其他设备保持登录。</span>
+          <span
+            v-if="deviceAccessError"
+            class="device-access-error"
+            role="status"
+            aria-label="当前设备保护状态"
+          >{{ deviceAccessError }}</span>
           <button
             type="button"
             class="lock-now"
@@ -816,7 +875,7 @@ onMounted(load)
             <LockKeyhole :size="15" />立即锁定资料库
           </button>
         </div>
-        <strong><ShieldCheck :size="15" />本机保护</strong>
+        <strong><ShieldCheck :size="15" />本机安全边界</strong>
       </article>
       <article class="setting-card">
         <div class="icon">
@@ -1197,10 +1256,11 @@ onMounted(load)
     </div>
 
     <section class="roadmap-panel">
-      <div><p>安全底座</p><h2>恢复已接通，设备与同步继续建立在真实状态上</h2></div>
+      <div><p>安全底座</p><h2>当前设备已经可控，跨设备撤销需要设备级密钥</h2></div>
       <ol>
         <li><strong>已接通 · 恢复与回滚</strong><span>备份经两次校验后自动重启切换；新资料库打不开时恢复原资料。</span></li>
-        <li><strong>可信设备</strong><span>显示设备、最后同步时间，并支持撤销离线解锁。</span></li>
+        <li><strong>已接通 · 当前设备保护</strong><span>可立即锁定本机，退出云端只注销这台电脑；其他设备保持登录。</span></li>
+        <li><strong>后续 · 其他设备撤销</strong><span>只有完成每台设备独立密钥封装后，才会提供远程撤销；当前版本不会用假按钮冒充安全能力。</span></li>
       </ol>
     </section>
 
@@ -1240,7 +1300,7 @@ button { display: inline-flex; gap: 7px; align-items: center; padding: 10px 14px
 .cloud-auth-panel { margin-bottom: 16px; padding: 24px 26px; border: 1px solid rgba(185,88,63,.22); border-radius: 17px; background: linear-gradient(135deg,rgba(255,253,247,.96),rgba(247,235,220,.42)); box-shadow: 0 16px 48px rgba(34,48,43,.05); }.cloud-auth-panel>header { align-items: center; margin-bottom: 16px; }.cloud-auth-panel>header p { margin: 0 0 8px; color: var(--cinnabar); font-size: 12px; font-weight: 800; letter-spacing: .14em; }.cloud-auth-panel>header span { display: block; max-width: 680px; margin-top: 8px; color: var(--ink-muted); font-size: 12px; }.regional-sync-note { display: grid; gap: 4px; margin: 0 0 14px; padding: 11px 13px; color: #74594d; border: 1px solid rgba(185,88,63,.18); border-radius: 11px; background: rgba(247,225,216,.48); font-size: 11px; line-height: 1.55; }.regional-sync-note strong { color: #8d4635; font-size: 11px; }.cloud-auth-status { display: flex; gap: 9px; align-items: center; margin-bottom: 13px; padding: 11px 13px; border-radius: 11px; background: rgba(33,51,45,.07); }.cloud-auth-status small { color: var(--ink-muted); }.cloud-auth-form { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; align-items: end; }.cloud-auth-form label { display: grid; gap: 5px; color: var(--ink-muted); font-size: 11px; }.cloud-auth-form input { min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }.primary-action { color: var(--paper); border-color: var(--green-deep); background: var(--green-deep); }.cloud-auth-actions { display: flex; gap: 9px; }.auth-mode-toggle { margin-top: 11px; padding: 0; border: 0; color: var(--green-deep); background: transparent; font-size: 11px; }.cloud-auth-panel .backend-message { margin-top: 12px; }
 .backend-panel { margin-bottom: 16px; padding: 24px 26px; border: 1px solid rgba(33,51,45,.22); border-radius: 17px; background: linear-gradient(135deg,rgba(255,253,247,.94),rgba(220,228,220,.34)); box-shadow: 0 16px 48px rgba(34,48,43,.05); }.backend-panel>header { align-items: center; margin-bottom: 16px; }.backend-panel>header>svg { color: var(--green-deep); }.backend-panel>header p { margin: 0 0 8px; color: var(--cinnabar); font-size: 12px; font-weight: 800; letter-spacing: .14em; }.backend-panel>header span { display: block; margin-top: 8px; color: var(--ink-muted); font-size: 12px; }.backend-current { display: flex; gap: 9px; align-items: center; margin-bottom: 13px; padding: 11px 13px; border-radius: 11px; background: rgba(33,51,45,.07); }.backend-current>span:last-child { display: grid; gap: 3px; }.backend-current strong { color: var(--green-deep); font-size: 13px; }.backend-current small { color: var(--ink-muted); font-size: 11px; }.backend-status-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--cinnabar); box-shadow: 0 0 0 4px rgba(185,88,63,.13); }.backend-status-dot.ready { background: #557263; box-shadow: 0 0 0 4px rgba(85,114,99,.14); }.backend-options { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; }.backend-option { display: grid; grid-template-columns: 17px 1fr; gap: 10px; align-items: start; min-height: 92px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,253,247,.65); cursor: pointer; text-align: left; transition: transform var(--motion-feedback) var(--ease-standard), border-color var(--motion-standard) var(--ease-standard), background var(--motion-standard) var(--ease-standard), box-shadow var(--motion-standard) var(--ease-standard); }.backend-option:hover:not(:disabled) { transform: translateY(-2px); border-color: rgba(33,51,45,.38); box-shadow: 0 10px 24px rgba(34,48,43,.08); }.backend-option.selected { border-color: var(--green-deep); background: var(--green-soft); box-shadow: inset 0 0 0 1px var(--green-deep); }.backend-option:disabled { cursor: wait; }.backend-option-mark { width: 15px; height: 15px; margin-top: 2px; border: 1px solid var(--sand-deep); border-radius: 50%; background: var(--paper-raised); box-shadow: inset 0 0 0 4px var(--paper-raised); }.backend-option.selected .backend-option-mark { border-color: var(--green-deep); background: var(--green-deep); }.backend-option>span:last-child { display: grid; gap: 5px; }.backend-option strong { color: var(--green-deep); font-size: 13px; }.backend-option small { color: var(--ink-muted); font-size: 10px; line-height: 1.55; }.backend-message { margin: 12px 0 0; color: #557263; font-size: 11px; }.backend-message.warning { color: #843d2c; font-weight: 700; }.settings-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 15px; }.setting-card, .roadmap-panel, .migration-panel, .backup-panel, .subject-panel, .review-rhythm-panel, .storage-panel, .diagnostic-panel { border: 1px solid var(--line); border-radius: 17px; background: rgba(255,253,247,.78); box-shadow: 0 16px 48px rgba(34,48,43,.05); }
 .setting-card { position: relative; display: grid; grid-template-columns: 48px 1fr; gap: 14px; min-height: 150px; padding: 22px; }.setting-card .icon { display: grid; width: 44px; height: 44px; place-items: center; border-radius: 13px; background: var(--green-soft); color: var(--green-deep); }.setting-card p { margin: 1px 0 8px; color: var(--ink-muted); font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }.setting-card span { display: flex; gap: 5px; align-items: center; margin-top: 10px; color: var(--ink-muted); font-size: 12px; line-height: 1.7; }.setting-card > strong { position: absolute; right: 18px; bottom: 16px; display: flex; gap: 5px; align-items: center; color: #557263; font-size: 10px; }
-.encryption-card { min-height: 192px; padding-bottom: 46px; border-color: rgba(33,51,45,.28); }.lock-now { width: fit-content; margin-top: 13px; padding: 8px 11px; color: var(--green-deep); border-color: rgba(33,51,45,.25); background: var(--green-soft); font-size: 11px; font-weight: 700; transition: transform var(--motion-feedback) var(--ease-standard); }.lock-now:hover { transform: translateY(-1px); box-shadow: 0 8px 18px rgba(33,51,45,.1); }.roadmap-panel { margin-top: 16px; padding: 26px; }.roadmap-panel ol { display: grid; grid-template-columns: repeat(2,1fr); gap: 12px; margin: 22px 0 0; padding: 0; list-style: none; }.roadmap-panel li { padding: 17px; border-radius: 12px; background: rgba(232,221,199,.34); }.roadmap-panel strong, .roadmap-panel span { display: block; }.roadmap-panel span { margin-top: 7px; color: var(--ink-muted); font-size: 12px; line-height: 1.65; }
+.encryption-card { min-height: 192px; padding-bottom: 46px; border-color: rgba(33,51,45,.28); }.device-security-card { grid-column: 1 / -1; grid-template-columns: 48px minmax(0,1fr); }.device-security-copy { min-width: 0; }.device-security-list { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; margin: 15px 0 0; }.device-security-list div { min-width: 0; padding: 11px 12px; border: 1px solid rgba(33,51,45,.12); border-radius: 11px; background: rgba(232,221,199,.24); }.device-security-list dt { color: var(--ink-muted); font-size: 10px; font-weight: 800; letter-spacing: .06em; }.device-security-list dd { margin: 5px 0 0; overflow-wrap: anywhere; color: var(--green-deep); font-size: 12px; font-weight: 700; }.device-status-enter-active,.device-status-leave-active { transition: opacity var(--motion-standard) var(--ease-standard),transform var(--motion-standard) var(--ease-standard); }.device-status-enter-from { opacity: 0; transform: translateY(5px); }.device-status-leave-to { opacity: 0; transform: translateY(-3px); }.device-security-copy .device-scope-note,.device-security-copy .device-access-error { display: block; margin-top: 10px; }.device-security-copy .device-scope-note { color: #557263; }.device-security-copy .device-access-error { color: #843d2c; }.lock-now { width: fit-content; margin-top: 13px; padding: 8px 11px; color: var(--green-deep); border-color: rgba(33,51,45,.25); background: var(--green-soft); font-size: 11px; font-weight: 700; transition: transform var(--motion-feedback) var(--ease-standard); }.lock-now:hover { transform: translateY(-1px); box-shadow: 0 8px 18px rgba(33,51,45,.1); }.roadmap-panel { margin-top: 16px; padding: 26px; }.roadmap-panel ol { display: grid; grid-template-columns: repeat(3,1fr); gap: 12px; margin: 22px 0 0; padding: 0; list-style: none; }.roadmap-panel li { padding: 17px; border-radius: 12px; background: rgba(232,221,199,.34); }.roadmap-panel strong, .roadmap-panel span { display: block; }.roadmap-panel span { margin-top: 7px; color: var(--ink-muted); font-size: 12px; line-height: 1.65; }
 .subject-panel { margin-top: 16px; padding: 26px; }.subject-panel>header { align-items: center; margin-bottom: 18px; }.subject-panel>header p { margin: 0 0 8px; color: var(--cinnabar); font-size: 12px; font-weight: 800; letter-spacing: .14em; }.builtin-subjects { display: flex; gap: 9px; flex-wrap: wrap; }.builtin-subjects label { position: relative; cursor: pointer; }.builtin-subjects input { position: absolute; opacity: 0; pointer-events: none; }.builtin-subjects span { display: grid; min-width: 58px; min-height: 38px; padding: 0 13px; place-items: center; color: var(--ink-muted); border: 1px solid var(--line); border-radius: 999px; background: var(--paper); transition: transform var(--motion-feedback), color var(--motion-feedback), background var(--motion-feedback); }.builtin-subjects label.selected span { color: var(--paper); border-color: var(--green-deep); background: var(--green-deep); }.builtin-subjects label:hover span { transform: translateY(-1px); }.builtin-subjects input:focus-visible+span { outline: 3px solid rgba(185,88,63,.24); outline-offset: 2px; }.custom-subjects { display: flex; gap: 8px; flex-wrap: wrap; min-height: 8px; margin-top: 12px; }.custom-subjects>span { display: inline-flex; gap: 5px; align-items: center; padding: 6px 7px 6px 11px; color: #7e412f; border-radius: 999px; background: rgba(185,88,63,.1); font-size: 11px; }.custom-subjects button { display: grid; width: 25px; height: 25px; padding: 0; place-items: center; border: 0; border-radius: 50%; background: transparent; }.subject-controls { display: grid; grid-template-columns: minmax(280px,1fr) minmax(250px,1fr) auto; gap: 12px; align-items: center; margin-top: 17px; }.subject-controls form { display: flex; gap: 8px; }.subject-controls form input { flex: 1; min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }.sound-toggle { display: flex; gap: 9px; align-items: center; padding: 8px 11px; border: 1px solid var(--line); border-radius: 11px; cursor: pointer; }.sound-toggle>span { display: grid; }.sound-toggle small { color: var(--ink-muted); font-size: 9px; }.save-subjects { color: var(--paper); border-color: var(--green-deep); background: var(--green-deep); }.subject-message { margin: 12px 0 0; color: #557263; font-size: 12px; }
 .review-rhythm-panel { margin-top: 16px; padding: 26px; }.review-rhythm-panel>header { margin-bottom: 18px; }.review-rhythm-panel>header p { margin: 0 0 8px; color: var(--cinnabar); font-size: 12px; font-weight: 800; letter-spacing: .14em; }.review-rhythm-panel>header span { max-width: 720px; }.rhythm-options { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; }.rhythm-options label { position: relative; display: grid; min-height: 104px; grid-template-columns: 18px 1fr; gap: 10px; align-content: start; padding: 16px; border: 1px solid var(--line); border-radius: 7px 17px 17px; background: rgba(255,253,247,.68); cursor: pointer; transition: transform var(--motion-feedback) var(--ease-standard), border-color var(--motion-standard), background var(--motion-standard), box-shadow var(--motion-standard); }.rhythm-options label:hover { transform: translateY(-2px); }.rhythm-options label.selected { border-color: rgba(33,51,45,.4); background: var(--green-soft); box-shadow: 0 12px 28px rgba(33,51,45,.08); }.rhythm-options input { position: absolute; width: 1px; height: 1px; opacity: 0; }.rhythm-options input:focus-visible~.rhythm-mark { outline: 3px solid rgba(185,88,63,.35); outline-offset: 3px; }.rhythm-mark { width: 16px; height: 16px; margin-top: 2px; border: 1px solid var(--sand-deep); border-radius: 50%; background: var(--paper-raised); box-shadow: inset 0 0 0 4px var(--paper-raised); }.selected .rhythm-mark { border-color: var(--green-deep); background: var(--green-deep); }.rhythm-options label>span:last-child { display: grid; }.rhythm-options strong { color: var(--green-deep); font-size: 13px; }.rhythm-options small { margin-top: 7px; color: var(--ink-muted); font-size: 10px; line-height: 1.6; }.rhythm-actions { display: flex; gap: 16px; align-items: center; justify-content: space-between; margin-top: 16px; }.rhythm-actions p,.rhythm-actions span { margin: 0; color: #557263; font-size: 11px; }.rhythm-actions button { color: var(--paper); border-color: var(--green-deep); background: var(--green-deep); }
 .storage-panel { margin-top: 16px; padding: 26px; }
@@ -1275,8 +1335,8 @@ button { display: inline-flex; gap: 7px; align-items: center; padding: 10px 14px
 .preflight-note.warning { color: #843d2c; font-weight: 700; }
 .builtin-subjects input { width: 1px; height: 1px; pointer-events: auto; }
 @media (max-width: 980px) { .migration-stats { grid-template-columns: repeat(3,minmax(0,1fr)); }.subject-controls { grid-template-columns: 1fr; } }
-@media (max-width: 760px) { .settings-page { padding: 24px 16px 92px; } .settings-grid { grid-template-columns: 1fr; } .backend-options { grid-template-columns: 1fr; } .cloud-auth-form { grid-template-columns: 1fr; }.cloud-auth-actions { flex-direction: column; }.cloud-auth-actions button { justify-content: center; }.roadmap-panel ol, .migration-stats, .backup-results, .rhythm-options, .storage-usage { grid-template-columns: 1fr; } .migration-panel header, .backup-panel header, .storage-panel > header { flex-direction: column; }.backup-actions { width: 100%; flex-direction: column; }.backup-actions button { justify-content: center; }.issue-list li { grid-template-columns: 1fr; gap: 4px; }.rhythm-actions, .storage-actions { align-items: stretch; flex-direction: column; }.rhythm-actions button, .storage-actions button { justify-content: center; }.storage-location { grid-template-columns: 46px 1fr; }.storage-pending { grid-column: 1 / -1; width: fit-content; }.diagnostic-contract { grid-template-columns: 42px 1fr; }.diagnostic-contract button { grid-column: 1 / -1; width: 100%; } }
-@media (prefers-reduced-motion: reduce) { .backend-option,.lock-now,.storage-actions button,.diagnostic-contract button,.diagnostic-receipt-enter-active,.diagnostic-receipt-leave-active { transition: none; }.backend-option:hover:not(:disabled),.lock-now:hover,.storage-actions button:hover:not(:disabled),.diagnostic-contract button:hover:not(:disabled),.diagnostic-receipt-enter-from,.diagnostic-receipt-leave-to { transform: none; } }
+@media (max-width: 760px) { .settings-page { padding: 24px 16px 92px; } .settings-grid { grid-template-columns: 1fr; } .backend-options { grid-template-columns: 1fr; } .cloud-auth-form { grid-template-columns: 1fr; }.cloud-auth-actions { flex-direction: column; }.cloud-auth-actions button { justify-content: center; }.device-security-list,.roadmap-panel ol, .migration-stats, .backup-results, .rhythm-options, .storage-usage { grid-template-columns: 1fr; } .migration-panel header, .backup-panel header, .storage-panel > header { flex-direction: column; }.backup-actions { width: 100%; flex-direction: column; }.backup-actions button { justify-content: center; }.issue-list li { grid-template-columns: 1fr; gap: 4px; }.rhythm-actions, .storage-actions { align-items: stretch; flex-direction: column; }.rhythm-actions button, .storage-actions button { justify-content: center; }.storage-location { grid-template-columns: 46px 1fr; }.storage-pending { grid-column: 1 / -1; width: fit-content; }.diagnostic-contract { grid-template-columns: 42px 1fr; }.diagnostic-contract button { grid-column: 1 / -1; width: 100%; } }
+@media (prefers-reduced-motion: reduce) { .backend-option,.lock-now,.storage-actions button,.diagnostic-contract button,.diagnostic-receipt-enter-active,.diagnostic-receipt-leave-active,.device-status-enter-active,.device-status-leave-active { transition: none; }.backend-option:hover:not(:disabled),.lock-now:hover,.storage-actions button:hover:not(:disabled),.diagnostic-contract button:hover:not(:disabled),.diagnostic-receipt-enter-from,.diagnostic-receipt-leave-to,.device-status-enter-from,.device-status-leave-to { transform: none; } }
 .backend-status-dot.offline { background: #b07a42; box-shadow: 0 0 0 4px rgba(176,122,66,.14); }
 .sync-conflict-clear { display: flex; gap: 8px; align-items: center; margin: 16px 0 0; padding: 11px 14px; color: #557263; border: 1px solid rgba(85,114,99,.16); border-radius: 11px; background: rgba(85,114,99,.07); font-size: 12px; }
 </style>

@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   syncBackendSet: vi.fn(),
   authStatusCommand: vi.fn(),
   authDisconnect: vi.fn(),
+  libraryAccessStatus: vi.fn(),
   libraryLock: vi.fn(),
   legacyScan: vi.fn(),
   legacyImport: vi.fn(),
@@ -49,6 +50,10 @@ describe('SettingsView', () => {
     api.authDisconnect.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
       configured: true, status: { kind: 'signed_out', emailHint: null },
     } } })
+    api.libraryAccessStatus.mockResolvedValue({
+      ok: true,
+      data: { locked: false, trustedWindowsAccount: true },
+    })
     api.libraryLock.mockResolvedValue({
       ok: true,
       data: { locked: true, trustedWindowsAccount: true },
@@ -196,10 +201,13 @@ describe('SettingsView', () => {
     } })
     render(SettingsView)
 
-    expect(await screen.findByText('SQLCipher 已启用')).toBeVisible()
+    expect(await screen.findByText('SQLCipher 与原图独立加密')).toBeVisible()
     expect(screen.getByText('8 道活动题')).toBeVisible()
     expect(screen.getByText('尚未配置')).toBeVisible()
     expect(screen.getByText(/本地 outbox 已记录 11 项变更/)).toBeVisible()
+    expect(screen.getByRole('heading', { name: '这台 Windows 电脑' })).toBeVisible()
+    expect(await screen.findByText('当前 Windows 账户可解锁')).toBeVisible()
+    expect(screen.getByText('已接通 · 当前设备保护')).toBeVisible()
   })
 
   it('confirms an immediate local lock and restores focus when cancelled', async () => {
@@ -248,7 +256,9 @@ describe('SettingsView', () => {
     render(SettingsView)
 
     await user.click(await screen.findByRole('button', { name: '退出云端并锁定' }))
-    expect(screen.getByText(/断网也不会阻止本机退出/)).toBeVisible()
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText(/只会退出这台电脑的云端会话/)).toBeVisible()
+    expect(within(dialog).getByText(/其他设备保持登录/)).toBeVisible()
     await user.click(screen.getByRole('button', { name: '退出并锁定' }))
 
     await waitFor(() => {
@@ -274,7 +284,30 @@ describe('SettingsView', () => {
 
     expect(await screen.findByText('国内网络提示')).toBeVisible()
     expect(screen.getByText(/Supabase 在中国大陆可能出现连接超时/)).toBeVisible()
-    expect(screen.getByText('离线模式')).toBeVisible()
+    expect(screen.getAllByText('离线模式')).toHaveLength(2)
+    expect(await screen.findByText('退出云端只影响这台电脑，其他设备保持登录。')).toBeVisible()
+  })
+
+  it('does not invent offline unlock readiness when the device status cannot be read', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 2, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    api.libraryAccessStatus.mockResolvedValue({
+      ok: false,
+      error: {
+        code: 'LIBRARY_ACCESS_UNAVAILABLE',
+        userMessage: '无法读取 Windows 资料库凭据，已保持锁定；请检查系统凭据服务后重试。',
+        retryable: true,
+        diagnosticId: 'device-status',
+      },
+    })
+    render(SettingsView)
+
+    expect(await screen.findByText('状态暂不可用')).toBeVisible()
+    expect(await screen.findByRole('status', { name: '当前设备保护状态' })).toHaveTextContent('无法读取 Windows 资料库凭据')
+    expect(screen.queryByText('当前 Windows 账户可解锁')).not.toBeInTheDocument()
   })
 
   it('keeps local mode selected when a remote backend is not configured', async () => {
