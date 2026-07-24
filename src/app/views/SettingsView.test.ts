@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/vue'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { libraryAccessControllerKey } from '../library-access-controller'
@@ -25,6 +25,7 @@ const api = vi.hoisted(() => ({
   storageStatus: vi.fn(),
   storageMigrateSelect: vi.fn(),
   storageMigrationReceipt: vi.fn(),
+  diagnosticsExport: vi.fn(),
   syncConflictList: vi.fn(),
   syncConflictResolve: vi.fn(),
   syncConflictResolveEntity: vi.fn(),
@@ -68,6 +69,7 @@ describe('SettingsView', () => {
     } } })
     api.storageMigrateSelect.mockResolvedValue({ status: 'ok', data: { ok: true, data: null } })
     api.storageMigrationReceipt.mockResolvedValue({ ok: true, data: null })
+    api.diagnosticsExport.mockResolvedValue({ status: 'ok', data: { ok: true, data: null } })
     api.syncConflictList.mockResolvedValue({ ok: true, data: [] })
     api.syncConflictResolve.mockResolvedValue({ ok: true, data: [] })
     api.syncConflictResolveEntity.mockResolvedValue({ ok: true, data: [] })
@@ -536,5 +538,122 @@ describe('SettingsView', () => {
     expect(await screen.findByRole('status', { name: '存储迁移结果' })).toHaveTextContent('资料库已安全迁移')
     expect(screen.getByRole('status', { name: '存储迁移结果' })).toHaveTextContent('4 个加密资源')
     expect(api.storageMigrationReceipt).toHaveBeenCalledOnce()
+  })
+
+  it('exports a privacy-safe diagnostic receipt without rendering a local path', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    api.diagnosticsExport.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      reportId: '019f4b87-4cab-7b83-a4a0-46acac7d1362',
+      fileLabel: 'Mistake-Trainer-Diagnostics-1700000000000-019f4b87.json',
+      generatedAtUtcMs: 1_700_000_000_000,
+      warningCount: 0,
+      path: String.raw`C:\Users\Private\Diagnostics`,
+    } } })
+    render(SettingsView)
+
+    expect(await screen.findByText('不会包含题图、答案、笔记、账户信息或本机路径')).toBeVisible()
+    await userEvent.click(screen.getByRole('button', { name: '生成安全诊断报告' }))
+
+    const receipt = await screen.findByRole('status', { name: '诊断报告已生成' })
+    expect(receipt).toHaveTextContent('Mistake-Trainer-Diagnostics-1700000000000-019f4b87.json')
+    expect(receipt).toHaveTextContent('019f4b87-4cab-7b83-a4a0-46acac7d1362')
+    expect(receipt).toHaveTextContent('所有检查通过')
+    expect(receipt).not.toHaveTextContent(/C:\\Users|Private\\Diagnostics/)
+    expect(api.diagnosticsExport).toHaveBeenCalledOnce()
+  })
+
+  it('treats diagnostic folder cancellation as neutral and restores trigger focus', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    render(SettingsView)
+
+    const trigger = await screen.findByRole('button', { name: '生成安全诊断报告' })
+    await userEvent.click(trigger)
+
+    await waitFor(() => expect(api.diagnosticsExport).toHaveBeenCalledOnce())
+    expect(trigger).toHaveFocus()
+    expect(screen.queryByRole('alert', { name: '诊断报告未生成' })).not.toBeInTheDocument()
+  })
+
+  it('prevents duplicate diagnostic exports while a native selection is pending', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    let resolveExport!: (value: unknown) => void
+    api.diagnosticsExport.mockReturnValue(new Promise(resolve => {
+      resolveExport = resolve
+    }))
+    render(SettingsView)
+
+    const trigger = await screen.findByRole('button', { name: '生成安全诊断报告' })
+    await fireEvent.click(trigger)
+    await fireEvent.click(trigger)
+
+    expect(api.diagnosticsExport).toHaveBeenCalledOnce()
+    expect(screen.getByRole('button', { name: '正在检查并生成…' })).toBeDisabled()
+    resolveExport({ status: 'ok', data: { ok: true, data: null } })
+    await waitFor(() => expect(screen.getByRole('button', { name: '生成安全诊断报告' })).toBeEnabled())
+  })
+
+  it('keeps a failed diagnostic export local and retryable', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    api.diagnosticsExport.mockResolvedValue({ status: 'ok', data: { ok: false, error: {
+      code: 'diagnostics_export_failed',
+      userMessage: '目标文件夹不可写，请换一个位置。',
+      retryable: true,
+      diagnosticId: 'diagnostic-private',
+    } } })
+    render(SettingsView)
+
+    const trigger = await screen.findByRole('button', { name: '生成安全诊断报告' })
+    await userEvent.click(trigger)
+
+    expect(await screen.findByRole('alert', { name: '诊断报告未生成' })).toHaveTextContent('目标文件夹不可写，请换一个位置。')
+    expect(trigger).toBeEnabled()
+    await userEvent.click(trigger)
+    expect(api.diagnosticsExport).toHaveBeenCalledTimes(2)
+  })
+
+  it('clears an older diagnostic receipt before a retry starts', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    api.diagnosticsExport
+      .mockResolvedValueOnce({ status: 'ok', data: { ok: true, data: {
+        reportId: '019f4b87-4cab-7b83-a4a0-46acac7d1362',
+        fileLabel: 'Mistake-Trainer-Diagnostics-old.json',
+        generatedAtUtcMs: 1_700_000_000_000,
+        warningCount: 0,
+      } } })
+      .mockResolvedValueOnce({ status: 'ok', data: { ok: false, error: {
+        code: 'diagnostics_export_failed',
+        userMessage: '目标文件夹不可写，请换一个位置。',
+        retryable: true,
+        diagnosticId: 'diagnostic-private',
+      } } })
+    render(SettingsView)
+
+    const trigger = await screen.findByRole('button', { name: '生成安全诊断报告' })
+    await userEvent.click(trigger)
+    expect(await screen.findByRole('status', { name: '诊断报告已生成' })).toHaveTextContent('Mistake-Trainer-Diagnostics-old.json')
+
+    await userEvent.click(trigger)
+    expect(await screen.findByRole('alert', { name: '诊断报告未生成' })).toBeVisible()
+    expect(screen.queryByRole('status', { name: '诊断报告已生成' })).not.toBeInTheDocument()
   })
 })
