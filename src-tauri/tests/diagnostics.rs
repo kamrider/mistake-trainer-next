@@ -138,7 +138,7 @@ fn report_contains_only_fixed_aggregates_and_no_user_content() {
     )
     .unwrap();
 
-    assert_eq!(receipt.generated_at_utc_ms, NOW_UTC_MS);
+    assert_eq!(receipt.generated_at_utc_ms, NOW_UTC_MS as f64);
     assert_eq!(receipt.warning_count, 0);
     assert!(
         receipt

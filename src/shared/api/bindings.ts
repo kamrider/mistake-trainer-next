@@ -14,6 +14,7 @@ export const commands = {
 	storageStatus: () => typedError<AppResult<StorageLocationStatus>, null>(__TAURI_INVOKE("storage_status")),
 	storageMigrateSelect: () => typedError<AppResult<StorageMigrationReceipt | null>, null>(__TAURI_INVOKE("storage_migrate_select")),
 	storageMigrationReceipt: () => __TAURI_INVOKE<AppResult<StorageMigrationReceipt | null>>("storage_migration_receipt"),
+	diagnosticsExport: () => typedError<AppResult<DiagnosticExportReceipt | null>, null>(__TAURI_INVOKE("diagnostics_export")),
 	systemStatus: () => __TAURI_INVOKE<AppResult<SystemStatus>>("system_status"),
 	profileList: () => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_list"),
 	profileCreate: (input: ProfileNameInput) => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_create", { input }),
@@ -388,6 +389,13 @@ export type DeletedExportSnapshotSummary = {
 	snapshot: ExportSnapshotSummary,
 	deletedAtUtcMs: number | null,
 	purgeAfterUtcMs: number | null,
+};
+
+export type DiagnosticExportReceipt = {
+	reportId: string,
+	fileLabel: string,
+	generatedAtUtcMs: number | null,
+	warningCount: number,
 };
 
 export type ExportCandidate = {

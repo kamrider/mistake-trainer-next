@@ -142,3 +142,39 @@ fn storage_location_status_serializes_only_redacted_capacity_information() {
         assert!(!serialized.contains(forbidden));
     }
 }
+
+#[test]
+fn diagnostic_export_receipt_contains_only_safe_correlation_metadata() {
+    use mistake_trainer_next_lib::modules::diagnostics::DiagnosticExportReceipt;
+
+    let value = serde_json::to_value(DiagnosticExportReceipt {
+        report_id: "019f4b87-4cab-7b83-a4a0-46acac7d1362".to_owned(),
+        file_label: "Mistake-Trainer-Diagnostics-1700000000000-019f4b87.json".to_owned(),
+        generated_at_utc_ms: 1_700_000_000_000_f64,
+        warning_count: 1,
+    })
+    .expect("serialize diagnostic receipt");
+
+    assert_eq!(
+        value,
+        json!({
+            "reportId": "019f4b87-4cab-7b83-a4a0-46acac7d1362",
+            "fileLabel": "Mistake-Trainer-Diagnostics-1700000000000-019f4b87.json",
+            "generatedAtUtcMs": 1_700_000_000_000_f64,
+            "warningCount": 1
+        })
+    );
+    let serialized = value.to_string();
+    for forbidden in [
+        "path",
+        "accountId",
+        "profileId",
+        "deviceId",
+        "databaseKey",
+        "assetKey",
+        "accessToken",
+        "refreshToken",
+    ] {
+        assert!(!serialized.contains(forbidden));
+    }
+}

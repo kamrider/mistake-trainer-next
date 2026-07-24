@@ -17,6 +17,7 @@ pub fn builder() -> Builder<tauri::Wry> {
         commands::storage::storage_status,
         commands::storage::storage_migrate_select,
         commands::storage::storage_migration_receipt,
+        commands::diagnostics::diagnostics_export,
         commands::system::system_status,
         commands::profiles::profile_list,
         commands::profiles::profile_create,

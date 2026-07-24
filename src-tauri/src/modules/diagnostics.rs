@@ -28,12 +28,12 @@ pub struct DiagnosticContext<'a> {
     pub now_utc_ms: i64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Type)]
+#[derive(Clone, Debug, PartialEq, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticExportReceipt {
     pub report_id: String,
     pub file_label: String,
-    pub generated_at_utc_ms: i64,
+    pub generated_at_utc_ms: f64,
     pub warning_count: u32,
 }
 
@@ -144,7 +144,7 @@ pub fn export_diagnostic_report(
     Ok(DiagnosticExportReceipt {
         report_id,
         file_label,
-        generated_at_utc_ms: context.now_utc_ms,
+        generated_at_utc_ms: context.now_utc_ms as f64,
         warning_count,
     })
 }
