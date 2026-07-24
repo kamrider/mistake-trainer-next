@@ -62,7 +62,16 @@ const profileEpoch = ref(0)
 const restoreNotice = ref<BackupRestoreReceipt>()
 const routeError = ref('')
 const routeErrorDetail = ref('')
-const syncController = createSyncController(performSync)
+const mutationSyncPhases = new Set<SyncPhase>([
+  'idle',
+  'syncing',
+  'synced',
+  'deferred_capture',
+  'retry_waiting',
+])
+const syncController = createSyncController(performSync, {
+  canScheduleMutation: () => mutationSyncPhases.has(syncPhase.value),
+})
 provide(syncControllerKey, syncController)
 const previewProfile: ProfileSummary = {
   id: 'preview-profile',
@@ -108,6 +117,7 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('online', handleOnline)
   document.removeEventListener('visibilitychange', handleVisibilityChange)
+  syncController.dispose()
 })
 
 async function initializeWorkspace() {
