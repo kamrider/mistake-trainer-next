@@ -19,6 +19,7 @@ use crate::{
             SyncConflictSummary, list_sync_conflicts, resolve_sync_conflict_entity,
             resolve_sync_conflict_field,
         },
+        sync_coordinator::SyncCoordinator,
         sync_pull::pull_until_current,
         sync_push::push_once,
     },
@@ -300,6 +301,34 @@ fn current_utc_millis() -> i64 {
         .unwrap_or_default()
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SyncAdmissionError {
+    AlreadyRunning,
+    CaptureActive,
+}
+
+impl SyncAdmissionError {
+    const fn stable_code(self) -> &'static str {
+        match self {
+            Self::AlreadyRunning => "sync_already_running",
+            Self::CaptureActive => "sync_capture_active",
+        }
+    }
+}
+
+fn sync_admission(
+    permit_acquired: bool,
+    capture_active: bool,
+) -> Result<(), SyncAdmissionError> {
+    if !permit_acquired {
+        return Err(SyncAdmissionError::AlreadyRunning);
+    }
+    if capture_active {
+        return Err(SyncAdmissionError::CaptureActive);
+    }
+    Ok(())
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn sync_now(
@@ -307,6 +336,7 @@ pub async fn sync_now(
     manager: State<'_, AuthSyncManager>,
     runtime: State<'_, CloudAuthRuntime>,
     capture_lan: State<'_, CaptureLanManager>,
+    coordinator: State<'_, SyncCoordinator>,
 ) -> Result<AppResult<SyncNowReport>, ()> {
     let Some(client) = runtime.client.as_ref().map(Arc::clone) else {
         return Ok(AppResult::failure(
@@ -333,6 +363,17 @@ pub async fn sync_now(
         ));
     }
 
+    let permit = coordinator.try_begin();
+    if sync_admission(permit.is_some(), false).is_err() {
+        return Ok(AppResult::failure(
+            "SYNC_ALREADY_RUNNING",
+            "同步已经在进行，请稍候。",
+            true,
+            "sync-already-running",
+        ));
+    }
+    let _permit = permit.expect("sync admission accepted an available permit");
+
     let connection = Arc::clone(&state.connection);
     let profile_transition = state.profile_transition_lock();
     let capture_lan = capture_lan.inner().clone();
@@ -343,9 +384,11 @@ pub async fn sync_now(
         let _profile_guard = profile_transition
             .lock()
             .map_err(|_| "sync_profile_transition_locked")?;
-        capture_lan
-            .stop()
-            .map_err(|_| "sync_capture_session_stop_failed")?;
+        let capture_active = capture_lan
+            .status(current_utc_millis())
+            .map_err(|_| "sync_capture_status_failed")?
+            .is_some();
+        sync_admission(true, capture_active).map_err(SyncAdmissionError::stable_code)?;
         let mut connection = connection.lock().map_err(|_| "sync_database_locked")?;
         let runtime = tokio::runtime::Runtime::new().map_err(|_| "sync_runtime_failed")?;
         let result = runtime.block_on(async {
@@ -399,6 +442,12 @@ pub async fn sync_now(
             }
             Ok(AppResult::success(report))
         }
+        Ok(Err("sync_capture_active")) => Ok(AppResult::failure(
+            "SYNC_CAPTURE_ACTIVE",
+            "手机采集正在进行；结束拍摄后会自动继续同步，当前上传不会被打断。",
+            true,
+            "sync-capture-active",
+        )),
         Ok(Err(code)) => Ok(AppResult::failure(
             code,
             "同步未完成，本地数据保持不变；请稍后重试或查看诊断信息",
@@ -548,6 +597,22 @@ pub fn specta_commands<R: tauri::Runtime>() -> tauri_specta::Commands<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn active_capture_defers_sync_without_stopping_it() {
+        assert_eq!(
+            sync_admission(true, true),
+            Err(SyncAdmissionError::CaptureActive)
+        );
+    }
+
+    #[test]
+    fn a_running_sync_rejects_a_duplicate() {
+        assert_eq!(
+            sync_admission(false, false),
+            Err(SyncAdmissionError::AlreadyRunning)
+        );
+    }
 
     #[test]
     fn default_status_is_local_only() {
