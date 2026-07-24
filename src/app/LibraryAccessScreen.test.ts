@@ -30,4 +30,24 @@ describe('LibraryAccessScreen', () => {
     expect(view.emitted('retry')).toHaveLength(1)
     expect(view.emitted('unlock')).toHaveLength(1)
   })
+
+  it('treats a disconnected configured storage location as a reconnect problem', async () => {
+    const user = userEvent.setup()
+    const view = render(LibraryAccessScreen, {
+      props: {
+        phase: 'error',
+        reason: 'storage',
+        message: '配置的资料库位置当前不可用，未打开或创建任何资料，请重新连接磁盘后重试。',
+      },
+    })
+
+    expect(screen.getByRole('heading', { name: '请重新连接资料库位置' })).toBeVisible()
+    expect(screen.getByRole('alert')).toHaveTextContent('未打开或创建任何资料')
+    expect(screen.getByText(/不会在默认位置创建一个空资料库/)).toBeVisible()
+    expect(screen.queryByRole('button', { name: '重新解锁' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '已连接，重新检查' }))
+
+    expect(view.emitted('retry')).toHaveLength(1)
+    expect(view.emitted('unlock')).toBeUndefined()
+  })
 })

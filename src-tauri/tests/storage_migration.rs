@@ -23,6 +23,7 @@ use mistake_trainer_next_lib::{
         storage_migration::{
             StorageMigrationOutcome, apply_pending_storage_migration,
             read_storage_migration_receipt, stage_storage_migration,
+            take_storage_migration_receipt,
         },
     },
 };
@@ -489,6 +490,18 @@ fn restart_commits_pointer_only_after_destination_opens() {
             .unwrap()
             .outcome,
         StorageMigrationOutcome::Moved
+    );
+    assert_eq!(
+        take_storage_migration_receipt(&fixture.control_root)
+            .unwrap()
+            .unwrap()
+            .outcome,
+        StorageMigrationOutcome::Moved
+    );
+    assert!(
+        take_storage_migration_receipt(&fixture.control_root)
+            .unwrap()
+            .is_none()
     );
 }
 

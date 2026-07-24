@@ -22,6 +22,9 @@ const api = vi.hoisted(() => ({
   subjectPreferencesSave: vi.fn(),
   reviewPreferencesGet: vi.fn(),
   reviewPreferencesSave: vi.fn(),
+  storageStatus: vi.fn(),
+  storageMigrateSelect: vi.fn(),
+  storageMigrationReceipt: vi.fn(),
   syncConflictList: vi.fn(),
   syncConflictResolve: vi.fn(),
   syncConflictResolveEntity: vi.fn(),
@@ -56,6 +59,15 @@ describe('SettingsView', () => {
     } })
     api.reviewPreferencesGet.mockResolvedValue({ ok: true, data: { focusPolicy: 'off' } })
     api.reviewPreferencesSave.mockResolvedValue({ ok: true, data: { focusPolicy: 'every_10' } })
+    api.storageStatus.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      kind: 'default',
+      locationLabel: '默认位置 · Windows 应用数据',
+      databaseBytes: 4096,
+      assetBytes: 8192,
+      migrationPending: false,
+    } } })
+    api.storageMigrateSelect.mockResolvedValue({ status: 'ok', data: { ok: true, data: null } })
+    api.storageMigrationReceipt.mockResolvedValue({ ok: true, data: null })
     api.syncConflictList.mockResolvedValue({ ok: true, data: [] })
     api.syncConflictResolve.mockResolvedValue({ ok: true, data: [] })
     api.syncConflictResolveEntity.mockResolvedValue({ ok: true, data: [] })
@@ -410,5 +422,119 @@ describe('SettingsView', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('未对现有资料库做任何修改')
     expect(screen.queryByText('valid-package')).not.toBeInTheDocument()
+  })
+
+  it('shows bounded storage capacity without exposing an absolute path', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    api.storageStatus.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      kind: 'custom',
+      locationLabel: '自定义位置 · StudyDisk',
+      databaseBytes: 4096,
+      assetBytes: 8192,
+      migrationPending: false,
+    } } })
+    render(SettingsView)
+
+    expect(await screen.findByRole('heading', { name: '资料库存储位置' })).toBeVisible()
+    expect(await screen.findByText('自定义位置 · StudyDisk')).toBeVisible()
+    const storage = screen.getByRole('region', { name: '资料库存储位置' })
+    expect(within(storage).getByText('4.0 KB')).toBeVisible()
+    expect(within(storage).getByText('8.0 KB')).toBeVisible()
+    expect(within(storage).getByText('12.0 KB')).toBeVisible()
+    expect(storage).not.toHaveTextContent(/C:\\|Users\\|Lytree/)
+  })
+
+  it('cancels native folder selection without reporting a failure and restores focus', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    const user = userEvent.setup()
+    render(SettingsView)
+
+    const trigger = await screen.findByRole('button', { name: '迁移资料库' })
+    await user.click(trigger)
+    await user.click(screen.getByRole('button', { name: '选择文件夹并开始迁移' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(trigger).toHaveFocus()
+    expect(api.storageMigrateSelect).toHaveBeenCalledOnce()
+    expect(screen.queryByText(/没有完成迁移/)).not.toBeInTheDocument()
+  })
+
+  it('enters the global restart boundary after a migration is safely staged', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    api.storageMigrateSelect.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      outcome: 'scheduled',
+      destinationLabel: '自定义位置 · StudyDisk',
+      copiedAssetCount: 3,
+      copiedBytes: 12_288,
+    } } })
+    const enterRestarting = vi.fn()
+    const user = userEvent.setup()
+    render(SettingsView, {
+      global: {
+        provide: {
+          [libraryAccessControllerKey as symbol]: { enterRestarting },
+        },
+      },
+    })
+
+    await user.click(await screen.findByRole('button', { name: '迁移资料库' }))
+    await user.click(screen.getByRole('button', { name: '选择文件夹并开始迁移' }))
+
+    await waitFor(() => expect(enterRestarting).toHaveBeenCalledOnce())
+    expect(screen.getByRole('button', { name: '正在复制并校验…' })).toBeDisabled()
+  })
+
+  it('keeps the migration decision open and retryable after a safe failure', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    api.storageMigrateSelect.mockResolvedValue({ status: 'ok', data: { ok: false, error: {
+      code: 'storage_migration_failed',
+      userMessage: '目标磁盘空间不足，原资料库保持不变。',
+      retryable: true,
+      diagnosticId: 'storage-test',
+    } } })
+    const user = userEvent.setup()
+    render(SettingsView)
+
+    await user.click(await screen.findByRole('button', { name: '迁移资料库' }))
+    await user.click(screen.getByRole('button', { name: '选择文件夹并开始迁移' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('目标磁盘空间不足，原资料库保持不变。')
+    expect(screen.getByRole('dialog')).toBeVisible()
+    expect(screen.getByRole('button', { name: '选择文件夹并开始迁移' })).toBeEnabled()
+  })
+
+  it('announces and consumes the previous migration outcome without exposing paths', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    api.storageMigrationReceipt.mockResolvedValue({ ok: true, data: {
+      outcome: 'moved',
+      destinationLabel: '自定义位置 · StudyDisk',
+      copiedAssetCount: 4,
+      copiedBytes: 16_384,
+    } })
+    render(SettingsView)
+
+    expect(await screen.findByRole('status', { name: '存储迁移结果' })).toHaveTextContent('资料库已安全迁移')
+    expect(screen.getByRole('status', { name: '存储迁移结果' })).toHaveTextContent('4 个加密资源')
+    expect(api.storageMigrationReceipt).toHaveBeenCalledOnce()
   })
 })

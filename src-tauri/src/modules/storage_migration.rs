@@ -504,6 +504,16 @@ pub fn read_storage_migration_receipt(
     Ok(receipt)
 }
 
+pub fn take_storage_migration_receipt(
+    control_root: &Path,
+) -> Result<Option<StorageMigrationReceipt>, StorageMigrationError> {
+    let receipt = read_storage_migration_receipt(control_root)?;
+    if receipt.is_some() {
+        remove_control_file(control_root, STORAGE_RECEIPT_FILE)?;
+    }
+    Ok(receipt)
+}
+
 fn read_pending_journal(
     control_root: &Path,
 ) -> Result<Option<StorageMigrationJournal>, StorageMigrationError> {

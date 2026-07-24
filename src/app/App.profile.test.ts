@@ -110,6 +110,30 @@ describe('App profile orchestration', () => {
     expect(screen.queryByRole('heading', { name: '暂时无法确认资料库状态' })).not.toBeInTheDocument()
   })
 
+  it('fails closed when the configured storage is disconnected and never offers credential unlock', async () => {
+    commandMocks.libraryAccessStatus.mockResolvedValue({
+      ok: false,
+      error: {
+        code: 'LIBRARY_STORAGE_UNAVAILABLE',
+        userMessage: '配置的资料库位置当前不可用，未打开或创建任何资料，请重新连接磁盘后重试。',
+        retryable: true,
+        diagnosticId: 'storage-disconnected',
+      },
+    })
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/')
+    await router.isReady()
+    render(App, { global: { plugins: [router], stubs: { transition: false } } })
+
+    expect(await screen.findByRole('heading', { name: '请重新连接资料库位置' })).toBeVisible()
+    expect(screen.getByRole('button', { name: '已连接，重新检查' })).toBeVisible()
+    expect(screen.queryByRole('button', { name: '重新解锁' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '训练台' })).not.toBeInTheDocument()
+    expect(commandMocks.systemStatus).not.toHaveBeenCalled()
+    expect(commandMocks.profileList).not.toHaveBeenCalled()
+    expect(commandMocks.backupRestoreStatus).not.toHaveBeenCalled()
+  })
+
   it('unmounts the entire application shell as soon as a lock begins restarting', async () => {
     const lockProbe = defineComponent({
       setup() {

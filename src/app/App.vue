@@ -15,8 +15,10 @@ const route = useRoute()
 const router = useRouter()
 const desktopRuntime = isTauri()
 type LibraryAccessPhase = 'checking' | 'unlocked' | 'locked' | 'error' | 'unlocking' | 'restarting'
+type LibraryAccessErrorReason = 'credentials' | 'storage'
 const libraryAccessPhase = ref<LibraryAccessPhase>(desktopRuntime ? 'checking' : 'unlocked')
 const libraryAccessError = ref('')
+const libraryAccessErrorReason = ref<LibraryAccessErrorReason>('credentials')
 let workspaceInitialized = false
 provide(libraryAccessControllerKey, {
   enterRestarting: () => {
@@ -107,11 +109,15 @@ async function loadLibraryAccess() {
 
   libraryAccessPhase.value = 'checking'
   libraryAccessError.value = ''
+  libraryAccessErrorReason.value = 'credentials'
   try {
     const result = normalizeAppResult(await commands.libraryAccessStatus())
     if (!result.ok) {
       libraryAccessPhase.value = 'error'
       libraryAccessError.value = result.error.userMessage
+      libraryAccessErrorReason.value = result.error.code === 'LIBRARY_STORAGE_UNAVAILABLE'
+        ? 'storage'
+        : 'credentials'
       return
     }
     if (result.data.locked) {
@@ -238,6 +244,7 @@ function selectProfile(profileId: string) {
     v-if="libraryAccessPhase !== 'unlocked'"
     :phase="libraryAccessPhase"
     :message="libraryAccessError"
+    :reason="libraryAccessErrorReason"
     @unlock="unlockLibrary"
     @retry="loadLibraryAccess"
   />

@@ -18,8 +18,8 @@ use crate::{
         capture_lan::{CaptureLanError, CaptureLanManager},
         storage_migration::{
             StorageMigrationError, StorageMigrationReceipt, StorageMigrationSource,
-            read_storage_migration_receipt, stage_storage_migration_from_source,
-            storage_migration_pending, storage_usage_bytes,
+            stage_storage_migration_from_source, storage_migration_pending, storage_usage_bytes,
+            take_storage_migration_receipt,
         },
     },
 };
@@ -180,7 +180,7 @@ fn require_selected_destination(
 pub fn storage_migration_receipt(
     control_root: State<'_, ApplicationControlRoot>,
 ) -> AppResult<Option<StorageMigrationReceipt>> {
-    match read_storage_migration_receipt(&control_root.0) {
+    match take_storage_migration_receipt(&control_root.0) {
         Ok(receipt) => AppResult::success(receipt),
         Err(error) => AppResult::failure(
             "storage_migration_receipt_failed",

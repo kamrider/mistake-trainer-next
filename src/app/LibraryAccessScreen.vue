@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { BookOpenCheck, KeyRound, LoaderCircle, LockKeyhole, RotateCcw, ShieldCheck } from '@lucide/vue'
+import { BookOpenCheck, HardDrive, KeyRound, LoaderCircle, LockKeyhole, RotateCcw, ShieldCheck } from '@lucide/vue'
 import { computed } from 'vue'
 
 type LibraryAccessPhase = 'checking' | 'locked' | 'error' | 'unlocking' | 'restarting'
@@ -7,6 +7,7 @@ type LibraryAccessPhase = 'checking' | 'locked' | 'error' | 'unlocking' | 'resta
 const props = defineProps<{
   phase: LibraryAccessPhase
   message?: string
+  reason?: 'credentials' | 'storage'
 }>()
 
 const emit = defineEmits<{
@@ -35,6 +36,13 @@ const content = computed(() => {
         detail: '重启后才会载入加密数据库、图片和学习档案。',
       }
     case 'error':
+      if (props.reason === 'storage') {
+        return {
+          eyebrow: '原资料库未连接',
+          title: '请重新连接资料库位置',
+          detail: props.message || '配置的资料库位置当前不可用，请重新连接原磁盘或文件夹后再检查。',
+        }
+      }
       return {
         eyebrow: '访问检查未完成',
         title: '暂时无法确认资料库状态',
@@ -50,6 +58,7 @@ const content = computed(() => {
 })
 
 const isBusy = computed(() => ['checking', 'unlocking', 'restarting'].includes(props.phase))
+const isStorageError = computed(() => props.phase === 'error' && props.reason === 'storage')
 </script>
 
 <template>
@@ -86,6 +95,10 @@ const isBusy = computed(() => ['checking', 'unlocking', 'restarting'].includes(p
           v-else-if="phase === 'restarting'"
           :size="34"
         />
+        <HardDrive
+          v-else-if="isStorageError"
+          :size="34"
+        />
         <LockKeyhole
           v-else
           :size="34"
@@ -116,6 +129,16 @@ const isBusy = computed(() => ['checking', 'unlocking', 'restarting'].includes(p
           当前登录的 Windows 账户就是这台设备的可信凭据。
         </span>
       </div>
+      <div
+        v-else-if="isStorageError"
+        class="access-explanation storage-explanation"
+      >
+        <HardDrive :size="18" />
+        <span>
+          <strong>不会在默认位置创建一个空资料库</strong>
+          请重新插入原磁盘、挂载原文件夹或恢复它的访问权限；确认后再让应用重新检查。
+        </span>
+      </div>
 
       <button
         v-if="phase === 'locked'"
@@ -128,7 +151,7 @@ const isBusy = computed(() => ['checking', 'unlocking', 'restarting'].includes(p
       </button>
 
       <div
-        v-else-if="phase === 'error'"
+        v-else-if="phase === 'error' && !isStorageError"
         class="access-actions"
       >
         <button
@@ -148,9 +171,20 @@ const isBusy = computed(() => ['checking', 'unlocking', 'restarting'].includes(p
           重新解锁
         </button>
       </div>
+      <button
+        v-else-if="isStorageError"
+        type="button"
+        class="access-primary"
+        @click="emit('retry')"
+      >
+        <RotateCcw :size="17" />
+        已连接，重新检查
+      </button>
 
       <p class="access-footnote">
-        锁定只阻止应用进程读取资料，不会删除题目、图片或训练记录。
+        {{ isStorageError
+          ? '应用已停止在访问边界，没有打开原数据库，也没有改写存储位置。'
+          : '锁定只阻止应用进程读取资料，不会删除题目、图片或训练记录。' }}
       </p>
     </section>
   </main>
