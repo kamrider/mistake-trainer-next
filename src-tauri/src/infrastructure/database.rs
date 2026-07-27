@@ -270,7 +270,7 @@ fn run_migrations_to_v11(connection: &mut Connection) -> Result<(), DatabaseErro
 
 pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> {
     let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if version > 13 {
+    if version > 15 {
         return Err(DatabaseError::UnsupportedSchema(version));
     }
     if version < 11 {
@@ -288,6 +288,24 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
         let transaction = connection.transaction()?;
         transaction.execute_batch(include_str!("../../migrations/0013_sync_merge_state.sql"))?;
         transaction.pragma_update(None, "user_version", 13)?;
+        transaction.commit()?;
+    }
+    let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version == 13 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(include_str!(
+            "../../migrations/0014_capture_recognition_jobs.sql"
+        ))?;
+        transaction.pragma_update(None, "user_version", 14)?;
+        transaction.commit()?;
+    }
+    let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version == 14 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(include_str!(
+            "../../migrations/0015_expand_asset_derivation_positions.sql"
+        ))?;
+        transaction.pragma_update(None, "user_version", 15)?;
         transaction.commit()?;
     }
     Ok(())

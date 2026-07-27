@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { isTauri } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, inject, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { routeLocationKey, routerKey } from 'vue-router'
 import CaptureWorkspace from '../../modules/capture/components/CaptureWorkspace.vue'
 import CaptureCropEditor from '../../modules/capture/components/CaptureCropEditor.vue'
 import {
@@ -14,10 +15,19 @@ import {
   type CaptureLanSession,
   type CaptureLayoutMode,
   type CaptureCropRecipe,
+  type CaptureRecognitionJob,
+  type CaptureRecognitionOperationSummary,
+  type CaptureRecognitionRegionProposal,
+  type OcrCapabilityStatus,
+  type OcrRecognitionFeatureStatus,
   type SubjectPreferences,
 } from '../../shared/api/bindings'
 import { normalizeAppResult } from '../../shared/api/normalize-result'
+import { syncControllerKey } from '../sync-controller'
 
+const syncController = inject(syncControllerKey, undefined)
+const appRouter = inject(routerKey, undefined)
+const currentRoute = inject(routeLocationKey, undefined)
 const batches = ref<CaptureBatchSummary[]>([])
 const detail = ref<CaptureBatchDetail>()
 const busy = ref(false)
@@ -26,10 +36,27 @@ const saveState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
 const commitMessage = ref('')
 const previews = reactive<Record<string, string>>({})
 const cropEditor = ref<{ itemId: string, itemName: string, dataUrl: string }>()
+const recognitionCropEditor = ref<{
+  suggestionId: string
+  itemName: string
+  dataUrl: string
+  regions: CaptureRecognitionRegionProposal[]
+}>()
 const lanAddresses = ref<CaptureLanAddress[]>([])
 const lanPreflight = ref<CaptureLanPreflight>()
 const lanPreflightBusy = ref(false)
 const lanSession = ref<CaptureLanSession>()
+const recognitionCapability = ref<OcrCapabilityStatus>()
+const recognitionJob = ref<CaptureRecognitionJob>()
+const recognitionOperation = ref<CaptureRecognitionOperationSummary>()
+const recognitionNotice = ref('')
+const recognitionBusy = ref(false)
+const recognitionFeature = computed<OcrRecognitionFeatureStatus>(() =>
+  recognitionCapability.value?.recognitionFeature ?? {
+    state: 'ready',
+    requiredComponentId: 'opencv_preprocess',
+    detail: '智能切图使用内置本地视觉分析，不读取文字、不需要下载模型；确认后结果只进入素材牌库。',
+  })
 const subjectPreferences = ref<SubjectPreferences>({
   enabledSubjects: ['语文', '数学', '英语', '政治', '历史', '地理', '物理', '化学', '生物'],
   customSubjects: [],
@@ -40,11 +67,14 @@ const subjectOptions = computed(() => [...new Set([
   ...subjectPreferences.value.customSubjects,
 ])])
 const previewOrder: string[] = []
+const previewRequests = new Set<string>()
 const desktopAvailable = isTauri()
-let unlisten: UnlistenFn | undefined
+let unlistenBatch: UnlistenFn | undefined
+let unlistenRecognition: UnlistenFn | undefined
 let refreshTimer: ReturnType<typeof setTimeout> | undefined
 let lanPollTimer: ReturnType<typeof setInterval> | undefined
 let viewMounted = false
+let requestedDetailBatchId = ''
 type PendingDraftUpdate = {
   batchId: string
   draftId: string
@@ -88,13 +118,348 @@ async function loadSubjectPreferences() {
 
 async function loadDetail(batchId: string) {
   if (!desktopAvailable) return
+  requestedDetailBatchId = batchId
   try {
-    const result = normalizeAppResult(await commands.captureBatchDetail(batchId))
-    if (result.ok) detail.value = result.data
+    const [invocation] = await Promise.all([
+      commands.captureBatchDetail(batchId),
+      loadRecognitionCapability(),
+      loadRecognitionStatus(batchId),
+      loadRecognitionLastOperation(batchId),
+    ])
+    const result = normalizeAppResult(invocation)
+    if (requestedDetailBatchId !== batchId) return
+    if (result.ok) {
+      detail.value = result.data
+      if (appRouter && currentRoute?.query.batchId !== batchId) {
+        void appRouter.replace({
+          name: 'inbox',
+          query: { ...currentRoute?.query, batchId },
+        })
+      }
+    }
     else showError(result.error.userMessage)
   }
   catch {
     showError('没有读取到这个采集批次，请返回后重试。')
+  }
+}
+
+function removeCachedPreview(itemId: string) {
+  delete previews[itemId]
+  for (let index = previewOrder.length - 1; index >= 0; index -= 1) {
+    if (previewOrder[index] === itemId) previewOrder.splice(index, 1)
+  }
+}
+
+async function loadRecognitionCapability() {
+  if (!desktopAvailable || !commands.ocrCapabilityStatus) return
+  try {
+    const invocation = await commands.ocrCapabilityStatus()
+    if (invocation.status === 'ok') {
+      const result = normalizeAppResult(invocation.data)
+      if (result.ok) recognitionCapability.value = result.data
+    }
+  }
+  catch {
+    // The workbench remains usable and shows the conservative gate state.
+  }
+}
+
+async function loadRecognitionStatus(batchId: string) {
+  if (!desktopAvailable || !commands.captureRecognitionStatus) return
+  try {
+    const result = normalizeAppResult(await commands.captureRecognitionStatus(batchId))
+    if (result.ok && requestedDetailBatchId === batchId) {
+      recognitionJob.value = result.data ?? undefined
+    }
+  }
+  catch {
+    // Recognition is optional and must not block manual organization.
+  }
+}
+
+async function loadRecognitionLastOperation(batchId: string) {
+  if (!desktopAvailable || !commands.captureRecognitionLastOperation) return
+  try {
+    const result = normalizeAppResult(await commands.captureRecognitionLastOperation(batchId))
+    if (result.ok && requestedDetailBatchId === batchId) {
+      recognitionOperation.value = result.data ?? undefined
+    }
+  }
+  catch {
+    // Undo availability is supplementary and must not block the workbench.
+  }
+}
+
+async function startRecognition() {
+  const current = detail.value
+  if (!current || recognitionBusy.value || !commands.captureRecognitionStart) return
+  recognitionBusy.value = true
+  errorMessage.value = ''
+  try {
+    const result = normalizeAppResult(await commands.captureRecognitionStart({
+      batchId: current.batch.id,
+      itemIds: [...current.unassignedItemIds],
+    }))
+    if (result.ok) recognitionJob.value = result.data
+    else showError(result.error.userMessage)
+  }
+  catch {
+    showError('智能切图没有启动；原图和当前分组保持不变。')
+  }
+  finally {
+    recognitionBusy.value = false
+  }
+}
+
+async function cancelRecognition(jobId: string) {
+  if (recognitionBusy.value || !commands.captureRecognitionCancel) return
+  recognitionBusy.value = true
+  try {
+    const invocation = await commands.captureRecognitionCancel(jobId)
+    if (invocation.status === 'ok') {
+      const result = normalizeAppResult(invocation.data)
+      if (result.ok) recognitionJob.value = result.data
+      else showError(result.error.userMessage)
+    }
+  }
+  catch {
+    showError('停止请求没有完成；你仍可继续手工整理。')
+  }
+  finally {
+    recognitionBusy.value = false
+  }
+}
+
+function resumeRecognition() {
+  // The workbench owns the inline disclosure state; the view keeps the job alive.
+}
+
+type RecognitionReviewRequest = {
+  jobId: string
+  suggestionId: string
+  decision: 'accepted' | 'rejected'
+  editedRegions: CaptureRecognitionRegionProposal[] | null
+}
+
+async function persistRecognitionReview(input: RecognitionReviewRequest): Promise<boolean> {
+  const previousJob = recognitionJob.value
+  if (previousJob) {
+    recognitionJob.value = {
+      ...previousJob,
+      suggestions: previousJob.suggestions.map(suggestion =>
+        suggestion.id === input.suggestionId
+          ? {
+              ...suggestion,
+              state: input.decision,
+              regions: input.editedRegions ?? suggestion.regions,
+            }
+          : suggestion),
+    }
+  }
+  try {
+    const result = normalizeAppResult(await commands.captureRecognitionReview(input))
+    if (result.ok) {
+      recognitionJob.value = result.data
+      return true
+    }
+    else {
+      recognitionJob.value = previousJob
+      showError(result.error.userMessage)
+    }
+  }
+  catch {
+    recognitionJob.value = previousJob
+    showError('这条识别建议没有保存；你刚才的手工整理不会受到影响。')
+  }
+  return false
+}
+
+async function reviewRecognition(input: RecognitionReviewRequest) {
+  if (recognitionBusy.value || !commands.captureRecognitionReview) return false
+  recognitionBusy.value = true
+  try {
+    return await persistRecognitionReview(input)
+  }
+  finally {
+    recognitionBusy.value = false
+  }
+}
+
+async function reviewRecognitionMany(inputs: RecognitionReviewRequest[]) {
+  if (recognitionBusy.value || !commands.captureRecognitionReview || !inputs.length) return
+  recognitionBusy.value = true
+  try {
+    for (const input of inputs) {
+      if (!await persistRecognitionReview(input)) break
+    }
+  }
+  finally {
+    recognitionBusy.value = false
+  }
+}
+
+async function editRecognition(suggestionId: string) {
+  const current = detail.value
+  const suggestion = recognitionJob.value?.suggestions.find(item => item.id === suggestionId)
+  if (!current || !suggestion || recognitionBusy.value) return
+  recognitionBusy.value = true
+  try {
+    const result = normalizeAppResult(
+      await commands.captureCropSourcePreview(current.batch.id, suggestion.itemId),
+    )
+    if (result.ok) {
+      recognitionCropEditor.value = {
+        suggestionId,
+        itemName: '识别建议来源图',
+        dataUrl: result.data.dataUrl,
+        regions: suggestion.regions.map(region => ({ ...region, rect: { ...region.rect } })),
+      }
+    }
+    else showError(result.error.userMessage)
+  }
+  catch {
+    showError('没有读取到建议来源图；当前建议和原图都没有改变。')
+  }
+  finally {
+    recognitionBusy.value = false
+  }
+}
+
+async function applyRecognition(suggestionIds: string[]) {
+  const current = detail.value
+  const job = recognitionJob.value
+  if (
+    !desktopAvailable
+    || !current
+    || !job
+    || recognitionBusy.value
+    || !suggestionIds.length
+    || !commands.captureRecognitionApply
+  ) return
+  recognitionBusy.value = true
+  errorMessage.value = ''
+  recognitionNotice.value = ''
+  try {
+    const invocation = await commands.captureRecognitionApply({
+      batchId: current.batch.id,
+      jobId: job.id,
+      expectedRevision: current.batch.revision,
+      acceptedSuggestionIds: suggestionIds,
+    })
+    if (invocation.status !== 'ok') {
+      showError('识别结果没有应用；原图和当前题卡保持不变。')
+      return
+    }
+    const result = normalizeAppResult(invocation.data)
+    if (!result.ok) {
+      showError(result.error.userMessage)
+      if (result.error.code === 'capture_recognition_stale') {
+        await loadRecognitionStatus(current.batch.id)
+      }
+      return
+    }
+    detail.value = result.data.detail
+    recognitionJob.value = undefined
+    recognitionOperation.value = {
+      operationId: result.data.operationId,
+      batchId: current.batch.id,
+      afterRevision: result.data.detail.batch.revision,
+      createdItemCount: result.data.createdItemCount,
+      reverted: false,
+    }
+    recognitionNotice.value =
+      `已切分 ${result.data.createdItemCount} 张题答图片，已放入素材牌库。`
+  }
+  catch {
+    showError('识别结果没有应用；原图、复核选择和当前题卡都已保留。')
+  }
+  finally {
+    recognitionBusy.value = false
+  }
+}
+
+async function revertRecognition(operationId: string) {
+  const current = detail.value
+  if (
+    !desktopAvailable
+    || !current
+    || recognitionBusy.value
+    || !commands.captureRecognitionRevert
+  ) return
+  recognitionBusy.value = true
+  errorMessage.value = ''
+  try {
+    const invocation = await commands.captureRecognitionRevert({
+      batchId: current.batch.id,
+      operationId,
+      expectedRevision: current.batch.revision,
+    })
+    if (invocation.status !== 'ok') {
+      showError('没有撤销智能整理；当前题卡保持不变。')
+      return
+    }
+    const result = normalizeAppResult(invocation.data)
+    if (!result.ok) {
+      showError(result.error.userMessage)
+      return
+    }
+    detail.value = result.data.detail
+    recognitionOperation.value = recognitionOperation.value
+      ? { ...recognitionOperation.value, reverted: true }
+      : undefined
+    recognitionNotice.value =
+      `已撤销智能整理，恢复 ${result.data.revertedItemCount} 张来源图的原始状态。`
+  }
+  catch {
+    showError('没有撤销智能整理；当前题卡和图片保持不变。')
+  }
+  finally {
+    recognitionBusy.value = false
+  }
+}
+
+async function saveRecognitionProposal(recipes: CaptureCropRecipe[]) {
+  const editor = recognitionCropEditor.value
+  const job = recognitionJob.value
+  if (!editor || !job || recipes.length !== editor.regions.length) return
+  const editedRegions = recipes.map((recipe, index) => ({
+    ...editor.regions[index]!,
+    rect: recipe.rect,
+  }))
+  const saved = await reviewRecognition({
+    jobId: job.id,
+    suggestionId: editor.suggestionId,
+    decision: 'accepted',
+    editedRegions,
+  })
+  if (saved) recognitionCropEditor.value = undefined
+}
+
+function openRecognitionSetup() {
+  if (!appRouter || !detail.value) return
+  void appRouter.push({
+    name: 'settings',
+    query: {
+      section: 'ocr',
+      returnTo: 'inbox',
+      batchId: detail.value.batch.id,
+    },
+  })
+}
+
+function closeDetail() {
+  requestedDetailBatchId = ''
+  detail.value = undefined
+  recognitionJob.value = undefined
+  recognitionOperation.value = undefined
+  recognitionNotice.value = ''
+  void loadBatches()
+  if (appRouter) {
+    void appRouter.replace({
+      name: 'inbox',
+      query: {},
+    })
   }
 }
 
@@ -507,7 +872,7 @@ async function removeItem(itemId: string) {
     const result = normalizeAppResult(await commands.captureItemRemove(current.batch.id, current.batch.revision, itemId))
     if (result.ok) {
       detail.value = result.data
-      delete previews[itemId]
+      removeCachedPreview(itemId)
     }
     else showError(result.error.userMessage)
   }
@@ -530,6 +895,7 @@ async function commitReady() {
       commitMessage.value = result.data.committedCount
         ? `已将 ${result.data.committedCount} 道题加入题库。`
         : '没有可加入题库的完整题卡。'
+      if (result.data.committedCount > 0) syncController?.scheduleMutation()
       await loadDetail(current.batch.id)
       await loadBatches()
     }
@@ -545,19 +911,24 @@ async function commitReady() {
 
 async function loadPreview(itemId: string) {
   const batchId = detail.value?.batch.id
-  if (!desktopAvailable || !batchId || previews[itemId]) return
+  if (!desktopAvailable || !batchId || previews[itemId] || previewRequests.has(itemId)) return
+  previewRequests.add(itemId)
   try {
     const result = normalizeAppResult(await commands.captureItemPreview(batchId, itemId))
     if (!result.ok) return
+    removeCachedPreview(itemId)
     previews[itemId] = result.data.dataUrl
     previewOrder.push(itemId)
     while (previewOrder.length > 40) {
       const expired = previewOrder.shift()
-      if (expired && expired !== itemId) delete previews[expired]
+      if (expired) removeCachedPreview(expired)
     }
   }
   catch {
     // A failed thumbnail must not interrupt organizing the rest of the batch.
+  }
+  finally {
+    previewRequests.delete(itemId)
   }
 }
 
@@ -596,7 +967,7 @@ async function applyCrop(recipes: CaptureCropRecipe[]) {
     }))
     if (result.ok) {
       detail.value = result.data.detail
-      delete previews[editor.itemId]
+      removeCachedPreview(editor.itemId)
       cropEditor.value = undefined
       saveState.value = 'saved'
       await loadBatches()
@@ -624,7 +995,9 @@ async function revertCrop(derivationId: string) {
       derivationId,
     }))
     if (result.ok) {
-      for (const item of current.items.filter(value => value.cropDerivationId)) delete previews[item.id]
+      for (const item of current.items.filter(value => value.cropDerivationId)) {
+        removeCachedPreview(item.id)
+      }
       detail.value = result.data
       saveState.value = 'saved'
       await loadBatches()
@@ -793,9 +1166,26 @@ onMounted(async () => {
     return
   }
   await Promise.all([loadBatches(), loadSubjectPreferences()])
+  const requestedBatchId = currentRoute?.query.batchId
+  if (
+    typeof requestedBatchId === 'string'
+    && batches.value.some(batch => batch.id === requestedBatchId)
+  ) {
+    await loadDetail(requestedBatchId)
+  }
   await Promise.all([loadLanAddresses(), loadLanPreflight(), loadLanStatus()])
   lanPollTimer = setInterval(() => void loadLanStatus(), 5_000)
-  unlisten = await listen<{ batchId: string }>('capture_batch_changed', event => scheduleRefresh(event.payload.batchId))
+  const eventUnlisteners = await Promise.all([
+    listen<{ batchId: string }>('capture_batch_changed', event =>
+      scheduleRefresh(event.payload.batchId)),
+    listen<{ batchId: string }>('capture_recognition_changed', event => {
+      if (detail.value?.batch.id === event.payload.batchId) {
+        void loadRecognitionStatus(event.payload.batchId)
+      }
+    }),
+  ])
+  unlistenBatch = eventUnlisteners[0]
+  unlistenRecognition = eventUnlisteners[1]
 })
 
 onBeforeUnmount(() => {
@@ -803,7 +1193,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('paste', handlePaste)
   if (refreshTimer) clearTimeout(refreshTimer)
   if (lanPollTimer) clearInterval(lanPollTimer)
-  unlisten?.()
+  unlistenBatch?.()
+  unlistenRecognition?.()
   pendingDraftUpdates.clear()
 })
 </script>
@@ -824,9 +1215,14 @@ onBeforeUnmount(() => {
     :lan-session="lanSession"
     :subject-options="subjectOptions"
     :capture-sound-enabled="subjectPreferences.captureSoundEnabled"
+    :recognition-feature="recognitionFeature"
+    :recognition-job="recognitionJob"
+    :recognition-operation="recognitionOperation"
+    :recognition-notice="recognitionNotice"
+    :recognition-busy="recognitionBusy"
     @create-batch="createBatch"
     @open-batch="loadDetail"
-    @back="detail = undefined; loadBatches()"
+    @back="closeDetail"
     @discard-batch="discardBatch"
     @import-select="importSelect"
     @import-files="importFiles"
@@ -847,6 +1243,15 @@ onBeforeUnmount(() => {
     @refresh-lan-addresses="loadLanAddresses"
     @refresh-lan-preflight="loadLanPreflight"
     @stop-mobile-capture="stopMobileCapture()"
+    @recognition-start="startRecognition"
+    @recognition-cancel="cancelRecognition"
+    @recognition-resume="resumeRecognition"
+    @recognition-open-setup="openRecognitionSetup"
+    @recognition-review="reviewRecognition"
+    @recognition-review-many="reviewRecognitionMany"
+    @recognition-edit="editRecognition"
+    @recognition-apply="applyRecognition"
+    @recognition-revert="revertRecognition"
   />
   <CaptureCropEditor
     v-if="cropEditor"
@@ -855,5 +1260,21 @@ onBeforeUnmount(() => {
     :busy="busy"
     @close="cropEditor = undefined"
     @apply="applyCrop"
+  />
+  <CaptureCropEditor
+    v-if="recognitionCropEditor"
+    mode="proposal"
+    :data-url="recognitionCropEditor.dataUrl"
+    :item-name="recognitionCropEditor.itemName"
+    :busy="recognitionBusy"
+    :initial-recipes="recognitionCropEditor.regions.map(region => ({
+      rect: region.rect,
+      rotationDegrees: 0,
+      outputMediaType: 'image/png',
+      maxEdge: 4096,
+      jpegQuality: 90,
+    }))"
+    @close="recognitionCropEditor = undefined"
+    @save-proposal="saveRecognitionProposal"
   />
 </template>

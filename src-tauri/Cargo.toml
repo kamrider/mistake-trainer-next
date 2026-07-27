@@ -23,6 +23,7 @@ fsrs = "=6.6.1"
 futures-util = { version = "=0.3.32", default-features = false, features = ["std"] }
 if-addrs = "=0.15.0"
 qrcode = { version = "=0.14.1", default-features = false, features = ["svg"] }
+ppocr-rs = { version = "=0.7.3", default-features = false, optional = true }
 reqwest = { version = "=0.13.4", default-features = false, features = ["json", "rustls", "stream", "system-proxy"] }
 rusqlite = { version = "0.38", features = ["backup", "bundled-sqlcipher-vendored-openssl", "uuid"] }
 rfd = { version = "=0.17.2", default-features = false, features = ["common-controls-v6"] }
@@ -37,6 +38,7 @@ thiserror = "2"
 time = { version = "=0.3.53", default-features = false, features = ["parsing"] }
 tokio = { version = "=1.52.3", features = ["fs", "io-util", "net", "rt-multi-thread", "sync", "time"] }
 uuid = { version = "1", features = ["v7", "serde"] }
+ort = { version = "=2.0.0-rc.9", default-features = false, features = ["load-dynamic"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "=0.62.2", features = [
@@ -45,6 +47,7 @@ windows = { version = "=0.62.2", features = [
   "Win32_Storage_FileSystem",
   "Win32_System_Com",
   "Win32_System_Registry",
+  "Win32_System_SystemInformation",
   "Win32_System_Threading",
   "Win32_UI_Shell",
 ] }
@@ -61,3 +64,4 @@ zip = "=0.6.6"
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+local-ocr-runtime = ["dep:ort", "dep:ppocr-rs"]

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { isTauri } from '@tauri-apps/api/core'
-import { computed, onMounted, ref } from 'vue'
+import { computed, inject, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ReviewRoom from '@/modules/review/components/ReviewRoom.vue'
 import SchulteFocus from '@/modules/review/components/SchulteFocus.vue'
@@ -8,7 +8,9 @@ import { useReviewClock } from '@/modules/review/composables/useReviewClock'
 import { mapSimpleRating, type FsrsRating, type SimpleRating } from '@/modules/review/domain/rating'
 import { commands, type ProblemDetail, type ReviewFocusState, type ReviewQueueOverview } from '@/shared/api/bindings'
 import { normalizeAppResult } from '@/shared/api/normalize-result'
+import { syncControllerKey } from '@/app/sync-controller'
 
+const syncController = inject(syncControllerKey, undefined)
 const route = useRoute()
 const router = useRouter()
 const overview = ref<ReviewQueueOverview>({
@@ -271,6 +273,7 @@ async function submitRating(rating: SimpleRating | FsrsRating) {
       return
     }
 
+    syncController?.scheduleMutation()
     successfulCount.value += 1
     if (isExam.value) {
       if (rating === 'remembered' || rating === 'good' || rating === 'easy')

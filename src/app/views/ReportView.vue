@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { isTauri } from '@tauri-apps/api/core'
 import { ChartNoAxesColumnIncreasing, Clock3, FileArchive, Flame, RotateCcw } from '@lucide/vue'
-import { computed, onMounted, ref } from 'vue'
+import { computed, inject, onMounted, ref } from 'vue'
 import ExportCandidatePicker from '../../modules/export/components/ExportCandidatePicker.vue'
 import ExportSnapshotHistory from '../../modules/export/components/ExportSnapshotHistory.vue'
 import { commands, type DeletedExportSnapshotSummary, type ExportCandidate, type ExportCandidateSource, type ExportLayout, type ExportSnapshotSummary, type ReportSummary } from '../../shared/api/bindings'
 import { normalizeAppResult } from '../../shared/api/normalize-result'
+import { syncControllerKey } from '../sync-controller'
 
+const syncController = inject(syncControllerKey, undefined)
 const report = ref<ReportSummary>()
 const snapshots = ref<ExportSnapshotSummary[]>([])
 const deletedSnapshots = ref<DeletedExportSnapshotSummary[]>([])
@@ -205,6 +207,7 @@ async function createSnapshot() {
     }
     snapshots.value = [result.data, ...snapshots.value]
     generatedMessage.value = `已保存“${result.data.title}”，随时可以从下方重新生成。`
+    syncController?.scheduleMutation()
   }
   catch {
     errorMessage.value = '导出快照没有保存，请稍后重试。'
@@ -222,6 +225,7 @@ async function deleteSnapshot(snapshotId: string) {
     const result = normalizeAppResult(await commands.exportDelete(snapshotId))
     if (result.ok) {
       snapshots.value = snapshots.value.filter(snapshot => snapshot.id !== snapshotId)
+      syncController?.scheduleMutation()
       const trashResult = normalizeAppResult(await commands.exportTrashList())
       if (trashResult.ok) {
         deletedSnapshots.value = trashResult.data
@@ -269,6 +273,7 @@ async function restoreSnapshot(deleted: DeletedExportSnapshotSummary) {
     if (result.ok) {
       snapshots.value = [deleted.snapshot, ...snapshots.value]
       deletedSnapshots.value = deletedSnapshots.value.filter(item => item.snapshot.id !== deleted.snapshot.id)
+      syncController?.scheduleMutation()
     }
     else errorMessage.value = result.error.userMessage
   }

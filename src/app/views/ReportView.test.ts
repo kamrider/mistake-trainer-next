@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { syncControllerKey } from '../sync-controller'
 import ReportView from './ReportView.vue'
 
 const api = vi.hoisted(() => ({
@@ -11,6 +12,14 @@ vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => true }))
 vi.mock('../../shared/api/bindings', () => ({ commands: api }))
 
 describe('ReportView', () => {
+  const syncController = {
+    run: vi.fn(),
+    scheduleMutation: vi.fn(),
+    dispose: vi.fn(),
+  }
+  const renderView = () => render(ReportView, {
+    global: { provide: { [syncControllerKey as symbol]: syncController } },
+  })
   const mathCandidate = {
     id: 'problem-1', subject: '数学', note: '圆锥曲线', questionAssetCount: 1,
     answerAssetCount: 1, dueAtUtcMs: null, reviewCount: 0,
@@ -39,7 +48,7 @@ describe('ReportView', () => {
 
   it('renders real metrics and creates an export snapshot from due candidates', async () => {
     const user = userEvent.setup()
-    render(ReportView)
+    renderView()
 
     expect(await screen.findByText('75')).toBeVisible()
     expect(screen.getAllByText('数学').length).toBeGreaterThanOrEqual(1)
@@ -52,6 +61,7 @@ describe('ReportView', () => {
       title: '本周复盘', problemIds: ['problem-1'], layout: 'question_answer_alternating',
     }))
     expect(await screen.findByText('本周复盘')).toBeVisible()
+    expect(syncController.scheduleMutation).toHaveBeenCalledOnce()
   })
 
   it('switches candidate source and saves only the explicitly selected problems', async () => {
@@ -63,7 +73,7 @@ describe('ReportView', () => {
     api.exportCandidates
       .mockResolvedValueOnce({ ok: true, data: [mathCandidate] })
       .mockResolvedValueOnce({ ok: true, data: [physicsCandidate, mathCandidate] })
-    render(ReportView)
+    renderView()
 
     expect(await screen.findByRole('checkbox', { name: '选择数学：圆锥曲线' })).toBeChecked()
     await user.click(screen.getByRole('radio', { name: /最近训练批次/ }))
@@ -85,7 +95,7 @@ describe('ReportView', () => {
         code: 'export_candidates_failed', userMessage: '候选题读取失败。', retryable: true, diagnosticId: 'diag-1',
       } })
       .mockResolvedValueOnce({ ok: true, data: [mathCandidate] })
-    render(ReportView)
+    renderView()
 
     expect(await screen.findByRole('alert')).toHaveTextContent('候选题读取失败。')
     expect(screen.getByRole('button', { name: /保存 0 道题的导出快照/ })).toBeDisabled()
@@ -100,7 +110,7 @@ describe('ReportView', () => {
     api.exportCreate.mockResolvedValue({ ok: false, error: {
       code: 'export_create_failed', userMessage: '快照没有保存。', retryable: true, diagnosticId: 'diag-2',
     } })
-    render(ReportView)
+    renderView()
 
     const candidate = await screen.findByRole('checkbox', { name: '选择数学：圆锥曲线' })
     await user.click(screen.getByRole('button', { name: /保存 1 道题的导出快照/ }))
@@ -108,6 +118,7 @@ describe('ReportView', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('快照没有保存。')
     expect(candidate).toBeChecked()
     expect(screen.getByRole('button', { name: /保存 1 道题的导出快照/ })).toBeEnabled()
+    expect(syncController.scheduleMutation).not.toHaveBeenCalled()
   })
 
   it('loads the persistent recycle area and restores a deleted snapshot', async () => {
@@ -120,13 +131,14 @@ describe('ReportView', () => {
       deletedAtUtcMs: 1_700_100_000_000,
       purgeAfterUtcMs: 1_702_692_000_000,
     }] })
-    render(ReportView)
+    renderView()
 
     expect(await screen.findByText('上月复盘')).toBeVisible()
     await user.click(screen.getByRole('button', { name: '恢复导出快照：上月复盘' }))
 
     await waitFor(() => expect(api.exportRestore).toHaveBeenCalledWith('snapshot-deleted'))
     expect(screen.queryByRole('button', { name: '恢复导出快照：上月复盘' })).not.toBeInTheDocument()
+    expect(syncController.scheduleMutation).toHaveBeenCalledOnce()
   })
 
   it('generates a real file from a saved snapshot and reports only its safe file name', async () => {
@@ -135,7 +147,7 @@ describe('ReportView', () => {
       id: 'snapshot-1', title: '本周复盘', problemCount: 1,
       layout: 'question_answer_alternating', createdAtUtcMs: 1,
     }] })
-    render(ReportView)
+    renderView()
 
     await user.click(await screen.findByRole('button', { name: '生成导出文件：本周复盘' }))
 

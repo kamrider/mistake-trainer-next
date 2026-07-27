@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/vue'
+import { fireEvent, render, screen, waitFor } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import SettingsSectionNav, { type SettingsSectionLink } from './SettingsSectionNav.vue'
@@ -93,6 +93,8 @@ describe('SettingsSectionNav', () => {
     render(SettingsSectionNav, { props: { sections } })
 
     expect(screen.getByRole('navigation', { name: '设置目录' })).toBeVisible()
+    expect(screen.getByRole('button', { name: '查看更多设置' })).toBeVisible()
+    expect(screen.getByRole('button', { name: '查看前面的设置' })).toBeVisible()
     expect(document.querySelector('.settings-section-indicator')).toHaveAttribute('aria-hidden', 'true')
     await userEvent.click(screen.getByRole('button', { name: /科目配置/ }))
 
@@ -102,6 +104,27 @@ describe('SettingsSectionNav', () => {
     })
     expect(screen.getByRole('button', { name: /科目配置/ }))
       .toHaveAttribute('aria-current', 'location')
+  })
+
+  it('reveals and operates the horizontal directory controls when content is hidden', async () => {
+    addAnchors()
+    const view = render(SettingsSectionNav, { props: { sections } })
+    const scroller = view.container.querySelector<HTMLElement>('.settings-section-scroller')!
+    const scrollBy = vi.fn()
+    scroller.scrollBy = scrollBy
+    Object.defineProperty(scroller, 'clientWidth', { configurable: true, value: 240 })
+    Object.defineProperty(scroller, 'scrollWidth', { configurable: true, value: 700 })
+    Object.defineProperty(scroller, 'scrollLeft', { configurable: true, writable: true, value: 0 })
+    window.dispatchEvent(new Event('resize'))
+
+    const next = screen.getByRole('button', { name: '查看更多设置' })
+    await waitFor(() => expect(next).toBeEnabled())
+    await userEvent.click(next)
+    expect(scrollBy).toHaveBeenCalledWith({ left: 180, behavior: 'smooth' })
+
+    scroller.scrollLeft = 120
+    await fireEvent.scroll(scroller)
+    expect(screen.getByRole('button', { name: '查看前面的设置' })).toBeEnabled()
   })
 
   it('uses instant scrolling when Windows requests reduced motion', async () => {

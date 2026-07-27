@@ -89,6 +89,27 @@ Non-overlapping fields merge automatically. Review events form a set union. Asse
 deduplicate by hash. Same-field edits with a common base revision create a visible
 conflict. Deletes create tombstones retained for 30 days.
 
+## Background sync boundary
+
+- The encrypted local transaction is authoritative. Profile, problem, review, export,
+  migration, and conflict-resolution commands report success as soon as local state and
+  its outbox operation commit; a later cloud failure cannot undo or relabel that save.
+- Vue restores the cloud session only after the local library unlocks. Startup, actual
+  network recovery, return to the foreground, explicit manual action, and successful
+  cloud-visible local mutations are finite triggers; there is no polling interval.
+- Mutation notifications are debounced. The app controller coalesces concurrent triggers,
+  waits for an older request, and always starts a fresh pass for a mutation that may have
+  missed that request's leased outbox batch. Failed automatic requests do not self-loop.
+- Rust owns a process-wide sync permit in addition to the Vue single-flight guard, so
+  forged or concurrent command invocations cannot overlap push/pull transactions.
+- Local-only, signed-out, and offline phases do not schedule mutation sync. Their outbox
+  remains intact for manual, startup, or network-recovery retry.
+- Active LAN phone capture takes priority. Sync reads the LAN session state and returns a
+  stable deferred result instead of stopping the server or interrupting an upload.
+- Upload-only completion updates profiles and the global sync indicator without remounting
+  the active route. A non-mutation sync may refresh a page only after it actually pulled
+  changes, and never while the training room is active.
+
 ## Capture inbox boundary
 
 - Capture batches, drafts, and their item assignments live in the encrypted local
@@ -289,6 +310,55 @@ conflict. Deletes create tombstones retained for 30 days.
 - Pull applies the same last-profile and ownership invariants locally, advances the cursor in the
   same transaction, removes committed orphan blobs afterward, and refreshes the in-memory active
   profile before reporting sync success.
+
+## Smart image modes
+
+- `智能切图` is the currently shipped mode. It is a deterministic, fully local visual-layout
+  helper implemented with the existing Rust image stack. It does not run OCR, inspect question
+  text, match question numbers, download a model, or make a network request.
+- `全自动识题` is a separate future mode for OCR, subject and question/answer understanding,
+  matching, card creation, and export. The UI marks it as unavailable and exposes neither an
+  execution control nor small/medium model downloads. Hardware-aware model tiers will be
+  redesigned when that mode has distributable runtime and real-image evidence.
+- The former PP-OCRv6 small/medium adapter, installer catalog, and hardware preflight remain
+  development evidence only. They are not selected by the product worker and do not imply that
+  automatic recognition is released.
+
+## Local smart-image splitting boundary
+
+- Schema v14 adds account/profile/batch-scoped recognition jobs, item snapshots,
+  review suggestions, and a reversible-operation ledger. These rows remain local and
+  never enter the sync outbox.
+- The capture workbench treats splitting as a suggestion layer over unassigned, active items in
+  an `organizing` batch. Existing drafts and manually assigned items remain canonical. A source
+  marked as a question produces question materials; an answer source produces answer materials.
+- The production worker always selects `VisualSplitRecognitionEngine`. It uses foreground
+  density, conservative column detection, and major whitespace boundaries to form reading-order
+  regions. Weak or blank layouts fall back to a low-confidence whole-page proposal instead of
+  guessing.
+- A single managed worker decrypts one scoped asset at a time into an application-owned
+  private temporary directory, runs no more than one engine call concurrently, emits
+  only job/batch IDs and bounded progress, and removes plaintext on success, per-item failure,
+  cancellation, batch discard, and app shutdown. No OCR text or model path exists in the current
+  pipeline. Startup deletes interrupted suggestions and replays the abandoned job; a corrupt
+  encrypted source still fails only that item.
+- Review separates high-confidence, needs-review, insufficient, and stale results.
+  Low-confidence and stale results cannot be accepted, and proposal crop editing does
+  not create assets.
+- Applying suggestions is a separate atomic boundary. All derived blobs are prepared under
+  `.staging`, then encrypted assets, ordinary crop derivations, unassigned `capture_items`,
+  source supersession, and the operation ledger commit in one compensated transaction. It
+  creates no draft, draft-item link, Problem, or sync outbox row. The source is retained.
+- The operation ledger supports a persistent, revision-scoped undo. Undo succeeds only
+  while every generated item still matches the applied state and no generated asset is
+  referenced by a formal problem or later derivation. Any later edit returns a conflict without
+  deleting user work.
+- The full automatic-recognition gate remains closed until a distributable inference adapter,
+  model-compatible preprocessing, offline Windows packaging, license review, hardware-tier
+  policy, and real-image quality/performance evidence pass.
+- Backups at schema v14 require all four recognition tables and reject recognition jobs
+  that do not belong to the backup account/profile/batch. Model caches and decrypted
+  temporary files remain outside backup scope.
 
 ## Performance budgets
 

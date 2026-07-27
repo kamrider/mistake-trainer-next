@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { isTauri } from '@tauri-apps/api/core'
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, inject, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import LibraryWorkspace from '../../modules/library/components/LibraryWorkspace.vue'
 import ProblemDetailDrawer from '../../modules/library/components/ProblemDetailDrawer.vue'
 import { commands, type ProblemDetail, type ProblemStatusFilter, type ProblemSummary } from '../../shared/api/bindings'
 import { normalizeAppResult } from '../../shared/api/normalize-result'
+import { syncControllerKey } from '../sync-controller'
 
+const syncController = inject(syncControllerKey, undefined)
 const router = useRouter()
 const route = useRoute()
 const profileName = ref('本机学习档案')
@@ -25,6 +27,15 @@ const detailLoading = ref(false)
 const detail = ref<ProblemDetail>()
 const detailError = ref('')
 const detailSaving = ref(false)
+const detailIndex = computed(() => detail.value
+  ? problems.value.findIndex(problem => problem.id === detail.value?.id)
+  : -1)
+const previousProblemId = computed(() => detailIndex.value > 0
+  ? problems.value[detailIndex.value - 1]?.id ?? null
+  : null)
+const nextProblemId = computed(() => detailIndex.value >= 0 && detailIndex.value < problems.value.length - 1
+  ? problems.value[detailIndex.value + 1]?.id ?? null
+  : null)
 
 function loadDevelopmentPreview() {
   profileName.value = '本机学习档案'
@@ -122,6 +133,7 @@ async function updateProblem(input: { problemId: string; subject: string; note: 
       detailError.value = result.error.userMessage
       return
     }
+    syncController?.scheduleMutation()
     await refresh()
     await openDetail(input.problemId)
   }
@@ -145,6 +157,7 @@ async function changeProblemStatus(problemId: string, targetStatus: ProblemStatu
       detailError.value = result.error.userMessage
       return
     }
+    syncController?.scheduleMutation()
     closeDetail()
     await refresh()
   }
@@ -243,6 +256,7 @@ async function changeBatchStatus(targetStatus: ProblemStatusFilter) {
       errorMessage.value = result.error.userMessage
       return
     }
+    syncController?.scheduleMutation()
     selectedProblemIds.value = []
     await refresh()
   }
@@ -284,9 +298,12 @@ onBeforeUnmount(() => {
     :loading="detailLoading"
     :saving="detailSaving || Boolean(startingExperience)"
     :error-message="detailError"
+    :previous-problem-id="previousProblemId"
+    :next-problem-id="nextProblemId"
     @close="closeDetail"
     @train="trainProblem"
     @update="updateProblem"
     @status="changeProblemStatus"
+    @navigate="openDetail"
   />
 </template>

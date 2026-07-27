@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowRightLeft, Check, Crop, Image as ImageIcon, Maximize2, RotateCcw, RotateCw, Trash2, Undo2, X } from '@lucide/vue'
+import { ArrowRightLeft, Check, Crop, GripVertical, Image as ImageIcon, Maximize2, Plus, RotateCcw, RotateCw, X } from '@lucide/vue'
 import { computed, nextTick, reactive, ref, watch } from 'vue'
 import type { CaptureDraftSummary, CaptureItemSummary } from '../../../shared/api/bindings'
 import CaptureThumbnail from './CaptureThumbnail.vue'
@@ -16,6 +16,8 @@ const props = defineProps<{
   subjectOptions: string[]
   dropRole?: CardRole | null
   settled?: boolean
+  revealItemId?: string | undefined
+  revealRequestKey?: number
 }>()
 
 const emit = defineEmits<{
@@ -25,10 +27,10 @@ const emit = defineEmits<{
   pointerStart: [itemId: string, event: PointerEvent]
   returnItem: [itemId: string]
   changeItemRole: [itemId: string, targetRole: CardRole, targetPosition: number]
-  deleteDraft: [draftId: string]
   changeSubject: [subject: string]
   crop: [itemId: string]
   revertCrop: [derivationId: string]
+  requestAnswer: [draftId: string]
 }>()
 
 const flipped = ref(false)
@@ -54,6 +56,24 @@ watch([questionItems, answerItems], ([questions, answers]) => {
   }
 }, { immediate: true })
 
+watch(() => props.revealRequestKey, () => {
+  const itemId = props.revealItemId
+  if (!itemId) return
+  const questionIndex = questionItems.value.findIndex(item => item.id === itemId)
+  const answerIndex = answerItems.value.findIndex(item => item.id === itemId)
+  if (questionIndex >= 0) {
+    indexes.question = questionIndex
+    flipped.value = false
+  } else if (answerIndex >= 0) {
+    indexes.answer = answerIndex
+    flipped.value = true
+  } else {
+    return
+  }
+  emit('select', props.draft.id)
+  emit('preview', itemId)
+}, { immediate: true, flush: 'post' })
+
 function mapItems(ids: string[]) {
   return ids.map(id => itemById.value.get(id)).filter((item): item is CaptureItemSummary => Boolean(item))
 }
@@ -73,6 +93,10 @@ function selectImage(role: CardRole, index: number) {
 
 function flip() {
   emit('select', props.draft.id)
+  if (!answerItems.value.length) {
+    emit('requestAnswer', props.draft.id)
+    return
+  }
   flipped.value = !flipped.value
 }
 
@@ -173,19 +197,14 @@ function handleThumbnailKeydown(role: CardRole, index: number, item: CaptureItem
         </option>
       </select>
       <div class="draft-actions">
-        <span class="ready-mark"><Check
+        <span
+          class="ready-mark"
+          :aria-label="draft.ready ? '题卡已完成' : incompleteReason"
+          :title="draft.ready ? '题卡已完成' : incompleteReason"
+        ><Check
           v-if="draft.ready"
           :size="13"
-        />{{ incompleteReason }}</span>
-        <button
-          type="button"
-          class="delete-draft"
-          :disabled="busy"
-          aria-label="撤销这张卡"
-          @click.stop="emit('deleteDraft', draft.id)"
-        >
-          <Trash2 :size="14" />撤销
-        </button>
+        /><template v-if="!draft.ready">{{ incompleteReason }}</template></span>
       </div>
     </header>
 
@@ -193,13 +212,15 @@ function handleThumbnailKeydown(role: CardRole, index: number, item: CaptureItem
       <div
         class="card-inner"
         :class="{ 'is-flipped': flipped }"
-        role="button"
+        :role="answerItems.length ? 'button' : 'group'"
         tabindex="0"
-        :aria-label="flipped ? '当前显示答案，点击翻回题面' : '当前显示题面，点击翻到答案'"
-        @click="flip"
+        :aria-label="answerItems.length
+          ? flipped ? '当前显示答案，点击翻回题面' : '当前显示题面，点击翻到答案'
+          : '当前显示题面，尚未添加答案'"
+        @click="answerItems.length && flip()"
         @keydown="handleCardKeydown"
-        @keydown.enter.prevent="flip"
-        @keydown.space.prevent="flip"
+        @keydown.enter.prevent="answerItems.length && flip()"
+        @keydown.space.prevent="answerItems.length && flip()"
       >
         <section
           v-for="role in (['question', 'answer'] as CardRole[])"
@@ -217,6 +238,9 @@ function handleThumbnailKeydown(role: CardRole, index: number, item: CaptureItem
           <div
             v-if="activeItem(role)"
             class="main-image-wrap"
+            :aria-label="`拖动 ${activeItem(role)!.sourceName}`"
+            @pointerdown="!busy && emit('pointerStart', activeItem(role)!.id, $event)"
+            @click.stop
           >
             <img
               v-if="previews[activeItem(role)!.id]"
@@ -235,6 +259,7 @@ function handleThumbnailKeydown(role: CardRole, index: number, item: CaptureItem
               class="expand-image"
               :disabled="!previews[activeItem(role)!.id]"
               :aria-label="`放大查看 ${activeItem(role)!.sourceName}`"
+              @pointerdown.stop
               @click.stop="openImage(role)"
             >
               <Maximize2 :size="16" /> 大图
@@ -244,6 +269,7 @@ function handleThumbnailKeydown(role: CardRole, index: number, item: CaptureItem
               class="crop-image"
               :disabled="busy"
               :aria-label="activeItem(role)!.cropDerivationId ? '恢复裁剪前原图' : `裁剪 ${activeItem(role)!.sourceName}`"
+              @pointerdown.stop
               @click.stop="activeItem(role)!.cropDerivationId
                 ? emit('revertCrop', activeItem(role)!.cropDerivationId!)
                 : emit('crop', activeItem(role)!.id)"
@@ -256,8 +282,20 @@ function handleThumbnailKeydown(role: CardRole, index: number, item: CaptureItem
                 v-else
                 :size="16"
               />
-              {{ activeItem(role)!.cropDerivationId ? '恢复原图' : '裁剪' }}
+              {{ activeItem(role)!.cropDerivationId ? '撤销裁剪' : '裁剪' }}
             </button>
+            <div class="image-move-actions">
+              <span class="drag-hint"><GripVertical :size="14" />可拖回素材区</span>
+              <button
+                type="button"
+                class="return-image"
+                :disabled="busy"
+                @pointerdown.stop
+                @click.stop="emit('returnItem', activeItem(role)!.id)"
+              >
+                将当前图片移回素材库
+              </button>
+            </div>
           </div>
           <div
             v-else
@@ -294,6 +332,7 @@ function handleThumbnailKeydown(role: CardRole, index: number, item: CaptureItem
               class="change-role"
               :disabled="busy"
               :aria-label="`把当前${role === 'question' ? '题图转为答案' : '答案图转为题面'}`"
+              :title="`转为${role === 'question' ? '答案' : '题面'}`"
               @click.stop="activeItem(role) && emit(
                 'changeItemRole',
                 activeItem(role)!.id,
@@ -301,27 +340,28 @@ function handleThumbnailKeydown(role: CardRole, index: number, item: CaptureItem
                 role === 'question' ? answerItems.length : questionItems.length,
               )"
             >
-              <ArrowRightLeft :size="14" /> 转为{{ role === 'question' ? '答案' : '题面' }}
-            </button>
-            <button
-              type="button"
-              class="return-image"
-              :disabled="busy"
-              :aria-label="`把当前${role === 'question' ? '题图' : '答案图'}移回待配对`"
-              @click.stop="activeItem(role) && emit('returnItem', activeItem(role)!.id)"
-            >
-              <Undo2 :size="14" /> 移回
+              <ArrowRightLeft :size="14" />
             </button>
           </div>
         </section>
       </div>
       <button
+        v-if="answerItems.length"
         type="button"
         class="flip-button"
         :aria-label="flipped ? '翻回题面' : '翻到答案'"
         @click="flip"
       >
         <RotateCw :size="17" />{{ flipped ? '翻回题面' : '翻到答案' }}
+      </button>
+      <button
+        v-else
+        type="button"
+        class="flip-button add-answer-button"
+        :disabled="busy"
+        @click="emit('requestAnswer', draft.id)"
+      >
+        <Plus :size="17" />添加答案
       </button>
     </div>
 
@@ -361,9 +401,10 @@ function handleThumbnailKeydown(role: CardRole, index: number, item: CaptureItem
 .draft-card{padding:18px;border:1px solid var(--line);border-radius:7px 22px 22px;background:rgba(255,253,247,.78);box-shadow:var(--shadow-soft);transition:transform var(--motion-standard) var(--ease-standard),border-color var(--motion-standard),box-shadow var(--motion-standard)}
 .draft-card.is-selected{border-color:rgba(185,88,63,.5);box-shadow:0 18px 45px rgba(34,48,43,.13),inset 4px 0 0 var(--cinnabar);transform:translateY(-2px)}
 .draft-card.is-drop-question{border-color:rgba(33,51,45,.72);background:rgba(225,235,229,.9);transform:translateY(-3px) scale(1.012);box-shadow:0 22px 48px rgba(33,51,45,.18)}.draft-card.is-drop-answer{border-color:rgba(185,88,63,.72);background:rgba(247,225,216,.88);transform:translateY(-3px) scale(1.012);box-shadow:0 22px 48px rgba(185,88,63,.16)}.draft-card.is-settled{animation:card-settle 240ms var(--ease-standard)}
-.draft-header{display:flex;gap:14px;align-items:center;justify-content:space-between}.draft-target{display:flex;flex:1;gap:10px;align-items:center;padding:0;color:var(--ink);border:0;background:transparent;text-align:left;cursor:pointer}.draft-target>span:last-child{display:grid}.draft-target strong{font-size:17px}.draft-target small{margin-top:2px;color:var(--ink-muted);font-size:10px}.draft-number{color:var(--cinnabar);font-family:serif;font-size:23px}.card-subject{min-height:34px;padding:0 28px 0 10px;color:var(--green-deep);border:1px solid rgba(33,51,45,.2);border-radius:999px;background:var(--green-soft);font-size:10px;font-weight:760;cursor:pointer}.draft-actions{display:flex;gap:7px;align-items:center}.ready-mark{display:inline-flex;gap:5px;align-items:center;padding:6px 9px;color:#914b39;border-radius:999px;background:rgba(185,88,63,.1);font-size:9px;font-weight:800}.is-ready .ready-mark{color:#416b5a;background:var(--green-soft)}.delete-draft{display:inline-flex;gap:4px;align-items:center;min-height:30px;padding:0 9px;color:var(--ink-muted);border:1px solid var(--line);border-radius:999px;background:transparent;font-size:9px;cursor:pointer}.delete-draft:hover{color:var(--cinnabar);border-color:rgba(185,88,63,.35);background:rgba(185,88,63,.07)}
+.draft-header{display:flex;gap:14px;align-items:center;justify-content:space-between}.draft-target{display:flex;flex:1;gap:10px;align-items:center;padding:0;color:var(--ink);border:0;background:transparent;text-align:left;cursor:pointer}.draft-target>span:last-child{display:grid}.draft-target strong{font-size:17px}.draft-target small{margin-top:2px;color:var(--ink-muted);font-size:10px}.draft-number{color:var(--cinnabar);font-family:serif;font-size:23px}.card-subject{min-height:34px;padding:0 28px 0 10px;color:var(--green-deep);border:1px solid rgba(33,51,45,.2);border-radius:999px;background:var(--green-soft);font-size:10px;font-weight:760;cursor:pointer}.draft-actions{display:flex;gap:7px;align-items:center}.ready-mark{display:inline-flex;gap:5px;align-items:center;min-width:28px;min-height:28px;justify-content:center;padding:6px 9px;color:#914b39;border-radius:999px;background:rgba(185,88,63,.1);font-size:9px;font-weight:800}.is-ready .ready-mark{color:#416b5a;background:var(--green-soft)}
 .card-perspective{position:relative;margin-top:14px;perspective:1400px}.card-inner{position:relative;min-height:480px;transform-style:preserve-3d;transition:transform var(--motion-page) var(--ease-standard)}.card-inner.is-flipped{transform:rotateY(180deg)}.card-face{position:absolute;inset:0;display:grid;grid-template-rows:auto minmax(0,1fr) auto;min-height:440px;padding:14px;overflow:hidden;border:1px solid rgba(33,51,45,.13);border-radius:18px;background:rgba(246,241,231,.72);backface-visibility:hidden}.card-face.is-answer{background:linear-gradient(145deg,rgba(185,88,63,.08),rgba(255,253,247,.9));transform:rotateY(180deg)}
-.face-label{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}.face-label span{color:var(--cinnabar);font-size:10px;font-weight:850;letter-spacing:.12em}.face-label strong{color:var(--ink-muted);font-size:10px}.main-image-wrap{position:relative;display:grid;min-height:340px;overflow:hidden;place-items:center;border-radius:13px;background:#fff;box-shadow:inset 0 0 0 1px rgba(33,51,45,.08)}.main-image-wrap>img{width:100%;height:100%;max-height:430px;object-fit:contain}.image-loading,.face-empty{display:grid;place-items:center;align-content:center;gap:8px;min-height:340px;color:var(--ink-muted);text-align:center}.face-empty span{font-size:11px}.expand-image,.crop-image{position:absolute;bottom:10px;display:inline-flex;gap:5px;align-items:center;min-height:34px;padding:0 11px;color:var(--paper);border:0;border-radius:999px;background:rgba(33,51,45,.82);font-size:10px;cursor:pointer}.expand-image{right:10px}.crop-image{left:10px;background:rgba(185,88,63,.9)}.face-filmstrip{display:flex;gap:7px;align-items:center;min-width:0;margin-top:10px;padding:2px;overflow-x:auto}.change-role,.return-image{display:inline-flex;flex:0 0 auto;gap:4px;align-items:center;min-height:32px;padding:0 9px;color:var(--ink-muted);border:1px solid var(--line);border-radius:9px;background:var(--paper);font-size:9px;cursor:pointer}.change-role{color:var(--green-deep);border-color:rgba(33,51,45,.22);background:var(--green-soft)}.flip-button{position:absolute;z-index:3;right:18px;bottom:18px;display:flex;gap:7px;align-items:center;min-height:42px;padding:0 15px;color:var(--paper);border:0;border-radius:999px;background:var(--green-deep);font-weight:780;cursor:pointer;box-shadow:0 10px 24px rgba(33,51,45,.2)}
+.face-label{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}.face-label span{color:var(--cinnabar);font-size:10px;font-weight:850;letter-spacing:.12em}.face-label strong{color:var(--ink-muted);font-size:10px}.main-image-wrap{position:relative;display:grid;min-height:340px;overflow:hidden;place-items:center;border-radius:13px;background:#fff;box-shadow:inset 0 0 0 1px rgba(33,51,45,.08);cursor:grab;touch-action:none}.main-image-wrap:active{cursor:grabbing}.main-image-wrap>img{width:100%;height:100%;max-height:430px;object-fit:contain}.image-loading,.face-empty{display:grid;place-items:center;align-content:center;gap:8px;min-height:340px;color:var(--ink-muted);text-align:center}.face-empty span{font-size:11px}.expand-image,.crop-image{position:absolute;bottom:10px;display:inline-flex;gap:5px;align-items:center;min-height:34px;padding:0 11px;color:var(--paper);border:0;border-radius:999px;background:rgba(33,51,45,.82);font-size:10px;cursor:pointer}.expand-image{right:10px}.crop-image{left:10px;background:rgba(185,88,63,.9)}.drag-hint{position:absolute;top:10px;right:10px;display:inline-flex;gap:4px;align-items:center;padding:5px 8px;color:var(--paper);border-radius:999px;background:rgba(33,51,45,.72);font-size:9px;font-weight:760;pointer-events:none}.face-filmstrip{display:flex;gap:7px;align-items:center;min-width:0;margin-top:10px;padding:2px;overflow-x:auto}.change-role{display:grid;flex:0 0 auto;width:32px;height:32px;place-items:center;color:var(--green-deep);border:1px solid rgba(33,51,45,.22);border-radius:50%;background:var(--green-soft);cursor:pointer}.flip-button{position:absolute;z-index:3;right:18px;bottom:18px;display:flex;gap:7px;align-items:center;min-height:42px;padding:0 15px;color:var(--paper);border:0;border-radius:999px;background:var(--green-deep);font-weight:780;cursor:pointer;box-shadow:0 10px 24px rgba(33,51,45,.2)}
+.image-move-actions{position:absolute;top:10px;right:10px;display:flex;gap:6px;align-items:center}.image-move-actions .drag-hint{position:static}.return-image{min-height:29px;padding:0 9px;color:var(--green-deep);border:1px solid rgba(33,51,45,.18);border-radius:999px;background:rgba(255,253,247,.94);font-size:9px;font-weight:760;cursor:pointer}.add-answer-button{background:var(--cinnabar)}
 .image-overlay{position:fixed;z-index:120;inset:0;display:grid;padding:32px;place-items:center;background:rgba(20,28,25,.82);backdrop-filter:blur(14px)}.image-overlay section{position:relative;display:grid;width:min(1400px,100%);height:min(900px,calc(100vh - 64px));padding:16px;grid-template-rows:minmax(0,1fr) auto;border-radius:18px;background:var(--paper)}.image-overlay img{width:100%;height:100%;object-fit:contain}.image-overlay p{min-width:0;margin:10px 42px 0 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.image-overlay button{position:absolute;z-index:1;top:14px;right:14px;display:grid;width:40px;height:40px;place-items:center;color:var(--paper);border:0;border-radius:50%;background:var(--green-deep);cursor:pointer}button:disabled{cursor:not-allowed;opacity:.42}
 @keyframes card-settle{0%{transform:scale(.97);opacity:.78}55%{transform:scale(1.018)}100%{transform:scale(1);opacity:1}}
 @media(max-width:760px){.draft-card{padding:14px}.draft-header{align-items:flex-start;flex-wrap:wrap}.card-subject{order:3}.card-inner{min-height:420px}.card-face{min-height:390px}.main-image-wrap,.image-loading,.face-empty{min-height:290px}.image-overlay{padding:12px}.image-overlay section{height:calc(100vh - 24px)}}

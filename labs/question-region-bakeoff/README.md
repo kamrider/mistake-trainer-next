@@ -8,7 +8,30 @@ The lab never opens Mistake Trainer's database or encrypted assets. It accepts o
 fixture directory whose manifest explicitly confirms anonymization and authorization. OpenCV,
 NumPy, reports, and copied photos stay outside the Tauri installer.
 
-## 1. Install and verify the isolated runtime
+## 1. Prepare and label images without installing the OCR runtime
+
+The visual annotator uses only Python's standard library. After placing authorized copies under
+`data/images/`, start it with:
+
+```powershell
+.\scripts\question-bakeoff.ps1 annotate labs/question-region-bakeoff/data
+```
+
+It opens a browser page served only on `127.0.0.1` with a one-time random token. The page makes no
+third-party requests and never changes image files. Drag to mark complete question/answer regions,
+switch to **标记题号** to click visible question-number anchors, and use `N`/`P` to move between
+images. Progress auto-saves to the ignored `annotations.draft.json`; an evaluable `manifest.json`
+is written only after every image has a region and both anonymization and authorization boxes are
+checked. Closing and reopening the tool resumes the draft.
+
+Use `--no-open` when copying the printed local URL into a different browser:
+
+```powershell
+.\scripts\question-bakeoff.ps1 annotate `
+  labs/question-region-bakeoff/data --no-open
+```
+
+## 2. Install and verify the isolated runtime
 
 Use Python 3.12. Dependencies are pinned and installed only under the already ignored `.tools/`
 directory:
@@ -27,7 +50,7 @@ The lab dependencies remain development-only: OpenCV is Apache-2.0, the Python w
 MIT, NumPy uses BSD-3-Clause, and Pillow uses HPND/MIT-CMU terms. They are not redistributed by
 the signed application.
 
-## 2. Prepare 60 consented, anonymized copies
+## 3. Prepare 60 consented, anonymized copies
 
 Create this ignored tree; copy source photos into it—never link the original directory:
 
@@ -53,9 +76,10 @@ The first 60 images should cover at least: single questions, adjacent questions,
 skew/perspective, shadows, formulas, geometry, chemistry, handwriting over print, question-only
 pages, and answer pages. Synthetic images and repeated variants do not count toward 60.
 
-## 3. Label ground truth
+## 4. Label ground truth
 
-Copy `fixtures/manifest.example.json` to `data/manifest.json`. For every copied image add:
+Prefer the visual annotator above. If editing JSON manually, copy
+`fixtures/manifest.example.json` to `data/manifest.json`. For every copied image add:
 
 - a safe stable `id`;
 - `layout` and subject/layout `tags`;
@@ -77,7 +101,7 @@ Validate before running:
 Validation rejects missing consent, absolute/escaping paths, duplicate IDs, missing images,
 non-finite coordinates, and out-of-bounds rectangles.
 
-## 4. Run all three engines and inspect every overlay
+## 5. Run all three engines and inspect every overlay
 
 ```powershell
 .\scripts\question-bakeoff.ps1 run `
@@ -123,7 +147,7 @@ The output directory has an ownership marker. The runner replaces only a previou
 that exact marker; it refuses to delete or overwrite an arbitrary directory. A failed run keeps the
 last successful report intact.
 
-## 5. Interpret the metrics
+## 6. Interpret the metrics
 
 - `questionStartRecall`: detected region starts within 3.5% page height of a labeled anchor.
 - `contentCutRate`: labeled content area not covered by its matched suggestion. Target `< 0.5%`.
@@ -146,7 +170,7 @@ If the real dataset fails, automatic splitting stays out of the product and the 
 non-destructive manual crop remains canonical. Unlimited-OCR and PaddleOCR-VL remain optional
 heavyweight comparison engines; they are not bundled into the Windows v1 installer.
 
-## 6. Local runtime evidence
+## 7. Local runtime evidence
 
 The ignored `.tools/question-bakeoff-python/rapidocr/models` directory currently contains these
 RapidOCR 3.9.2 PP-OCRv6 ONNX files:

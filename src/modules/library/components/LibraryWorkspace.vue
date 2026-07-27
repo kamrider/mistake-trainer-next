@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { Archive, BookOpen, CheckCheck, ClipboardCheck, Image, LoaderCircle, Play, Plus, RotateCcw, Search, Trash2, X } from '@lucide/vue'
+import { Archive, BookOpen, CheckCheck, ClipboardCheck, Image, ListChecks, LoaderCircle, Play, Plus, RotateCcw, Search, Trash2, X } from '@lucide/vue'
+import { computed, ref } from 'vue'
 import type { ProblemStatusFilter, ProblemSummary } from '../../../shared/api/bindings'
 
-defineProps<{
+const props = defineProps<{
   profileName: string
   status: ProblemStatusFilter
   search: string
@@ -13,7 +14,7 @@ defineProps<{
   startingExperience?: 'review' | 'exam' | null
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   capture: []
   statusChange: [status: ProblemStatusFilter]
   searchChange: [search: string]
@@ -31,6 +32,18 @@ const filters: Array<{ value: ProblemStatusFilter; label: string }> = [
   { value: 'archived', label: '已归档' },
   { value: 'trashed', label: '回收站' },
 ]
+
+const selectionMode = ref(false)
+const isSelecting = computed(() => selectionMode.value || Boolean(props.selectedProblemIds?.length))
+
+function toggleBatchManagement() {
+  if (isSelecting.value) {
+    selectionMode.value = false
+    emit('clearSelection')
+    return
+  }
+  selectionMode.value = true
+}
 </script>
 
 <template>
@@ -59,7 +72,7 @@ const filters: Array<{ value: ProblemStatusFilter; label: string }> = [
           :size="18"
           aria-hidden="true"
         />
-        录入新错题
+        添加素材
       </button>
     </header>
 
@@ -92,19 +105,37 @@ const filters: Array<{ value: ProblemStatusFilter; label: string }> = [
           @input="$emit('searchChange', ($event.target as HTMLInputElement).value)"
         >
       </label>
-      <button
-        v-if="status === 'active' && problems.length"
-        class="select-all-action"
-        type="button"
-        :disabled="Boolean(startingExperience)"
-        @click="$emit('selectAll')"
+      <div
+        v-if="problems.length"
+        class="selection-tools"
       >
-        <CheckCheck
-          :size="16"
-          aria-hidden="true"
-        />
-        选择当前结果
-      </button>
+        <button
+          v-if="isSelecting"
+          class="select-all-action"
+          type="button"
+          :disabled="Boolean(startingExperience)"
+          @click="$emit('selectAll')"
+        >
+          <CheckCheck
+            :size="16"
+            aria-hidden="true"
+          />
+          全选当前结果
+        </button>
+        <button
+          class="select-all-action"
+          type="button"
+          :aria-pressed="isSelecting"
+          :disabled="Boolean(startingExperience)"
+          @click="toggleBatchManagement"
+        >
+          <ListChecks
+            :size="16"
+            aria-hidden="true"
+          />
+          {{ isSelecting ? '退出批量管理' : '批量管理' }}
+        </button>
+      </div>
     </section>
 
     <Transition name="deck-dock">
@@ -236,15 +267,19 @@ const filters: Array<{ value: ProblemStatusFilter; label: string }> = [
         :aria-selected="selectedProblemIds?.includes(problem.id)"
       >
         <div class="problem-card__topline">
-          <label class="select-problem">
+          <label
+            v-if="isSelecting"
+            class="select-problem"
+          >
             <input
               type="checkbox"
               :checked="selectedProblemIds?.includes(problem.id)"
               :aria-label="`选择 ${problem.subject || '未分类'} 错题`"
               @change="$emit('toggleSelection', problem.id)"
             >
-            <span class="subject">{{ problem.subject || '未分类' }}</span>
+            <span class="sr-only">选择这道题</span>
           </label>
+          <span class="subject">{{ problem.subject || '未分类' }}</span>
           <span class="status-dot">{{ problem.status === 'active' ? '学习中' : problem.status }}</span>
         </div>
         <button
@@ -330,7 +365,7 @@ const filters: Array<{ value: ProblemStatusFilter; label: string }> = [
           :size="18"
           aria-hidden="true"
         />
-        录入第一道错题
+        添加第一份素材
       </button>
       <span class="empty-footnote"><Archive
         :size="14"
@@ -350,6 +385,7 @@ h1 { margin: 0; font-size: clamp(42px,5vw,64px); letter-spacing: -.055em; line-h
 .primary-action:hover { background: #182923; }
 .primary-action:active { transform: scale(.98); }
 .library-toolbar { display: flex; justify-content: space-between; gap: 12px; margin-top: 42px; padding-bottom: 17px; border-bottom: 1px solid var(--line); }
+.selection-tools { display: flex; gap: 8px; align-items: center; }
 .select-all-action { display: inline-flex; gap: 6px; align-items: center; min-height: 38px; padding: 0 13px; color: var(--green-deep); border: 1px solid var(--line); border-radius: 999px; background: rgba(255,253,247,.65); cursor: pointer; white-space: nowrap; }
 .batch-bar { position: sticky; z-index: 12; bottom: 18px; display: flex; justify-content: space-between; gap: 16px; align-items: center; margin-top: 16px; padding: 11px 12px 11px 16px; border: 1px solid rgba(33,51,45,.22); border-radius: 17px; background: rgba(246,241,231,.95); box-shadow: 0 18px 46px rgba(34,48,43,.18); backdrop-filter: blur(14px); font-size: 13px; font-weight: 720; }
 .selection-summary, .batch-actions { display: flex; gap: 8px; align-items: center; }
@@ -380,15 +416,16 @@ h1 { margin: 0; font-size: clamp(42px,5vw,64px); letter-spacing: -.055em; line-h
 .problem-card { padding: 23px; border: 1px solid var(--line); border-radius: 4px 18px 18px 18px; background: rgba(255,253,247,.7); box-shadow: 0 10px 30px rgba(34,48,43,.05); transition: transform var(--motion-standard) var(--ease-standard), border-color var(--motion-standard) var(--ease-standard), background var(--motion-standard) var(--ease-standard), box-shadow var(--motion-standard) var(--ease-standard); }
 .problem-card.selected { border-color: rgba(185,88,63,.55); background: rgba(255,249,239,.96); box-shadow: 0 15px 36px rgba(185,88,63,.12); transform: translateY(-2px); }
 .problem-card__topline, .asset-counts { display: flex; gap: 9px; align-items: center; }
-.problem-card__topline { justify-content: space-between; }
+.problem-card__topline { justify-content: flex-start; }
+.problem-card__topline .status-dot { margin-left: auto; }
 .select-problem { display: inline-flex; gap: 9px; align-items: center; cursor: pointer; }
 .select-problem input { width: 16px; height: 16px; accent-color: var(--green-deep); }
 .subject { font-weight: 760; }
 .status-dot { color: #567064; font-size: 11px; }
-.problem-preview { position: relative; display: grid; width: 100%; min-height: 190px; margin-top: 18px; overflow: hidden; place-items: center; color: var(--ink-muted); border: 1px solid rgba(33,51,45,.12); border-radius: 14px; background: linear-gradient(145deg,rgba(232,221,199,.64),rgba(255,253,247,.92)); cursor: pointer; transition: transform var(--motion-standard) var(--ease-standard), border-color var(--motion-standard) var(--ease-standard), box-shadow var(--motion-standard) var(--ease-standard); }
+.problem-preview { position: relative; display: grid; width: 100%; aspect-ratio: 4 / 3; margin-top: 18px; overflow: hidden; place-items: center; color: var(--ink-muted); border: 1px solid rgba(33,51,45,.12); border-radius: 14px; background: linear-gradient(145deg,rgba(232,221,199,.64),rgba(255,253,247,.92)); cursor: pointer; transition: transform var(--motion-standard) var(--ease-standard), border-color var(--motion-standard) var(--ease-standard), box-shadow var(--motion-standard) var(--ease-standard); }
 .problem-preview:hover { border-color: rgba(185,88,63,.48); box-shadow: 0 12px 26px rgba(34,48,43,.11); transform: translateY(-2px); }
 .problem-preview:focus-visible { outline: 3px solid rgba(185,88,63,.34); outline-offset: 2px; }
-.problem-preview img { width: 100%; height: 100%; min-height: 190px; object-fit: contain; background: #fff; }
+.problem-preview img { width: 100%; height: 100%; object-fit: contain; background: #fff; }
 .problem-preview > span { display: grid; gap: 8px; place-items: center; padding: 24px; font-size: 12px; }
 .problem-preview small { position: absolute; right: 9px; bottom: 8px; padding: 5px 8px; color: var(--paper); border-radius: 999px; background: rgba(33,51,45,.76); font-size: 10px; font-weight: 720; }
 .problem-tags { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 14px; }
@@ -408,6 +445,6 @@ h1 { margin: 0; font-size: clamp(42px,5vw,64px); letter-spacing: -.055em; line-h
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes tag-rise { from { opacity: 0; transform: translateY(3px); } }
 @media (max-width: 980px) { .batch-bar { align-items: flex-start; flex-direction: column; } .batch-actions { width: 100%; flex-wrap: wrap; } }
-@media (max-width: 820px) { .library-workspace { padding: 34px 22px 110px; } .library-header { align-items: flex-start; flex-direction: column; } .library-toolbar { align-items: stretch; flex-direction: column; } .search-field { min-width: 0; } .select-all-action { justify-content: center; } .problem-grid { grid-template-columns: 1fr; } .problem-preview, .problem-preview img { min-height: 220px; } .batch-actions .start-review-action, .batch-actions .start-exam-action { flex: 1 0 calc(50% - 4px); justify-content: center; } }
+@media (max-width: 820px) { .library-workspace { padding: 34px 22px 110px; } .library-header { align-items: flex-start; flex-direction: column; } .library-toolbar { align-items: stretch; flex-direction: column; } .search-field { min-width: 0; } .selection-tools { width: 100%; } .selection-tools .select-all-action { flex: 1; justify-content: center; } .problem-grid { grid-template-columns: 1fr; } .batch-actions .start-review-action, .batch-actions .start-exam-action { flex: 1 0 calc(50% - 4px); justify-content: center; } }
 @media (prefers-reduced-motion: reduce) { .loading-state span, .spin, .problem-tags span { animation: none; } .primary-action, .batch-bar button, .deck-dock-enter-active, .deck-dock-leave-active, .problem-card, .problem-preview { transition: none; } .deck-dock-enter-from, .deck-dock-leave-to { transform: none; } .problem-preview:hover { transform: none; } }
 </style>

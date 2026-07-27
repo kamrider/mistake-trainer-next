@@ -316,10 +316,7 @@ impl SyncAdmissionError {
     }
 }
 
-fn sync_admission(
-    permit_acquired: bool,
-    capture_active: bool,
-) -> Result<(), SyncAdmissionError> {
+fn sync_admission(permit_acquired: bool, capture_active: bool) -> Result<(), SyncAdmissionError> {
     if !permit_acquired {
         return Err(SyncAdmissionError::AlreadyRunning);
     }

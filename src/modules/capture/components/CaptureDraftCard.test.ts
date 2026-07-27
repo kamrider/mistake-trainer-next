@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/vue'
+import { fireEvent, render, screen } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import type { CaptureDraftSummary, CaptureItemSummary } from '../../../shared/api/bindings'
@@ -57,12 +57,34 @@ describe('CaptureDraftCard', () => {
     expect(screen.getByRole('button', { name: '翻回题面' })).toBeVisible()
   })
 
-  it('returns the active image with one compact keyboard-accessible action', async () => {
-    const user = userEvent.setup()
+  it('starts a drag from the visible card image and keeps return available as a button and shortcut', async () => {
+    const view = renderCard()
+    const visibleImage = screen.getByRole('img', { name: '题目上半部分.png' })
+
+    await fireEvent.pointerDown(visibleImage, { pointerId: 7, button: 0, clientX: 10, clientY: 10 })
+    expect(view.emitted('pointerStart')).toEqual([['q-1', expect.objectContaining({ pointerId: 7 })]])
+
+    const thumbnail = view.container.querySelector<HTMLElement>('[data-capture-item-id="q-1"]')!
+    thumbnail.focus()
+    await fireEvent.keyDown(thumbnail, { key: 'Delete' })
+    expect(view.emitted('returnItem')).toEqual([['q-1']])
+    await userEvent.click(screen.getByRole('button', { name: '将当前图片移回素材库' }))
+    expect(view.emitted('returnItem')).toEqual([['q-1'], ['q-1']])
+    expect(screen.queryByRole('button', { name: '撤销这张卡' })).not.toBeInTheDocument()
+  })
+
+  it('reveals the exact newly added image and flips to its role', async () => {
     const view = renderCard()
 
-    await user.click(screen.getByRole('button', { name: '把当前题图移回待配对' }))
-    expect(view.emitted('returnItem')).toEqual([['q-1']])
+    await view.rerender({ revealItemId: 'a-1', revealRequestKey: 1 })
+
+    expect(screen.getByRole('button', { name: '翻回题面' })).toBeVisible()
+    expect(screen.getByRole('img', { name: '完整答案.png' })).toBeVisible()
+
+    await view.rerender({ revealItemId: 'q-2', revealRequestKey: 2 })
+
+    expect(screen.getByRole('button', { name: '翻到答案' })).toBeVisible()
+    expect(screen.getByRole('img', { name: '题目下半部分.png' })).toBeVisible()
   })
 
   it('supports keyboard navigation and role shortcuts on the focused thumbnail', async () => {
@@ -110,15 +132,11 @@ describe('CaptureDraftCard', () => {
     const view = renderCard(incomplete, items.filter(item => item.id !== 'a-1'))
 
     expect(screen.getByText('缺答案 · 缺科目')).toBeVisible()
+    expect(screen.queryByRole('button', { name: '翻到答案' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '添加答案' }))
+    expect(view.emitted('requestAnswer')).toEqual([['draft-1']])
     await user.click(screen.getByRole('button', { name: '把当前题图转为答案' }))
     expect(view.emitted('changeItemRole')).toEqual([['q-1', 'answer', 0]])
   })
 
-  it('offers a reversible whole-card action', async () => {
-    const user = userEvent.setup()
-    const view = renderCard()
-
-    await user.click(screen.getByRole('button', { name: '撤销这张卡' }))
-    expect(view.emitted('deleteDraft')).toEqual([['draft-1']])
-  })
 })

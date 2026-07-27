@@ -39,7 +39,7 @@ const pageOrder: Record<AppPage, number> = {
 const pageDirection = ref<PageDirection>('forward')
 const pageTransitionName = computed(() => `page-${pageDirection.value}`)
 const systemStatus = ref<AppResult<SystemStatus>>()
-const syncPhase = ref<SyncPhase>(desktopRuntime ? 'idle' : 'local_only')
+const syncPhase = ref<SyncPhase>('local_only')
 const automaticSyncCooldownMs = 15_000
 let lastSuccessfulSyncAtUtcMs = 0
 const shellSyncStatus = computed(() => {
@@ -211,7 +211,7 @@ async function restoreCloudAndSync(reason: SyncTrigger) {
   }
 }
 
-async function performSync(): Promise<AppResult<SyncNowReport>> {
+async function performSync(reason: SyncTrigger): Promise<AppResult<SyncNowReport>> {
   syncPhase.value = 'syncing'
   try {
     const invocation = await commands.syncNow()
@@ -242,7 +242,13 @@ async function performSync(): Promise<AppResult<SyncNowReport>> {
     syncPhase.value = 'synced'
     lastSuccessfulSyncAtUtcMs = Date.now()
     await loadProfiles()
-    profileEpoch.value += 1
+    if (
+      result.data.pulledChangeCount > 0
+      && reason !== 'mutation'
+      && activePage.value !== 'review'
+    ) {
+      profileEpoch.value += 1
+    }
     return result
   }
   catch {
@@ -355,6 +361,7 @@ function applyOverview(overview: ProfileOverview) {
 async function mutateProfile(
   invoke: () => ReturnType<typeof commands.profileList>,
   refreshWorkspace: boolean,
+  scheduleSync: boolean,
 ) {
   if (!desktopRuntime || profileBusy.value) return
   profileBusy.value = true
@@ -366,6 +373,7 @@ async function mutateProfile(
       return
     }
     applyOverview(result.data)
+    if (scheduleSync) syncController.scheduleMutation()
     if (refreshWorkspace) {
       profileEpoch.value += 1
       await router.push({ name: 'dashboard' })
@@ -378,20 +386,20 @@ async function mutateProfile(
 }
 
 function createProfile(name: string) {
-  return mutateProfile(() => commands.profileCreate({ name }), true)
+  return mutateProfile(() => commands.profileCreate({ name }), true, true)
 }
 
 function renameProfile(profileId: string, name: string) {
-  return mutateProfile(() => commands.profileRename({ profileId, name }), false)
+  return mutateProfile(() => commands.profileRename({ profileId, name }), false, true)
 }
 
 function deleteProfile(profileId: string, confirmationName: string) {
-  return mutateProfile(() => commands.profileDelete({ profileId, confirmationName }), true)
+  return mutateProfile(() => commands.profileDelete({ profileId, confirmationName }), true, true)
 }
 
 function selectProfile(profileId: string) {
   if (profileId === activeProfileId.value) return
-  return mutateProfile(() => commands.profileSelect(profileId), true)
+  return mutateProfile(() => commands.profileSelect(profileId), true, false)
 }
 </script>
 

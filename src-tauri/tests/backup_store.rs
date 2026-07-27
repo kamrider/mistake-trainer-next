@@ -136,6 +136,18 @@ fn remove_v13_sync_merge_schema(database: &Connection) {
         .unwrap();
 }
 
+fn remove_v14_recognition_schema(database: &Connection) {
+    database
+        .execute_batch(
+            "DROP INDEX capture_recognition_jobs_batch_idx;
+             DROP TABLE capture_recognition_operations;
+             DROP TABLE capture_recognition_suggestions;
+             DROP TABLE capture_recognition_job_items;
+             DROP TABLE capture_recognition_jobs;",
+        )
+        .unwrap();
+}
+
 #[test]
 fn schema_v13_backup_requires_merge_state_and_rejects_foreign_snapshots() {
     let missing_index_fixture = fixture();
@@ -211,7 +223,7 @@ fn schema_v11_backup_preserves_cloud_progress_and_requires_the_complete_shape() 
     let (_, package) = created_package(&fixture);
     let manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(package.join("manifest.json")).unwrap()).unwrap();
-    assert_eq!(manifest["schemaVersion"], 13);
+    assert_eq!(manifest["schemaVersion"], 15);
     validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID).unwrap();
     {
         let database =
@@ -258,6 +270,64 @@ fn schema_v11_backup_preserves_cloud_progress_and_requires_the_complete_shape() 
     assert!(matches!(
         validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID),
         Err(BackupError::Integrity)
+    ));
+}
+
+#[test]
+fn current_schema_backup_requires_recognition_tables_and_owned_jobs() {
+    let missing_table_fixture = fixture();
+    let (_, package) = created_package(&missing_table_fixture);
+    {
+        let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        database
+            .execute("DROP TABLE capture_recognition_suggestions", [])
+            .unwrap();
+        database
+            .pragma_update(None, "journal_mode", "DELETE")
+            .unwrap();
+    }
+    refresh_database_manifest(&package, 15);
+    assert!(matches!(
+        validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID),
+        Err(BackupError::Integrity)
+    ));
+
+    let foreign_job_fixture = fixture();
+    {
+        let connection = foreign_job_fixture.connection.lock().unwrap();
+        connection
+            .execute(
+                "INSERT INTO capture_batches(
+                   id, account_id, profile_id, subject, state,
+                   created_at_utc_ms, updated_at_utc_ms, revision
+                 ) VALUES('batch-1', ?1, ?2, '', 'organizing', 1, 1, 1)",
+                params![ACCOUNT_ID, PROFILE_ID],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO capture_recognition_jobs(
+                   id, account_id, profile_id, batch_id, state, engine, engine_version,
+                   model_component_id, total_items, processed_items,
+                   created_at_utc_ms, updated_at_utc_ms
+                 ) VALUES(
+                   'job-1', 'foreign-account', ?1, 'batch-1', 'queued',
+                   'fixture', '1', 'ppocrv6_small', 1, 0, 1, 1
+                 )",
+                [PROFILE_ID],
+            )
+            .unwrap();
+    }
+    assert!(matches!(
+        create_backup(
+            &foreign_job_fixture.connection,
+            &foreign_job_fixture.blob_root,
+            DATABASE_KEY,
+            ACCOUNT_ID,
+            foreign_job_fixture.destination.path(),
+            1_725_000_000_000,
+        ),
+        Err(BackupError::ForeignAccountData)
     ));
 }
 
@@ -559,6 +629,7 @@ fn validation_requires_review_sessions_exactly_when_the_schema_requires_it() {
 
     {
         let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        remove_v14_recognition_schema(&database);
         remove_v13_sync_merge_schema(&database);
         remove_v12_derivation_schema(&database);
         remove_v11_cloud_schema(&database);
@@ -733,6 +804,7 @@ fn validation_requires_review_history_index_only_for_schema_v9() {
 
     {
         let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        remove_v14_recognition_schema(&database);
         remove_v13_sync_merge_schema(&database);
         remove_v12_derivation_schema(&database);
         remove_v11_cloud_schema(&database);
@@ -773,6 +845,7 @@ fn validation_requires_legacy_import_ledger_only_for_schema_v10() {
 
     {
         let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        remove_v14_recognition_schema(&database);
         remove_v13_sync_merge_schema(&database);
         remove_v12_derivation_schema(&database);
         remove_v11_cloud_schema(&database);

@@ -11,6 +11,7 @@ import {
 } from '../domain/cropGeometry'
 
 type Region = CropRegion & { id: string }
+type CaptureCropEditorMode = 'apply' | 'proposal'
 type Snapshot = { rotation: 0 | 90 | 180 | 270, regions: Region[], activeId: string }
 type DragState = {
   id: string
@@ -36,23 +37,27 @@ const props = defineProps<{
   dataUrl: string
   itemName: string
   busy: boolean
+  mode?: CaptureCropEditorMode | undefined
+  initialRecipes?: CaptureCropRecipe[] | undefined
 }>()
 
 const emit = defineEmits<{
   close: []
   apply: [recipes: CaptureCropRecipe[]]
+  saveProposal: [recipes: CaptureCropRecipe[]]
 }>()
 
 const dialog = ref<HTMLElement>()
 const closeButton = ref<HTMLButtonElement>()
 const stage = ref<HTMLElement>()
 const renderedDataUrl = ref(props.dataUrl)
-const rotation = ref<0 | 90 | 180 | 270>(0)
+const initialRotation = (props.initialRecipes?.[0]?.rotationDegrees ?? 0) as 0 | 90 | 180 | 270
+const rotation = ref<0 | 90 | 180 | 270>(initialRotation)
 const zoom = ref(1)
 const naturalSize = ref({ width: 1200, height: 900 })
 const viewportSize = ref({ width: 1000, height: 700 })
 const isPanning = ref(false)
-const regions = ref<Region[]>([makeRegion(0)])
+const regions = ref<Region[]>(makeInitialRegions())
 const activeId = ref(regions.value[0]!.id)
 const undoStack = ref<Snapshot[]>([])
 const redoStack = ref<Snapshot[]>([])
@@ -90,6 +95,25 @@ const stageSurfaceStyle = computed(() => ({
 function makeRegion(index: number): Region {
   const inset = Math.min(0.06 + index * 0.018, 0.2)
   return { id: crypto.randomUUID(), x: inset, y: inset, width: 1 - inset * 2, height: 1 - inset * 2 }
+}
+
+function makeInitialRegions(): Region[] {
+  const proposed = props.initialRecipes
+    ?.map(recipe => recipe.rect)
+    .filter(rect =>
+      rect.x !== null
+      && rect.y !== null
+      && rect.width !== null
+      && rect.height !== null,
+    )
+    .map(rect => ({
+      id: crypto.randomUUID(),
+      x: rect.x ?? 0,
+      y: rect.y ?? 0,
+      width: rect.width ?? 1,
+      height: rect.height ?? 1,
+    }))
+  return proposed?.length ? proposed : [makeRegion(0)]
 }
 
 function snapshot(): Snapshot {
@@ -163,9 +187,9 @@ function rotate() {
 
 function reset() {
   checkpoint()
-  rotation.value = 0
+  rotation.value = initialRotation
   zoom.value = 1
-  regions.value = [makeRegion(0)]
+  regions.value = makeInitialRegions()
   activeId.value = regions.value[0]!.id
 }
 
@@ -341,7 +365,8 @@ function apply() {
     maxEdge: 4096,
     jpegQuality: 90,
   }))
-  emit('apply', recipes)
+  if (props.mode === 'proposal') emit('saveProposal', recipes)
+  else emit('apply', recipes)
 }
 
 async function renderRotation() {
@@ -634,7 +659,7 @@ onBeforeUnmount(() => {
       </div>
 
       <footer>
-        <p><Crop :size="17" /><span><strong>原图不会被覆盖</strong>，裁剪后仍可在入库前一键恢复。</span></p>
+        <p><Crop :size="17" /><span><strong>{{ mode === 'proposal' ? '这里只调整建议边界' : '原图不会被覆盖' }}</strong>{{ mode === 'proposal' ? '，保存后仍需确认并应用。' : '，裁剪后仍可在入库前一键恢复。' }}</span></p>
         <div>
           <button
             type="button"
@@ -649,7 +674,7 @@ onBeforeUnmount(() => {
             :disabled="busy"
             @click="apply"
           >
-            {{ busy ? '正在生成…' : `生成 ${regions.length} 张裁剪图` }}
+            {{ busy ? '正在保存…' : mode === 'proposal' ? `保存 ${regions.length} 个建议区域` : `生成 ${regions.length} 张裁剪图` }}
           </button>
         </div>
       </footer>

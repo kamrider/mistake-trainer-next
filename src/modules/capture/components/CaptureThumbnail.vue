@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Crop, GripVertical, Image as ImageIcon, RotateCcw, Trash2 } from '@lucide/vue'
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { CaptureItemSummary } from '../../../shared/api/bindings'
 
 const props = defineProps<{
@@ -24,15 +24,19 @@ const emit = defineEmits<{
 
 const root = ref<HTMLElement>()
 let observer: IntersectionObserver | undefined
+let visible = false
 
 onMounted(() => {
   if (!root.value) return
   observer = new IntersectionObserver((entries) => {
-    if (!entries.some(entry => entry.isIntersecting)) return
-    emit('preview', props.item.id)
-    observer?.disconnect()
+    visible = entries.some(entry => entry.isIntersecting)
+    if (visible && !props.dataUrl) emit('preview', props.item.id)
   }, { rootMargin: '180px' })
   observer.observe(root.value)
+})
+
+watch(() => props.dataUrl, (dataUrl, previous) => {
+  if (visible && previous && !dataUrl) emit('preview', props.item.id)
 })
 
 onBeforeUnmount(() => observer?.disconnect())
@@ -115,7 +119,7 @@ onBeforeUnmount(() => observer?.disconnect())
 </template>
 
 <style scoped>
-.capture-thumbnail { position: relative; display: grid; grid-template-columns: 74px minmax(0,1fr) auto auto; gap: 10px; align-items: center; min-width: 0; padding: 7px; border: 1px solid rgba(33,51,45,.12); border-radius: 12px; background: rgba(255,253,247,.82); cursor: grab; user-select:none; -webkit-user-drag:none; transition: transform var(--motion-feedback) var(--ease-standard), border-color var(--motion-feedback), box-shadow var(--motion-feedback); }
+.capture-thumbnail { position: relative; display: grid; grid-template-columns: 74px minmax(0,1fr) auto auto; gap: 10px; align-items: center; min-width: 0; padding: 7px; border: 1px solid rgba(33,51,45,.12); border-radius: 12px; background: rgba(255,253,247,.82); cursor: grab; user-select:none; -webkit-user-drag:none; touch-action:none; transition: transform var(--motion-feedback) var(--ease-standard), border-color var(--motion-feedback), box-shadow var(--motion-feedback); }
 .capture-thumbnail:hover, .capture-thumbnail:focus-visible { border-color: rgba(33,51,45,.3); box-shadow: 0 8px 22px rgba(34,48,43,.08); outline: none; transform: translateY(-1px); }
 .capture-thumbnail:active { cursor: grabbing; }
 .capture-thumbnail.is-disabled { cursor: default; opacity: .72; }
@@ -131,6 +135,7 @@ onBeforeUnmount(() => observer?.disconnect())
 .crop-button:hover { color:var(--cinnabar);border-color:rgba(185,88,63,.35);transform:scale(1.06); }
 .crop-origin { color:var(--cinnabar)!important;font-weight:700; }
 .capture-thumbnail.is-gallery { display:block; padding:8px; }.is-gallery .thumb-media { height:180px; }.is-gallery .thumb-media img { object-fit:contain; }.is-gallery .thumb-copy { margin-top:8px; }.is-gallery .remove-button { position:absolute; top:12px; right:12px; color:var(--paper); background:rgba(33,51,45,.72); }.is-gallery .crop-button{position:absolute;top:12px;left:12px;z-index:2}
-.capture-thumbnail.is-filmstrip { flex:0 0 88px; display:block; padding:4px; border-radius:10px; }.is-filmstrip .thumb-media { height:66px; }.is-filmstrip .thumb-media img { object-fit:cover; }.is-filmstrip .thumb-copy { display:none; }.is-filmstrip .drag-mark { display:none; }.is-filmstrip .crop-button{position:absolute;left:7px;bottom:7px;z-index:2;width:25px;height:25px}.capture-thumbnail.is-filmstrip.is-active { border-color:var(--cinnabar); box-shadow:0 0 0 2px rgba(185,88,63,.18); transform:translateY(-1px); }
+.capture-thumbnail.is-gallery.is-active { border-color:var(--cinnabar); box-shadow:0 0 0 3px rgba(185,88,63,.2),0 12px 28px rgba(34,48,43,.1); }
+.capture-thumbnail.is-filmstrip { flex:0 0 88px; display:block; padding:4px; border-radius:10px; }.is-filmstrip .thumb-media { height:66px; }.is-filmstrip .thumb-media img { object-fit:cover; }.is-filmstrip .thumb-copy { display:none; }.is-filmstrip .drag-mark { width:20px;height:20px; }.is-filmstrip .crop-button{position:absolute;left:7px;bottom:7px;z-index:2;width:25px;height:25px}.capture-thumbnail.is-filmstrip.is-active { border-color:var(--cinnabar); box-shadow:0 0 0 2px rgba(185,88,63,.18); transform:translateY(-1px); }
 @media (prefers-reduced-motion: reduce) { .capture-thumbnail { transition: none; } }
 </style>

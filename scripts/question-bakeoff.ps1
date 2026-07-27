@@ -44,10 +44,17 @@ if ($InstallDependencies) {
     }
 }
 
-$requiredModules = @('cv2', 'numpy', 'PIL', 'rapidocr', 'onnxruntime')
-foreach ($module in $requiredModules) {
-    if (-not (Test-Path -LiteralPath (Join-Path $dependencyRoot $module))) {
-        throw 'The isolated question bake-off runtime is incomplete. Run this script once with -InstallDependencies.'
+$requiresInferenceRuntime = $SelfCheck -or (
+    $LabArguments -and
+    $LabArguments.Count -gt 0 -and
+    $LabArguments[0] -eq 'run'
+)
+if ($requiresInferenceRuntime) {
+    $requiredModules = @('cv2', 'numpy', 'PIL', 'rapidocr', 'onnxruntime')
+    foreach ($module in $requiredModules) {
+        if (-not (Test-Path -LiteralPath (Join-Path $dependencyRoot $module))) {
+            throw 'The isolated question bake-off runtime is incomplete. Run this script once with -InstallDependencies.'
+        }
     }
 }
 
@@ -64,7 +71,7 @@ if ($SelfCheck) {
 }
 
 if (-not $LabArguments -or $LabArguments.Count -eq 0) {
-    throw 'Pass validate <manifest> or run <manifest> --output <directory>. Use -SelfCheck to inspect the lab runtime.'
+    throw 'Pass annotate <data>, validate <manifest>, or run <manifest> --output <directory>. Use -SelfCheck to inspect the lab runtime.'
 }
 
 & $runtime.Command @($runtime.Prefix) -m question_bakeoff.cli @LabArguments

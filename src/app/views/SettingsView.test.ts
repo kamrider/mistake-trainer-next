@@ -28,6 +28,9 @@ const api = vi.hoisted(() => ({
   storageMigrateSelect: vi.fn(),
   storageMigrationReceipt: vi.fn(),
   diagnosticsExport: vi.fn(),
+  ocrCapabilityStatus: vi.fn(),
+  ocrComponentInstall: vi.fn(),
+  ocrComponentRemove: vi.fn(),
   syncConflictList: vi.fn(),
   syncConflictResolve: vi.fn(),
   syncConflictResolveEntity: vi.fn(),
@@ -77,6 +80,61 @@ describe('SettingsView', () => {
     api.storageMigrateSelect.mockResolvedValue({ status: 'ok', data: { ok: true, data: null } })
     api.storageMigrationReceipt.mockResolvedValue({ ok: true, data: null })
     api.diagnosticsExport.mockResolvedValue({ status: 'ok', data: { ok: true, data: null } })
+    api.ocrCapabilityStatus.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      assessment: {
+        tier: 'balanced',
+        logicalProcessorCount: 4,
+        totalMemoryMb: 8192,
+        availableComponentStorageMb: 8192,
+        avx2Supported: true,
+        estimatedSuitable: true,
+        recommendedComponentId: 'ppocrv6_small',
+        summary: '本机预检通过，推荐使用 PP‑OCRv6 small。',
+      },
+      components: [{
+        id: 'ppocrv6_small',
+        displayName: 'PP‑OCRv6 small',
+        description: '约 31 MB，面向题号与文字框检测。',
+        state: 'not_installed',
+        downloadBytes: 31_163_977,
+        installedBytes: 0,
+        recommended: true,
+        installAllowed: true,
+        statusDetail: '尚未下载；不会影响现有功能。',
+        sourceLabel: 'ModelScope · RapidAI/RapidOCR 3.9.2',
+        licenseLabel: 'PaddleOCR · Apache-2.0',
+      }, {
+        id: 'opencv_preprocess',
+        displayName: 'OpenCV 图像预处理',
+        description: '产品运行时尚未发布。',
+        state: 'unavailable',
+        downloadBytes: 0,
+        installedBytes: 0,
+        recommended: false,
+        installAllowed: false,
+        statusDetail: '产品运行时尚未发布；当前不会下载或启用。',
+        sourceLabel: 'OpenCV 官方项目',
+        licenseLabel: 'Apache-2.0',
+      }],
+      recognitionFeature: {
+        state: 'evidence_gate_pending',
+        requiredComponentId: 'ppocrv6_small',
+        detail: '智能分题仍在真实题图验证中；顺序模板和手工整理可继续使用。',
+      },
+      automaticRecognitionEnabled: false,
+    } } })
+    api.ocrComponentInstall.mockResolvedValue({ status: 'ok', data: { ok: false, error: {
+      code: 'not_expected',
+      userMessage: 'not expected',
+      retryable: false,
+      diagnosticId: 'test',
+    } } })
+    api.ocrComponentRemove.mockResolvedValue({ status: 'ok', data: { ok: false, error: {
+      code: 'not_expected',
+      userMessage: 'not expected',
+      retryable: false,
+      diagnosticId: 'test',
+    } } })
     api.syncConflictList.mockResolvedValue({ ok: true, data: [] })
     api.syncConflictResolve.mockResolvedValue({ ok: true, data: [] })
     api.syncConflictResolveEntity.mockResolvedValue({ ok: true, data: [] })
@@ -92,6 +150,31 @@ describe('SettingsView', () => {
           finalCursor: 0,
         },
       },
+    })
+  })
+
+  it('keeps the two smart modes clear and reachable from the settings directory', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    render(SettingsView)
+
+    const panel = await screen.findByRole('region', { name: '智能功能模式' })
+    expect(panel).toHaveAttribute('id', 'settings-ocr')
+    expect(within(panel).getByRole('article', { name: '智能切图（已开放）' })).toBeVisible()
+    expect(within(panel).getByRole('article', { name: '全自动识题（未开放）' })).toBeVisible()
+    expect(within(panel).queryByRole('button')).not.toBeInTheDocument()
+    expect(api.ocrComponentInstall).not.toHaveBeenCalled()
+
+    const scrollIntoView = vi.fn()
+    panel.scrollIntoView = scrollIntoView
+    const directory = screen.getByRole('navigation', { name: '设置目录' })
+    await userEvent.click(within(directory).getByRole('button', { name: /智能功能/ }))
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      block: 'start',
+      behavior: 'smooth',
     })
   })
 
@@ -253,7 +336,7 @@ describe('SettingsView', () => {
     expect(await screen.findByText('SQLCipher 与原图独立加密')).toBeVisible()
     expect(screen.getByText('8 道活动题')).toBeVisible()
     expect(screen.getByText('尚未配置')).toBeVisible()
-    expect(screen.getByText(/本地 outbox 已记录 11 项变更/)).toBeVisible()
+    expect(screen.getByText(/待同步变更 11 项/)).toBeVisible()
     expect(screen.getByRole('heading', { name: '这台 Windows 电脑' })).toBeVisible()
     expect(await screen.findByText('当前 Windows 账户可解锁')).toBeVisible()
     expect(screen.getByText('已接通 · 当前设备保护')).toBeVisible()
@@ -373,6 +456,16 @@ describe('SettingsView', () => {
     expect(api.syncBackendSet).toHaveBeenCalledWith({ kind: 'supabase' })
     expect(await screen.findByText('该同步服务尚未配置，已保持本地模式')).toBeVisible()
     expect(screen.getByRole('button', { name: /^仅本地/ })).toHaveClass('selected')
+  })
+
+  it('marks the unavailable Tencent backend as planned and never selects it', async () => {
+    render(SettingsView)
+
+    const tencent = await screen.findByRole('button', { name: /腾讯云.*规划中/ })
+    expect(tencent).toBeDisabled()
+    expect(screen.getByText('规划中')).toBeVisible()
+    await fireEvent.click(tencent)
+    expect(api.syncBackendSet).not.toHaveBeenCalledWith({ kind: 'tencent' })
   })
 
   it('runs a read-only legacy preflight and renders actionable issues', async () => {

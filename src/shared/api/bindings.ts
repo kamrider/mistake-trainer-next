@@ -15,6 +15,9 @@ export const commands = {
 	storageMigrateSelect: () => typedError<AppResult<StorageMigrationReceipt | null>, null>(__TAURI_INVOKE("storage_migrate_select")),
 	storageMigrationReceipt: () => __TAURI_INVOKE<AppResult<StorageMigrationReceipt | null>>("storage_migration_receipt"),
 	diagnosticsExport: () => typedError<AppResult<DiagnosticExportReceipt | null>, null>(__TAURI_INVOKE("diagnostics_export")),
+	ocrCapabilityStatus: () => typedError<AppResult<OcrCapabilityStatus>, null>(__TAURI_INVOKE("ocr_capability_status")),
+	ocrComponentInstall: (componentId: OcrComponentId) => typedError<AppResult<OcrComponentStatus>, null>(__TAURI_INVOKE("ocr_component_install", { componentId })),
+	ocrComponentRemove: (componentId: OcrComponentId) => typedError<AppResult<OcrComponentStatus>, null>(__TAURI_INVOKE("ocr_component_remove", { componentId })),
 	systemStatus: () => __TAURI_INVOKE<AppResult<SystemStatus>>("system_status"),
 	profileList: () => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_list"),
 	profileCreate: (input: ProfileNameInput) => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_create", { input }),
@@ -81,6 +84,13 @@ export const commands = {
 	captureLanStart: (input: CaptureLanStartInput) => __TAURI_INVOKE<AppResult<CaptureLanSession>>("capture_lan_start", { input }),
 	captureLanStatus: () => __TAURI_INVOKE<AppResult<CaptureLanSession | null>>("capture_lan_status"),
 	captureLanStop: () => __TAURI_INVOKE<AppResult<boolean>>("capture_lan_stop"),
+	captureRecognitionStart: (input: CaptureRecognitionStartInput) => __TAURI_INVOKE<AppResult<CaptureRecognitionJob>>("capture_recognition_start", { input }),
+	captureRecognitionStatus: (batchId: string) => __TAURI_INVOKE<AppResult<CaptureRecognitionJob | null>>("capture_recognition_status", { batchId }),
+	captureRecognitionReview: (input: CaptureRecognitionReviewInput) => __TAURI_INVOKE<AppResult<CaptureRecognitionJob>>("capture_recognition_review", { input }),
+	captureRecognitionCancel: (jobId: string) => typedError<AppResult<CaptureRecognitionJob>, null>(__TAURI_INVOKE("capture_recognition_cancel", { jobId })),
+	captureRecognitionApply: (input: CaptureRecognitionApplyInput) => typedError<AppResult<CaptureRecognitionApplyReport>, null>(__TAURI_INVOKE("capture_recognition_apply", { input })),
+	captureRecognitionRevert: (input: CaptureRecognitionRevertInput) => typedError<AppResult<CaptureRecognitionRevertReport>, null>(__TAURI_INVOKE("capture_recognition_revert", { input })),
+	captureRecognitionLastOperation: (batchId: string) => __TAURI_INVOKE<AppResult<CaptureRecognitionOperationSummary | null>>("capture_recognition_last_operation", { batchId }),
 	syncBackendStatus: () => __TAURI_INVOKE<AppResult<CloudBackendStatus>>("sync_backend_status"),
 	syncBackendSet: (request: SetBackendRequest) => __TAURI_INVOKE<AppResult<CloudBackendStatus>>("sync_backend_set", { request }),
 	authStatusCommand: () => __TAURI_INVOKE<AppResult<CloudAuthState>>("auth_status_command"),
@@ -332,6 +342,95 @@ export type CaptureLayoutInput = {
 
 export type CaptureLayoutMode = "alternating" | "split" | "questions_only" | "manual";
 
+export type CaptureRecognitionApplyInput = {
+	batchId: string,
+	jobId: string,
+	expectedRevision: number,
+	acceptedSuggestionIds: string[],
+};
+
+export type CaptureRecognitionApplyReport = {
+	operationId: string,
+	appliedSuggestionCount: number,
+	createdDraftCount: number,
+	createdItemCount: number,
+	unmatchedAnswerCount: number,
+	staleSuggestionCount: number,
+	detail: CaptureBatchDetail,
+};
+
+export type CaptureRecognitionDecision = "accepted" | "rejected";
+
+export type CaptureRecognitionJob = {
+	id: string,
+	batchId: string,
+	state: CaptureRecognitionJobState,
+	totalItems: number,
+	processedItems: number,
+	suggestions: CaptureRecognitionSuggestion[],
+	createdAtUtcMs: number | null,
+	updatedAtUtcMs: number | null,
+};
+
+export type CaptureRecognitionJobState = "queued" | "running" | "review" | "applied" | "cancelled" | "failed";
+
+export type CaptureRecognitionOperationSummary = {
+	operationId: string,
+	batchId: string,
+	afterRevision: number,
+	createdItemCount: number,
+	reverted: boolean,
+};
+
+export type CaptureRecognitionReasonCode = "clear_question_anchor" | "matched_question_answer_anchor" | "consistent_reading_order" | "weak_anchor" | "ambiguous_columns" | "possible_content_cut";
+
+export type CaptureRecognitionRegionProposal = {
+	rect: NormalizedCropRect,
+	role: CaptureRecognitionRole,
+	groupSlot: number | null,
+	confidenceBasisPoints: number,
+};
+
+export type CaptureRecognitionRevertInput = {
+	batchId: string,
+	operationId: string,
+	expectedRevision: number,
+};
+
+export type CaptureRecognitionRevertReport = {
+	operationId: string,
+	revertedItemCount: number,
+	detail: CaptureBatchDetail,
+};
+
+export type CaptureRecognitionReviewBand = "high" | "review" | "low";
+
+export type CaptureRecognitionReviewInput = {
+	jobId: string,
+	suggestionId: string,
+	decision: CaptureRecognitionDecision,
+	editedRegions: CaptureRecognitionRegionProposal[] | null,
+};
+
+export type CaptureRecognitionRole = "question" | "answer";
+
+export type CaptureRecognitionStartInput = {
+	batchId: string,
+	itemIds: string[],
+};
+
+export type CaptureRecognitionSuggestion = {
+	id: string,
+	itemId: string,
+	regions: CaptureRecognitionRegionProposal[],
+	confidenceBasisPoints: number,
+	reviewBand: CaptureRecognitionReviewBand,
+	state: CaptureRecognitionSuggestionState,
+	reasonCodes: CaptureRecognitionReasonCode[],
+};
+
+export type CaptureRecognitionSuggestionState = "proposed" | "accepted" | "rejected" | "stale";
+
 export type CloudAuthState = {
 	configured: boolean,
 	status: AuthStatus,
@@ -508,6 +607,52 @@ export type NormalizedCropRect = {
 	y: number | null,
 	width: number | null,
 	height: number | null,
+};
+
+export type OcrCapabilityStatus = {
+	assessment: OcrHardwareAssessment,
+	components: OcrComponentStatus[],
+	recognitionFeature: OcrRecognitionFeatureStatus,
+	automaticRecognitionEnabled: boolean,
+};
+
+export type OcrComponentId = "ppocrv6_small" | "ppocrv6_medium" | "opencv_preprocess";
+
+export type OcrComponentState = "not_installed" | "installed" | "corrupt" | "unavailable";
+
+export type OcrComponentStatus = {
+	id: OcrComponentId,
+	displayName: string,
+	description: string,
+	state: OcrComponentState,
+	downloadBytes: number | null,
+	installedBytes: number | null,
+	recommended: boolean,
+	installAllowed: boolean,
+	statusDetail: string,
+	sourceLabel: string,
+	licenseLabel: string,
+};
+
+export type OcrHardwareAssessment = {
+	tier: OcrHardwareTier,
+	logicalProcessorCount: number,
+	totalMemoryMb: number | null,
+	availableComponentStorageMb: number | null,
+	avx2Supported: boolean,
+	estimatedSuitable: boolean,
+	recommendedComponentId: OcrComponentId | null,
+	summary: string,
+};
+
+export type OcrHardwareTier = "manual_only" | "basic" | "balanced" | "performance";
+
+export type OcrRecognitionFeatureState = "evidence_gate_pending" | "runtime_missing" | "model_missing" | "ready";
+
+export type OcrRecognitionFeatureStatus = {
+	state: OcrRecognitionFeatureState,
+	requiredComponentId: OcrComponentId,
+	detail: string,
 };
 
 export type ProblemAssetPreview = {

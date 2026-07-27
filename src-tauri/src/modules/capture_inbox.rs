@@ -1392,12 +1392,13 @@ struct CropSource {
     staged_role: String,
 }
 
-struct EncodedCrop {
-    bytes: Vec<u8>,
-    media_type: String,
-    width: u32,
-    height: u32,
-    recipe_json: String,
+#[derive(Debug)]
+pub(crate) struct EncodedCrop {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) media_type: String,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) recipe_json: String,
 }
 
 struct StagedCropAsset {
@@ -1434,7 +1435,7 @@ fn validate_crop_recipe(recipe: &CaptureCropRecipe) -> Result<(), CaptureInboxEr
     Ok(())
 }
 
-fn encode_crop(
+pub(crate) fn encode_crop(
     source: &image::DynamicImage,
     recipe: &CaptureCropRecipe,
 ) -> Result<EncodedCrop, CaptureInboxError> {
@@ -2158,7 +2159,10 @@ fn validate_relative_asset_path(encrypted_path: &str) -> Result<&Path, CaptureIn
     Ok(relative)
 }
 
-fn remove_encrypted_blob(blob_root: &Path, encrypted_path: &str) -> Result<(), CaptureInboxError> {
+pub(crate) fn remove_encrypted_blob(
+    blob_root: &Path,
+    encrypted_path: &str,
+) -> Result<(), CaptureInboxError> {
     let path = blob_root.join(validate_relative_asset_path(encrypted_path)?);
     match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
@@ -2167,7 +2171,7 @@ fn remove_encrypted_blob(blob_root: &Path, encrypted_path: &str) -> Result<(), C
     }
 }
 
-fn read_encrypted_blob(
+pub(crate) fn read_encrypted_blob(
     blob_root: &Path,
     encrypted_path: &str,
 ) -> Result<Vec<u8>, CaptureInboxError> {
@@ -2181,7 +2185,9 @@ fn read_encrypted_blob(
     Ok(encrypted)
 }
 
-fn image_format_for_media_type(media_type: &str) -> Result<image::ImageFormat, CaptureInboxError> {
+pub(crate) fn image_format_for_media_type(
+    media_type: &str,
+) -> Result<image::ImageFormat, CaptureInboxError> {
     match media_type {
         "image/png" => Ok(image::ImageFormat::Png),
         "image/jpeg" => Ok(image::ImageFormat::Jpeg),

@@ -10,6 +10,7 @@ from question_bakeoff.rapidocr_engine import (
     engine_name_for,
     is_question_anchor,
     make_analyzer,
+    question_anchor_number,
     suggest_from_ocr_boxes,
 )
 
@@ -37,6 +38,15 @@ class QuestionAnchorTests(unittest.TestCase):
         for text in ("A. 选项", "H、选项", "一、选择题", "III. Reading", "3.14", "2026 年"):
             with self.subTest(text=text):
                 self.assertFalse(is_question_anchor(text))
+
+    def test_relaxed_numbers_are_available_only_for_aligned_sequence_recovery(self) -> None:
+        self.assertEqual(question_anchor_number("2", allow_relaxed=True), 2)
+        self.assertEqual(question_anchor_number("1 (1+5i)i 的虚部"), None)
+        self.assertEqual(
+            question_anchor_number("1 (1+5i)i 的虚部", allow_relaxed=True),
+            1,
+        )
+        self.assertIsNone(question_anchor_number("2026 年", allow_relaxed=True))
 
 
 class AnalyzerConfigurationTests(unittest.TestCase):
@@ -113,6 +123,40 @@ class AnalyzerConfigurationTests(unittest.TestCase):
 
 
 class AnchorAssemblyTests(unittest.TestCase):
+    def test_discards_numbered_instructions_before_questions_restart(self) -> None:
+        boxes = (
+            box(30, 40, 800, 70, "1. 答题前填写姓名", 0.99),
+            box(30, 80, 800, 110, "2. 核对条形码", 0.99),
+            box(30, 120, 800, 150, "3. 正确填涂", 0.99),
+            box(30, 240, 700, 280, "1 第一题缺少标点", 0.98),
+            box(30, 360, 45, 390, "2", 0.99),
+            box(30, 500, 700, 540, "3. 第三题", 0.98),
+            box(30, 650, 60, 675, "40", 0.99),
+        )
+
+        regions = suggest_from_ocr_boxes(1_000, 700, boxes)
+
+        self.assertEqual(len(regions), 3)
+        self.assertAlmostEqual(regions[0].rect.y, (240 - 10.5) / 700)
+        self.assertAlmostEqual(regions[1].rect.y, (360 - 10.5) / 700)
+        self.assertAlmostEqual(regions[2].rect.y, (500 - 10.5) / 700)
+
+    def test_wide_header_does_not_cancel_a_strong_two_column_question_sequence(self) -> None:
+        boxes = (
+            box(40, 100, 420, 140, "1. left", 0.98),
+            box(40, 420, 430, 460, "2. left", 0.97),
+            box(560, 100, 920, 140, "3. right", 0.98),
+            box(560, 420, 930, 460, "4. right", 0.97),
+            box(100, 20, 900, 60, "2026 全国统一考试", 0.99),
+        )
+
+        regions = suggest_from_ocr_boxes(1_000, 700, boxes)
+
+        self.assertEqual(len(regions), 4)
+        self.assertGreater(regions[0].rect.right, regions[2].rect.x)
+        self.assertLess(regions[0].rect.width, 0.6)
+        self.assertLess(regions[2].rect.width, 0.6)
+
     def test_regions_do_not_cut_detected_formula_or_figure_blocks(self) -> None:
         boxes = (
             box(40, 100, 300, 145, "1. 已知", 0.98),
@@ -125,7 +169,7 @@ class AnchorAssemblyTests(unittest.TestCase):
 
         self.assertEqual(len(regions), 2)
         self.assertGreaterEqual(regions[0].rect.bottom, 360 / 800)
-        self.assertLessEqual(regions[0].rect.bottom, regions[1].rect.y)
+        self.assertLessEqual(regions[0].rect.bottom - regions[1].rect.y, 0.031)
         self.assertEqual(regions[0].rect.x, 0.0)
         self.assertEqual(regions[0].rect.right, 1.0)
 
@@ -143,7 +187,7 @@ class AnchorAssemblyTests(unittest.TestCase):
         self.assertLess(regions[0].rect.x, regions[2].rect.x)
         self.assertLess(regions[0].rect.y, regions[1].rect.y)
         self.assertLess(regions[2].rect.y, regions[3].rect.y)
-        self.assertLessEqual(regions[0].rect.right, regions[2].rect.x)
+        self.assertGreater(regions[0].rect.right, regions[2].rect.x)
 
     def test_low_confidence_or_missing_anchors_return_one_uncertain_content_region(self) -> None:
         for boxes in (

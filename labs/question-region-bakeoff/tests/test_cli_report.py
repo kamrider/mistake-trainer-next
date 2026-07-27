@@ -53,6 +53,13 @@ def write_fixture(root: Path) -> Path:
 
 
 class CliReportTests(unittest.TestCase):
+    def test_annotate_dispatches_without_opening_a_browser_when_requested(self) -> None:
+        with patch("question_bakeoff.cli.serve_annotator") as serve:
+            exit_code = main(["annotate", "data", "--no-open"])
+
+        self.assertEqual(exit_code, 0)
+        serve.assert_called_once_with(Path("data"), open_browser=False)
+
     def test_self_check_reports_both_pinned_engines(self) -> None:
         output = io.StringIO()
 

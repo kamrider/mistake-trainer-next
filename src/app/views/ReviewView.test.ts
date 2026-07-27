@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { createMemoryHistory } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createAppRouter } from '../router'
+import { syncControllerKey } from '../sync-controller'
 import ReviewView from './ReviewView.vue'
 
 const api = vi.hoisted(() => ({
@@ -41,12 +42,22 @@ const problemDetail = {
   updatedAtUtcMs: 1,
   assets: [],
 }
+const syncController = {
+  run: vi.fn(),
+  scheduleMutation: vi.fn(),
+  dispose: vi.fn(),
+}
 
 async function renderView() {
   const router = createAppRouter(createMemoryHistory())
   await router.push('/review')
   await router.isReady()
-  render(ReviewView, { global: { plugins: [router] } })
+  render(ReviewView, {
+    global: {
+      plugins: [router],
+      provide: { [syncControllerKey as symbol]: syncController },
+    },
+  })
   return router
 }
 
@@ -80,6 +91,7 @@ describe('ReviewView', () => {
     expect(input.durationMs).toBeGreaterThanOrEqual(0)
     expect(input.durationMs).toBeLessThanOrEqual(86_400_000)
     expect(await screen.findByRole('heading', { name: '把今天该记住的，认真看完了。' })).toBeVisible()
+    expect(syncController.scheduleMutation).toHaveBeenCalledOnce()
   })
 
   it('retries a failed queue read without showing fake review content', async () => {
@@ -108,6 +120,7 @@ describe('ReviewView', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('评分没有保存。')
     expect(screen.getByText('2 / 2')).toBeVisible()
     expect(screen.getByRole('button', { name: '记住了' })).toBeEnabled()
+    expect(syncController.scheduleMutation).not.toHaveBeenCalled()
   })
 
   it('runs a persisted focus round before reading the next problem', async () => {

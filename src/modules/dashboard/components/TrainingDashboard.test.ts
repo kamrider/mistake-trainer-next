@@ -25,6 +25,7 @@ describe('TrainingDashboard', () => {
 
     expect(view.emitted('start-review')).toHaveLength(1)
     expect(screen.getByText('2 个批次 · 14 张图片待整理')).toBeVisible()
+    expect(screen.queryByRole('button', { name: '整理采集箱' })).not.toBeInTheDocument()
   })
 
   it('guides an empty library to capture instead of inventing review data', async () => {

@@ -2,11 +2,13 @@
 import { isTauri } from '@tauri-apps/api/core'
 import { Archive, ArchiveRestore, BookOpen, CheckCircle2, CloudOff, Database, FileJson2, FolderCheck, LockKeyhole, Plus, RotateCcw, ShieldCheck, Trash2, TriangleAlert, Volume2 } from '@lucide/vue'
 import { computed, inject, nextTick, onMounted, ref } from 'vue'
+import { routeLocationKey, routerKey } from 'vue-router'
 import type { AppResult } from '../../shared/api/app-result'
 import { commands, type AuthStatusKind, type BackupRestoreCandidate, type BackupSummary, type CloudAuthState, type CloudBackendKind, type CloudBackendStatus, type DiagnosticExportReceipt, type LibraryAccessStatus, type ReviewFocusPolicy, type ReviewPreferences, type SettingsOverview, type StorageLocationStatus, type StorageMigrationReceipt, type SubjectPreferences } from '../../shared/api/bindings'
 import { normalizeAppResult } from '../../shared/api/normalize-result'
 import { backendKindLabel, backendStatusLabel, loadSyncBackendStatus, setSyncBackend } from '../../shared/api/sync-backend'
 import LegacyImportPanel from '../../modules/legacy/components/LegacyImportPanel.vue'
+import OcrCapabilityPanel from '../../modules/ocr/components/OcrCapabilityPanel.vue'
 import SyncConflictCenter from '../../modules/sync/components/SyncConflictCenter.vue'
 import BackupRestoreDialog from '../BackupRestoreDialog.vue'
 import SettingsSectionNav, { type SettingsSectionLink } from '../components/SettingsSectionNav.vue'
@@ -34,6 +36,13 @@ const deviceAccessStatus = ref<LibraryAccessStatus>()
 const deviceAccessError = ref('')
 const libraryAccessController = inject(libraryAccessControllerKey, undefined)
 const globalSyncController = inject(syncControllerKey, undefined)
+const currentRoute = inject(routeLocationKey, undefined)
+const appRouter = inject(routerKey, undefined)
+const inboxReturnBatchId = computed(() => {
+  if (currentRoute?.query.returnTo !== 'inbox') return ''
+  const batchId = currentRoute.query.batchId
+  return typeof batchId === 'string' ? batchId : ''
+})
 const builtinSubjects = ['语文', '数学', '英语', '政治', '历史', '地理', '物理', '化学', '生物']
 const subjectPreferences = ref<SubjectPreferences>()
 const customSubject = ref('')
@@ -65,10 +74,10 @@ const authMessage = ref('')
 const syncBusy = ref(false)
 const syncMessage = ref('')
 const conflictCenter = ref<{ reload: () => Promise<void> }>()
-const backendOptions: Array<{ kind: CloudBackendKind; title: string; hint: string }> = [
-  { kind: 'local-only', title: '仅本地（推荐）', hint: '训练、采集和图片都保存在这台 Windows 设备，不需要网络。' },
-  { kind: 'supabase', title: 'Supabase', hint: '适合海外或开发环境；中国大陆网络可能不稳定，必须先配置服务地址和匿名密钥。' },
-  { kind: 'tencent', title: '腾讯云（国内预留）', hint: '国内适配器尚未启用；当前版本不会向腾讯云上传任何数据。' },
+const backendOptions: Array<{ kind: CloudBackendKind; title: string; hint: string; available: boolean; badge?: string }> = [
+  { kind: 'local-only', title: '仅本地（推荐）', hint: '训练、采集和图片都保存在这台 Windows 设备，不需要网络。', available: true },
+  { kind: 'supabase', title: 'Supabase', hint: '适合海外或开发环境；中国大陆网络可能不稳定，必须先配置服务地址和匿名密钥。', available: true },
+  { kind: 'tencent', title: '腾讯云', hint: '国内适配器尚未启用；当前版本不会向腾讯云上传任何数据。', available: false, badge: '规划中' },
 ]
 const reviewFocusOptions: Array<{ value: ReviewFocusPolicy, title: string, hint: string }> = [
   { value: 'off', title: '关闭专注插曲', hint: '训练题之间不插入额外环节。' },
@@ -86,6 +95,7 @@ const settingsSections = computed<SettingsSectionLink[]>(() => [
   ...(reviewPreferences.value
     ? [{ id: 'settings-review', label: '训练节奏', hint: '专注插曲' }]
     : []),
+  { id: 'settings-ocr', label: '智能功能', hint: '当前切图与后续识题' },
   { id: 'settings-storage', label: '存储位置', hint: '容量与迁移' },
   { id: 'settings-backup', label: '备份恢复', hint: '完整快照' },
   { id: 'settings-diagnostics', label: '安全诊断', hint: '隐私报告' },
@@ -587,7 +597,7 @@ async function syncNow() {
     else syncMessage.value = result.error.userMessage
   }
   catch {
-    syncMessage.value = '同步请求没有完成，本地 outbox 会保留并等待下次重试。'
+    syncMessage.value = '同步请求没有完成，待同步变更会保留并等待下次重试。'
   }
   finally {
     syncBusy.value = false
@@ -606,6 +616,7 @@ async function refreshOverviewAfterConflict() {
 }
 
 async function chooseBackend(kind: CloudBackendKind) {
+  if (kind === 'tencent') return
   const current = backendStatus.value
   if (backendBusy.value || (current?.ok && current.data.kind === kind)) return
   backendBusy.value = true
@@ -628,7 +639,24 @@ async function chooseBackend(kind: CloudBackendKind) {
   }
 }
 
-onMounted(load)
+async function returnToCapture() {
+  if (!appRouter || !inboxReturnBatchId.value) return
+  await appRouter.push({
+    name: 'inbox',
+    query: {
+      batchId: inboxReturnBatchId.value,
+      recognition: 'resume',
+    },
+  })
+}
+
+onMounted(async () => {
+  await load()
+  if (currentRoute?.query.section === 'ocr') {
+    await nextTick()
+    document.getElementById('settings-ocr')?.scrollIntoView({ block: 'start' })
+  }
+})
 </script>
 
 <template>
@@ -681,7 +709,7 @@ onMounted(load)
         />
         <span>
           <strong>{{ backendStatusLabel(backendStatus.data) }}</strong>
-          <small>{{ backendStatus.data.syncEnabled ? '云端同步已启用' : '云端同步未启用，本地 outbox 会安全保留' }}</small>
+          <small>{{ backendStatus.data.syncEnabled ? '云端同步已启用' : '云端同步未启用，待同步变更会安全保留' }}</small>
         </span>
       </div>
       <p
@@ -696,8 +724,8 @@ onMounted(load)
           v-for="option in backendOptions"
           :key="option.kind"
           type="button"
-          :class="['backend-option', { selected: backendStatus?.ok && backendStatus.data.kind === option.kind }]"
-          :disabled="backendBusy"
+          :class="['backend-option', { selected: option.available && backendStatus?.ok && backendStatus.data.kind === option.kind, unavailable: !option.available }]"
+          :disabled="backendBusy || !option.available"
           @click="chooseBackend(option.kind)"
         >
           <span
@@ -705,7 +733,13 @@ onMounted(load)
             aria-hidden="true"
           />
           <span>
-            <strong>{{ option.title }}</strong>
+            <strong>
+              {{ option.title }}
+              <em
+                v-if="option.badge"
+                class="capability-badge"
+              >{{ option.badge }}</em>
+            </strong>
             <small>{{ option.hint }}</small>
           </span>
         </button>
@@ -739,7 +773,7 @@ onMounted(load)
         role="note"
       >
         <strong>国内网络提示</strong>
-        <span>Supabase 在中国大陆可能出现连接超时或验证邮件延迟。遇到这种情况请保持“仅本地”继续使用；本地 outbox 会保留变更，之后网络恢复再手动同步。</span>
+        <span>Supabase 在中国大陆可能出现连接超时或验证邮件延迟。遇到这种情况请保持“仅本地”继续使用；待同步变更会保留，之后网络恢复再手动同步。</span>
       </aside>
       <div
         class="cloud-auth-status"
@@ -895,7 +929,7 @@ onMounted(load)
       <article class="setting-card">
         <div class="icon">
           <CloudOff :size="22" />
-        </div><div><p>云端同步</p><h2>{{ overview?.cloudSyncConfigured ? '已配置' : '尚未配置' }}</h2><span>本地 outbox 已记录 {{ overview?.pendingOperationCount ?? 0 }} 项变更；配置账户后可从上方手动同步。</span></div>
+        </div><div><p>云端同步</p><h2>{{ overview?.cloudSyncConfigured ? '已配置' : '尚未配置' }}</h2><span>待同步变更 {{ overview?.pendingOperationCount ?? 0 }} 项；配置账户后可从上方手动同步。</span></div>
       </article>
       <article class="setting-card">
         <div class="icon">
@@ -1062,6 +1096,20 @@ onMounted(load)
         </button>
       </footer>
     </section>
+
+    <div
+      v-if="inboxReturnBatchId"
+      class="settings-return"
+    >
+      <p>模型准备好后会回到原批次，但不会自动开始识别。</p>
+      <button
+        type="button"
+        @click="returnToCapture"
+      >
+        返回采集整理
+      </button>
+    </div>
+    <OcrCapabilityPanel id="settings-ocr" />
 
     <section
       id="settings-storage"
@@ -1301,14 +1349,15 @@ onMounted(load)
 
 <style scoped>
 .settings-page { min-height: 100vh; padding: 42px clamp(24px,5vw,72px) 72px; background: radial-gradient(circle at 85% 0,rgba(33,51,45,.08),transparent 32%); }
-#settings-sync,#settings-overview,#settings-subjects,#settings-review,#settings-storage,#settings-backup,#settings-diagnostics,.settings-migration-anchor { scroll-margin-top: 118px; }
+.settings-return { display:flex; justify-content:space-between; gap:16px; align-items:center; margin-top:24px; padding:14px 18px; border:1px solid rgba(79,128,110,.25); border-radius:14px; background:rgba(229,239,233,.66); }.settings-return p { margin:0; color:var(--ink-muted); font-size:11px; }.settings-return button { flex:0 0 auto; }
+#settings-sync,#settings-overview,#settings-subjects,#settings-review,#settings-ocr,#settings-storage,#settings-backup,#settings-diagnostics,.settings-migration-anchor { scroll-margin-top: 118px; }
 header { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; margin-bottom: 28px; } header p, .roadmap-panel p, .migration-panel header p { margin: 0 0 8px; color: var(--cinnabar); font-size: 12px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
 h1, h2 { margin: 0; font-family: Georgia,'Microsoft YaHei',serif; color: var(--green-deep); } h1 { font-size: clamp(28px,4vw,42px); } h2 { font-size: 21px; } header span { display: block; margin-top: 9px; color: var(--ink-muted); }
 button { display: inline-flex; gap: 7px; align-items: center; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper-raised); cursor: pointer; } button:disabled { opacity: .5; }
 .error-banner { padding: 12px; border-radius: 10px; background: rgba(185,88,63,.08); color: #843d2c; }
 .state-copy { padding: 28px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,253,247,.7); color: var(--ink-muted); text-align: center; }
 .cloud-auth-panel { margin-bottom: 16px; padding: 24px 26px; border: 1px solid rgba(185,88,63,.22); border-radius: 17px; background: linear-gradient(135deg,rgba(255,253,247,.96),rgba(247,235,220,.42)); box-shadow: 0 16px 48px rgba(34,48,43,.05); }.cloud-auth-panel>header { align-items: center; margin-bottom: 16px; }.cloud-auth-panel>header p { margin: 0 0 8px; color: var(--cinnabar); font-size: 12px; font-weight: 800; letter-spacing: .14em; }.cloud-auth-panel>header span { display: block; max-width: 680px; margin-top: 8px; color: var(--ink-muted); font-size: 12px; }.regional-sync-note { display: grid; gap: 4px; margin: 0 0 14px; padding: 11px 13px; color: #74594d; border: 1px solid rgba(185,88,63,.18); border-radius: 11px; background: rgba(247,225,216,.48); font-size: 11px; line-height: 1.55; }.regional-sync-note strong { color: #8d4635; font-size: 11px; }.cloud-auth-status { display: flex; gap: 9px; align-items: center; margin-bottom: 13px; padding: 11px 13px; border-radius: 11px; background: rgba(33,51,45,.07); }.cloud-auth-status small { color: var(--ink-muted); }.cloud-auth-form { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; align-items: end; }.cloud-auth-form label { display: grid; gap: 5px; color: var(--ink-muted); font-size: 11px; }.cloud-auth-form input { min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }.primary-action { color: var(--paper); border-color: var(--green-deep); background: var(--green-deep); }.cloud-auth-actions { display: flex; gap: 9px; }.auth-mode-toggle { margin-top: 11px; padding: 0; border: 0; color: var(--green-deep); background: transparent; font-size: 11px; }.cloud-auth-panel .backend-message { margin-top: 12px; }
-.backend-panel { margin-bottom: 16px; padding: 24px 26px; border: 1px solid rgba(33,51,45,.22); border-radius: 17px; background: linear-gradient(135deg,rgba(255,253,247,.94),rgba(220,228,220,.34)); box-shadow: 0 16px 48px rgba(34,48,43,.05); }.backend-panel>header { align-items: center; margin-bottom: 16px; }.backend-panel>header>svg { color: var(--green-deep); }.backend-panel>header p { margin: 0 0 8px; color: var(--cinnabar); font-size: 12px; font-weight: 800; letter-spacing: .14em; }.backend-panel>header span { display: block; margin-top: 8px; color: var(--ink-muted); font-size: 12px; }.backend-current { display: flex; gap: 9px; align-items: center; margin-bottom: 13px; padding: 11px 13px; border-radius: 11px; background: rgba(33,51,45,.07); }.backend-current>span:last-child { display: grid; gap: 3px; }.backend-current strong { color: var(--green-deep); font-size: 13px; }.backend-current small { color: var(--ink-muted); font-size: 11px; }.backend-status-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--cinnabar); box-shadow: 0 0 0 4px rgba(185,88,63,.13); }.backend-status-dot.ready { background: #557263; box-shadow: 0 0 0 4px rgba(85,114,99,.14); }.backend-options { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; }.backend-option { display: grid; grid-template-columns: 17px 1fr; gap: 10px; align-items: start; min-height: 92px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,253,247,.65); cursor: pointer; text-align: left; transition: transform var(--motion-feedback) var(--ease-standard), border-color var(--motion-standard) var(--ease-standard), background var(--motion-standard) var(--ease-standard), box-shadow var(--motion-standard) var(--ease-standard); }.backend-option:hover:not(:disabled) { transform: translateY(-2px); border-color: rgba(33,51,45,.38); box-shadow: 0 10px 24px rgba(34,48,43,.08); }.backend-option.selected { border-color: var(--green-deep); background: var(--green-soft); box-shadow: inset 0 0 0 1px var(--green-deep); }.backend-option:disabled { cursor: wait; }.backend-option-mark { width: 15px; height: 15px; margin-top: 2px; border: 1px solid var(--sand-deep); border-radius: 50%; background: var(--paper-raised); box-shadow: inset 0 0 0 4px var(--paper-raised); }.backend-option.selected .backend-option-mark { border-color: var(--green-deep); background: var(--green-deep); }.backend-option>span:last-child { display: grid; gap: 5px; }.backend-option strong { color: var(--green-deep); font-size: 13px; }.backend-option small { color: var(--ink-muted); font-size: 10px; line-height: 1.55; }.backend-message { margin: 12px 0 0; color: #557263; font-size: 11px; }.backend-message.warning { color: #843d2c; font-weight: 700; }.settings-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 15px; }.setting-card, .roadmap-panel, .migration-panel, .backup-panel, .subject-panel, .review-rhythm-panel, .storage-panel, .diagnostic-panel { border: 1px solid var(--line); border-radius: 17px; background: rgba(255,253,247,.78); box-shadow: 0 16px 48px rgba(34,48,43,.05); }
+.backend-panel { margin-bottom: 16px; padding: 24px 26px; border: 1px solid rgba(33,51,45,.22); border-radius: 17px; background: linear-gradient(135deg,rgba(255,253,247,.94),rgba(220,228,220,.34)); box-shadow: 0 16px 48px rgba(34,48,43,.05); }.backend-panel>header { align-items: center; margin-bottom: 16px; }.backend-panel>header>svg { color: var(--green-deep); }.backend-panel>header p { margin: 0 0 8px; color: var(--cinnabar); font-size: 12px; font-weight: 800; letter-spacing: .14em; }.backend-panel>header span { display: block; margin-top: 8px; color: var(--ink-muted); font-size: 12px; }.backend-current { display: flex; gap: 9px; align-items: center; margin-bottom: 13px; padding: 11px 13px; border-radius: 11px; background: rgba(33,51,45,.07); }.backend-current>span:last-child { display: grid; gap: 3px; }.backend-current strong { color: var(--green-deep); font-size: 13px; }.backend-current small { color: var(--ink-muted); font-size: 11px; }.backend-status-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--cinnabar); box-shadow: 0 0 0 4px rgba(185,88,63,.13); }.backend-status-dot.ready { background: #557263; box-shadow: 0 0 0 4px rgba(85,114,99,.14); }.backend-options { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; }.backend-option { display: grid; grid-template-columns: 17px 1fr; gap: 10px; align-items: start; min-height: 92px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,253,247,.65); cursor: pointer; text-align: left; transition: transform var(--motion-feedback) var(--ease-standard), border-color var(--motion-standard) var(--ease-standard), background var(--motion-standard) var(--ease-standard), box-shadow var(--motion-standard) var(--ease-standard); }.backend-option:hover:not(:disabled) { transform: translateY(-2px); border-color: rgba(33,51,45,.38); box-shadow: 0 10px 24px rgba(34,48,43,.08); }.backend-option.selected { border-color: var(--green-deep); background: var(--green-soft); box-shadow: inset 0 0 0 1px var(--green-deep); }.backend-option:disabled { cursor: wait; }.backend-option.unavailable { opacity: .62; cursor: not-allowed; }.backend-option.unavailable .backend-option-mark { border-style: dashed; background: transparent; box-shadow: none; }.backend-option-mark { width: 15px; height: 15px; margin-top: 2px; border: 1px solid var(--sand-deep); border-radius: 50%; background: var(--paper-raised); box-shadow: inset 0 0 0 4px var(--paper-raised); }.backend-option.selected .backend-option-mark { border-color: var(--green-deep); background: var(--green-deep); }.backend-option>span:last-child { display: grid; gap: 5px; }.backend-option strong { color: var(--green-deep); font-size: 13px; }.capability-badge { display: inline-flex; margin-left: 5px; padding: 2px 6px; color: #7d5d45; border-radius: 999px; background: rgba(232,221,199,.7); font-size: 9px; font-style: normal; vertical-align: middle; }.backend-option small { color: var(--ink-muted); font-size: 10px; line-height: 1.55; }.backend-message { margin: 12px 0 0; color: #557263; font-size: 11px; }.backend-message.warning { color: #843d2c; font-weight: 700; }.settings-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 15px; }.setting-card, .roadmap-panel, .migration-panel, .backup-panel, .subject-panel, .review-rhythm-panel, .storage-panel, .diagnostic-panel { border: 1px solid var(--line); border-radius: 17px; background: rgba(255,253,247,.78); box-shadow: 0 16px 48px rgba(34,48,43,.05); }
 .setting-card { position: relative; display: grid; grid-template-columns: 48px 1fr; gap: 14px; min-height: 150px; padding: 22px; }.setting-card .icon { display: grid; width: 44px; height: 44px; place-items: center; border-radius: 13px; background: var(--green-soft); color: var(--green-deep); }.setting-card p { margin: 1px 0 8px; color: var(--ink-muted); font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }.setting-card span { display: flex; gap: 5px; align-items: center; margin-top: 10px; color: var(--ink-muted); font-size: 12px; line-height: 1.7; }.setting-card > strong { position: absolute; right: 18px; bottom: 16px; display: flex; gap: 5px; align-items: center; color: #557263; font-size: 10px; }
 .encryption-card { min-height: 192px; padding-bottom: 46px; border-color: rgba(33,51,45,.28); }.device-security-card { grid-column: 1 / -1; grid-template-columns: 48px minmax(0,1fr); }.device-security-copy { min-width: 0; }.device-security-list { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; margin: 15px 0 0; }.device-security-list div { min-width: 0; padding: 11px 12px; border: 1px solid rgba(33,51,45,.12); border-radius: 11px; background: rgba(232,221,199,.24); }.device-security-list dt { color: var(--ink-muted); font-size: 10px; font-weight: 800; letter-spacing: .06em; }.device-security-list dd { margin: 5px 0 0; overflow-wrap: anywhere; color: var(--green-deep); font-size: 12px; font-weight: 700; }.device-status-enter-active,.device-status-leave-active { transition: opacity var(--motion-standard) var(--ease-standard),transform var(--motion-standard) var(--ease-standard); }.device-status-enter-from { opacity: 0; transform: translateY(5px); }.device-status-leave-to { opacity: 0; transform: translateY(-3px); }.device-security-copy .device-scope-note,.device-security-copy .device-access-error { display: block; margin-top: 10px; }.device-security-copy .device-scope-note { color: #557263; }.device-security-copy .device-access-error { color: #843d2c; }.lock-now { width: fit-content; margin-top: 13px; padding: 8px 11px; color: var(--green-deep); border-color: rgba(33,51,45,.25); background: var(--green-soft); font-size: 11px; font-weight: 700; transition: transform var(--motion-feedback) var(--ease-standard); }.lock-now:hover { transform: translateY(-1px); box-shadow: 0 8px 18px rgba(33,51,45,.1); }.roadmap-panel { margin-top: 16px; padding: 26px; }.roadmap-panel ol { display: grid; grid-template-columns: repeat(3,1fr); gap: 12px; margin: 22px 0 0; padding: 0; list-style: none; }.roadmap-panel li { padding: 17px; border-radius: 12px; background: rgba(232,221,199,.34); }.roadmap-panel strong, .roadmap-panel span { display: block; }.roadmap-panel span { margin-top: 7px; color: var(--ink-muted); font-size: 12px; line-height: 1.65; }
 .subject-panel { margin-top: 16px; padding: 26px; }.subject-panel>header { align-items: center; margin-bottom: 18px; }.subject-panel>header p { margin: 0 0 8px; color: var(--cinnabar); font-size: 12px; font-weight: 800; letter-spacing: .14em; }.builtin-subjects { display: flex; gap: 9px; flex-wrap: wrap; }.builtin-subjects label { position: relative; cursor: pointer; }.builtin-subjects input { position: absolute; opacity: 0; pointer-events: none; }.builtin-subjects span { display: grid; min-width: 58px; min-height: 38px; padding: 0 13px; place-items: center; color: var(--ink-muted); border: 1px solid var(--line); border-radius: 999px; background: var(--paper); transition: transform var(--motion-feedback), color var(--motion-feedback), background var(--motion-feedback); }.builtin-subjects label.selected span { color: var(--paper); border-color: var(--green-deep); background: var(--green-deep); }.builtin-subjects label:hover span { transform: translateY(-1px); }.builtin-subjects input:focus-visible+span { outline: 3px solid rgba(185,88,63,.24); outline-offset: 2px; }.custom-subjects { display: flex; gap: 8px; flex-wrap: wrap; min-height: 8px; margin-top: 12px; }.custom-subjects>span { display: inline-flex; gap: 5px; align-items: center; padding: 6px 7px 6px 11px; color: #7e412f; border-radius: 999px; background: rgba(185,88,63,.1); font-size: 11px; }.custom-subjects button { display: grid; width: 25px; height: 25px; padding: 0; place-items: center; border: 0; border-radius: 50%; background: transparent; }.subject-controls { display: grid; grid-template-columns: minmax(280px,1fr) minmax(250px,1fr) auto; gap: 12px; align-items: center; margin-top: 17px; }.subject-controls form { display: flex; gap: 8px; }.subject-controls form input { flex: 1; min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }.sound-toggle { display: flex; gap: 9px; align-items: center; padding: 8px 11px; border: 1px solid var(--line); border-radius: 11px; cursor: pointer; }.sound-toggle>span { display: grid; }.sound-toggle small { color: var(--ink-muted); font-size: 9px; }.save-subjects { color: var(--paper); border-color: var(--green-deep); background: var(--green-deep); }.subject-message { margin: 12px 0 0; color: #557263; font-size: 12px; }

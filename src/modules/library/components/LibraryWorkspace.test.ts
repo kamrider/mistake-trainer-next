@@ -39,7 +39,11 @@ describe('LibraryWorkspace', () => {
     expect(screen.queryByText('查看详情')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '打开 数学 错题详情' }))
     expect(view.emitted('openDetail')).toEqual([['problem-1']])
-    await user.click(screen.getByRole('button', { name: '录入新错题' }))
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '批量管理' }))
+    expect(screen.getByRole('checkbox', { name: '选择 数学 错题' })).toBeVisible()
+    expect(screen.getByRole('button', { name: '全选当前结果' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '添加素材' }))
 
     expect(view.emitted('capture')).toHaveLength(1)
   })
@@ -56,7 +60,7 @@ describe('LibraryWorkspace', () => {
     })
 
     expect(screen.getByText('题库还是空的')).toBeVisible()
-    expect(screen.getByRole('button', { name: '录入第一道错题' })).toBeVisible()
+    expect(screen.getByRole('button', { name: '添加第一份素材' })).toBeVisible()
   })
 
   it('emits searchable text and explains an empty search result', async () => {

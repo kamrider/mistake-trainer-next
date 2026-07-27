@@ -20,7 +20,7 @@ use crate::infrastructure::{
 };
 
 const FORMAT_VERSION: i32 = 1;
-const CURRENT_SCHEMA_VERSION: i64 = 13;
+const CURRENT_SCHEMA_VERSION: i64 = 15;
 const DATABASE_FILE: &str = "library.db";
 const MANIFEST_FILE: &str = "manifest.json";
 const ASSETS_DIRECTORY: &str = "assets";
@@ -1074,6 +1074,51 @@ fn ensure_single_account(
     account_id: &str,
     schema_version: i64,
 ) -> Result<(), BackupError> {
+    let recognition_tables = [
+        "capture_recognition_jobs",
+        "capture_recognition_job_items",
+        "capture_recognition_suggestions",
+        "capture_recognition_operations",
+    ];
+    let recognition_table_count = recognition_tables
+        .iter()
+        .map(|table| table_exists(connection, table))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|exists| *exists)
+        .count();
+    if (schema_version < 14 && recognition_table_count != 0)
+        || (schema_version >= 14 && recognition_table_count != recognition_tables.len())
+    {
+        return Err(BackupError::Integrity);
+    }
+    if schema_version >= 14 {
+        if !index_columns_match(
+            connection,
+            "capture_recognition_jobs_batch_idx",
+            &["account_id", "profile_id", "batch_id", "updated_at_utc_ms"],
+        )? {
+            return Err(BackupError::Integrity);
+        }
+        let has_foreign_recognition: i64 = connection.query_row(
+            "SELECT EXISTS(
+               SELECT 1
+               FROM capture_recognition_jobs job
+               LEFT JOIN learner_profiles profile ON profile.id = job.profile_id
+               LEFT JOIN capture_batches batch ON batch.id = job.batch_id
+               WHERE job.account_id <> ?1
+                  OR profile.account_id <> ?1
+                  OR batch.account_id <> ?1
+                  OR batch.profile_id <> job.profile_id
+               LIMIT 1
+             )",
+            [account_id],
+            |row| row.get(0),
+        )?;
+        if has_foreign_recognition != 0 {
+            return Err(BackupError::ForeignAccountData);
+        }
+    }
     let has_sync_snapshot_table = table_exists(connection, "sync_entity_snapshots")?;
     let has_conflict_resolution = column_exists(connection, "sync_conflicts", "resolution")?;
     let has_conflict_resolved_value =

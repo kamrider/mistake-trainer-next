@@ -147,14 +147,6 @@ function openFirstRoute() {
                 aria-hidden="true"
               />
             </button>
-            <button
-              v-if="hasProblems"
-              class="quiet-action"
-              type="button"
-              @click="$emit('open-inbox')"
-            >
-              整理采集箱
-            </button>
           </div>
         </div>
         <div

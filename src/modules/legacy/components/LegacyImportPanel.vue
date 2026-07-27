@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { ArchiveRestore, Clock3, FolderSearch, History, ShieldCheck, TriangleAlert } from '@lucide/vue'
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, inject, nextTick, onMounted, ref } from 'vue'
+import { syncControllerKey } from '../../../app/sync-controller'
 import {
   commands,
   type AppResult,
@@ -24,6 +25,7 @@ interface LegacyImportProgress {
 }
 
 const emit = defineEmits<{ changed: [] }>()
+const syncController = inject(syncControllerKey, undefined)
 const candidate = ref<LegacyImportCandidate>()
 const receipt = ref<LegacyImportReceipt>()
 const rollbackReceipt = ref<LegacyRollbackReceipt>()
@@ -153,6 +155,7 @@ async function beginImport() {
     if (result.ok) {
       receipt.value = result.data
       candidate.value = undefined
+      syncController?.scheduleMutation()
       emit('changed')
       await loadImports()
     }
@@ -189,6 +192,7 @@ async function beginRollback() {
       dialogMode.value = undefined
       rollbackTarget.value = undefined
       receipt.value = undefined
+      syncController?.scheduleMutation()
       emit('changed')
       await loadImports()
     }

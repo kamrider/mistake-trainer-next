@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>真实题图标注器</title>
+  <style>
+    :root{color-scheme:light;--ink:#21332d;--muted:#68756f;--paper:#fffdf7;--sand:#eee4d2;--line:#d5c9b5;--accent:#a94f38;--green:#2e6b55;--shadow:0 18px 50px rgba(52,42,30,.12);font-family:"Microsoft YaHei UI",system-ui,sans-serif}
+    *{box-sizing:border-box}body{margin:0;background:#f5efe3;color:var(--ink)}button,input,select{font:inherit}button{cursor:pointer}.app{min-height:100vh;display:grid;grid-template-rows:auto 1fr}
+    header{display:flex;align-items:center;gap:16px;padding:14px 22px;border-bottom:1px solid var(--line);background:rgba(255,253,247,.94);position:sticky;top:0;z-index:10}header h1{font:700 22px Georgia,"STSong",serif;margin:0}header p{margin:0;color:var(--muted);font-size:13px}.progress{margin-left:auto;text-align:right}.progress strong{display:block}.progress small{color:var(--muted)}
+    main{display:grid;grid-template-columns:minmax(0,1fr) 330px;min-height:0}.workspace{display:grid;grid-template-rows:auto 1fr;min-width:0}.toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 16px;border-bottom:1px solid var(--line);background:#f8f2e7}.toolbar button,.panel button{min-height:38px;padding:0 12px;border:1px solid var(--line);border-radius:10px;background:var(--paper);color:var(--ink)}button.primary{border-color:var(--green);background:var(--green);color:white}button[aria-pressed="true"]{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);color:var(--accent)}button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid rgba(169,79,56,.35);outline-offset:2px}
+    .stage{display:grid;place-items:center;overflow:auto;padding:24px;background:#18231f;background-image:radial-gradient(rgba(255,255,255,.08) 1px,transparent 1px);background-size:20px 20px}.image-shell{position:relative;display:inline-block;max-width:100%;box-shadow:var(--shadow);touch-action:none}.image-shell img{display:block;max-width:100%;max-height:calc(100vh - 160px);user-select:none;-webkit-user-drag:none}.overlay{position:absolute;inset:0}.region{position:absolute;border:3px solid #f2b84b;background:rgba(242,184,75,.13);color:#fff;text-shadow:0 1px 2px #000;pointer-events:none}.region span{position:absolute;top:2px;left:4px;font-weight:800}.anchor{position:absolute;width:18px;height:18px;margin:-9px;border:3px solid white;border-radius:50%;background:#2876d2;box-shadow:0 1px 5px #000;transform:none;padding:0}.anchor:focus-visible{outline:3px solid #fff}
+    .empty{max-width:520px;color:#f6f1e7;text-align:center;line-height:1.7}.panel{overflow:auto;padding:18px;border-left:1px solid var(--line);background:var(--paper)}.panel section{padding-bottom:18px;margin-bottom:18px;border-bottom:1px solid var(--line)}.panel h2{font-size:16px;margin:0 0 10px}.panel label{display:grid;gap:6px;margin:10px 0;color:var(--muted);font-size:13px}.panel input[type="text"],.panel input[type="date"],.panel select{width:100%;min-height:40px;padding:0 10px;border:1px solid var(--line);border-radius:9px;background:white;color:var(--ink)}.check{display:flex!important;grid-template-columns:none!important;align-items:flex-start;gap:9px!important;color:var(--ink)!important}.check input{margin-top:3px}.list{display:grid;gap:7px}.list-row{display:flex;align-items:center;gap:8px;padding:8px;border-radius:9px;background:#f2eadc}.list-row code{font-size:11px;overflow:hidden;text-overflow:ellipsis}.list-row button{margin-left:auto;min-height:30px;padding:0 8px}.status{min-height:24px;margin:10px 0;color:var(--green);font-weight:700}.warning{padding:10px;border-radius:10px;background:#f3dfd5;color:#7e3b2d;font-size:13px;line-height:1.55}.help{font-size:12px;line-height:1.6;color:var(--muted)}
+    @media(max-width:850px){main{grid-template-columns:1fr;grid-template-rows:minmax(480px,65vh) auto}.panel{border-left:0;border-top:1px solid var(--line)}header p{display:none}}
+    @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div><h1>真实题图标注器</h1><p>完全离线 · 原图不修改 · 自动保存标注草稿</p></div>
+      <div class="progress"><strong id="counter">正在载入…</strong><small id="coverage"></small></div>
+    </header>
+    <main>
+      <div class="workspace">
+        <div class="toolbar" aria-label="标注工具">
+          <button id="previous" type="button">上一张 P</button>
+          <button id="next" type="button">下一张 N</button>
+          <button id="region-mode" type="button" aria-pressed="true">框选题目 R</button>
+          <button id="anchor-mode" type="button" aria-pressed="false">标记题号 A</button>
+          <button id="full-page" type="button">整页作为一区</button>
+          <button id="save" class="primary" type="button">保存进度 Ctrl+S</button>
+        </div>
+        <div class="stage">
+          <div id="empty" class="empty">正在读取本机图片…</div>
+          <div id="image-shell" class="image-shell" hidden>
+            <img id="image" alt="">
+            <div id="overlay" class="overlay"></div>
+          </div>
+        </div>
+      </div>
+      <aside class="panel" aria-label="当前图片标注">
+        <section>
+          <h2>当前图片</h2>
+          <p id="sample-id" class="help"></p>
+          <label>版面
+            <select id="layout">
+              <option value="unknown">待判断</option>
+              <option value="single-column">单栏</option>
+              <option value="two-column">双栏</option>
+              <option value="continuation">续页</option>
+              <option value="question-only">只有题目</option>
+              <option value="answer-only">只有答案</option>
+            </select>
+          </label>
+          <label>标签（用逗号分隔）
+            <input id="tags" type="text" placeholder="数学, 公式, 手写批注">
+          </label>
+          <p class="help">拖动框出完整题目或答案区域；切换“标记题号”后，点击题号左上角。题区必须包含公式、图形、单位和作答痕迹。</p>
+        </section>
+        <section>
+          <h2>题目区域 <span id="region-count">0</span></h2>
+          <div id="regions" class="list"></div>
+        </section>
+        <section>
+          <h2>题号锚点 <span id="anchor-count">0</span></h2>
+          <div id="anchors" class="list"></div>
+        </section>
+        <section>
+          <h2>授权确认</h2>
+          <label class="check"><input id="anonymized" type="checkbox"><span>这些副本已移除姓名、学校、班级、脸部、二维码及其他可见个人信息。</span></label>
+          <label class="check"><input id="authorized" type="checkbox"><span>我确认这些图片已获授权，仅用于本机评测。</span></label>
+          <label>确认日期<input id="recorded-at" type="date"></label>
+          <div class="warning">只有每张图片至少有一个区域，并完成以上两项确认，才会生成可运行评测的 manifest.json。</div>
+        </section>
+        <p id="status" class="status" role="status" aria-live="polite"></p>
+        <button id="finish" type="button">保存并关闭标注服务</button>
+      </aside>
+    </main>
+  </div>
+  <script>
+    (() => {
+      const token = decodeURIComponent(location.hash.slice(1));
+      history.replaceState(null, "", "/");
+      const headers = {"X-Question-Bakeoff-Token": token};
+      const $ = id => document.getElementById(id);
+      let state = null;
+      let index = 0;
+      let mode = "region";
+      let drawing = null;
+      let imageUrl = "";
+      let saveTimer = 0;
+      let dirty = false;
+
+      const current = () => state?.samples[index];
+      const round = value => Math.max(0, Math.min(1, Math.round(value * 1000000) / 1000000));
+      const announce = text => { $("status").textContent = text; };
+      const request = async (path, options = {}) => {
+        const response = await fetch(path, {...options, headers: {...headers, ...(options.headers || {})}});
+        if (!response.ok) {
+          const detail = await response.json().catch(() => ({error: `HTTP ${response.status}`}));
+          throw new Error(detail.error || `HTTP ${response.status}`);
+        }
+        return response;
+      };
+      const scheduleSave = () => {
+        dirty = true;
+        announce("有未保存的更改");
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(() => save(false), 800);
+      };
+      const syncFields = () => {
+        const sample = current();
+        if (!sample) return;
+        sample.layout = $("layout").value;
+        sample.tags = $("tags").value.split(/[,，]/).map(value => value.trim()).filter((value, pos, all) => value && all.indexOf(value) === pos);
+        state.consent.anonymized = $("anonymized").checked;
+        state.consent.authorizedForLocalEvaluation = $("authorized").checked;
+        state.consent.recordedAt = $("recorded-at").value;
+      };
+      async function save(loud = true) {
+        if (!state) return false;
+        clearTimeout(saveTimer);
+        syncFields();
+        try {
+          const response = await request("/api/state", {
+            method: "PUT",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(state),
+          });
+          const result = await response.json();
+          dirty = false;
+          const text = result.complete
+            ? `已保存：${result.sampleCount} 张全部标注完成，可以运行评测`
+            : `草稿已保存：${result.labeledCount} / ${result.sampleCount} 张已有区域`;
+          if (loud || result.complete) announce(text);
+          updateProgress();
+          return true;
+        } catch (error) {
+          announce(`保存失败：${error.message}`);
+          return false;
+        }
+      }
+      function updateProgress() {
+        if (!state) return;
+        const labeled = state.samples.filter(sample => sample.regions.length).length;
+        $("counter").textContent = `第 ${index + 1} / ${state.samples.length} 张`;
+        $("coverage").textContent = `已标注 ${labeled} 张`;
+        $("previous").disabled = index === 0;
+        $("next").disabled = index === state.samples.length - 1;
+      }
+      function renderOverlay() {
+        const sample = current();
+        const overlay = $("overlay");
+        overlay.replaceChildren();
+        sample.regions.forEach((rect, position) => {
+          const region = document.createElement("div");
+          region.className = "region";
+          region.style.cssText = `left:${rect.x * 100}%;top:${rect.y * 100}%;width:${rect.width * 100}%;height:${rect.height * 100}%`;
+          region.innerHTML = `<span>${position + 1}</span>`;
+          overlay.append(region);
+        });
+        sample.anchors.forEach((anchor, position) => {
+          const marker = document.createElement("button");
+          marker.type = "button";
+          marker.className = "anchor";
+          marker.style.cssText = `left:${anchor.x * 100}%;top:${anchor.y * 100}%`;
+          marker.setAttribute("aria-label", `删除题号锚点 ${position + 1}`);
+          marker.addEventListener("click", event => {
+            event.stopPropagation();
+            sample.anchors.splice(position, 1);
+            render();
+            scheduleSave();
+          });
+          overlay.append(marker);
+        });
+        renderLists();
+      }
+      function renderLists() {
+        const sample = current();
+        $("region-count").textContent = sample.regions.length;
+        $("anchor-count").textContent = sample.anchors.length;
+        const list = (container, values, label) => {
+          $(container).replaceChildren(...values.map((value, position) => {
+            const row = document.createElement("div");
+            row.className = "list-row";
+            const code = document.createElement("code");
+            code.textContent = label === "区域"
+              ? `${label} ${position + 1} · ${Math.round(value.width * 100)}% × ${Math.round(value.height * 100)}%`
+              : `${label} ${position + 1} · ${Math.round(value.x * 100)}%, ${Math.round(value.y * 100)}%`;
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.textContent = "删除";
+            remove.setAttribute("aria-label", `删除${label} ${position + 1}`);
+            remove.addEventListener("click", () => {
+              values.splice(position, 1);
+              renderOverlay();
+              scheduleSave();
+            });
+            row.append(code, remove);
+            return row;
+          }));
+        };
+        list("regions", sample.regions, "区域");
+        list("anchors", sample.anchors, "锚点");
+      }
+      async function render() {
+        const sample = current();
+        if (!sample) return;
+        updateProgress();
+        $("sample-id").textContent = `${sample.id} · ${sample.image}`;
+        $("layout").value = sample.layout;
+        $("tags").value = sample.tags.join(", ");
+        $("anonymized").checked = state.consent.anonymized;
+        $("authorized").checked = state.consent.authorizedForLocalEvaluation;
+        $("recorded-at").value = state.consent.recordedAt;
+        renderOverlay();
+        $("empty").hidden = false;
+        $("empty").textContent = "正在解码图片…";
+        $("image-shell").hidden = true;
+        try {
+          const response = await request(`/api/image?path=${encodeURIComponent(sample.image)}`);
+          const blob = await response.blob();
+          if (imageUrl) URL.revokeObjectURL(imageUrl);
+          imageUrl = URL.createObjectURL(blob);
+          $("image").src = imageUrl;
+          $("image").alt = `${sample.id}，第 ${index + 1} 张待标注题图`;
+          await $("image").decode();
+          $("empty").hidden = true;
+          $("image-shell").hidden = false;
+        } catch (error) {
+          $("empty").textContent = `图片读取失败：${error.message}`;
+        }
+      }
+      function localPoint(event) {
+        const bounds = $("overlay").getBoundingClientRect();
+        return {
+          x: round((event.clientX - bounds.left) / bounds.width),
+          y: round((event.clientY - bounds.top) / bounds.height),
+        };
+      }
+      $("overlay").addEventListener("pointerdown", event => {
+        if (event.target !== $("overlay")) return;
+        const point = localPoint(event);
+        if (mode === "anchor") {
+          current().anchors.push(point);
+          renderOverlay();
+          scheduleSave();
+          return;
+        }
+        drawing = {start: point, pointerId: event.pointerId};
+        $("overlay").setPointerCapture(event.pointerId);
+      });
+      $("overlay").addEventListener("pointerup", event => {
+        if (!drawing || event.pointerId !== drawing.pointerId) return;
+        const end = localPoint(event);
+        const rect = {
+          x: Math.min(drawing.start.x, end.x),
+          y: Math.min(drawing.start.y, end.y),
+          width: Math.abs(end.x - drawing.start.x),
+          height: Math.abs(end.y - drawing.start.y),
+        };
+        drawing = null;
+        if (rect.width < .01 || rect.height < .01) {
+          announce("区域太小，请拖动框选完整内容");
+          return;
+        }
+        current().regions.push(rect);
+        renderOverlay();
+        scheduleSave();
+      });
+      function setMode(next) {
+        mode = next;
+        $("region-mode").setAttribute("aria-pressed", String(mode === "region"));
+        $("anchor-mode").setAttribute("aria-pressed", String(mode === "anchor"));
+        announce(mode === "region" ? "框选题目模式" : "标记题号模式");
+      }
+      async function navigate(delta) {
+        if (dirty && !(await save(false))) return;
+        index = Math.max(0, Math.min(state.samples.length - 1, index + delta));
+        await render();
+      }
+      $("previous").addEventListener("click", () => navigate(-1));
+      $("next").addEventListener("click", () => navigate(1));
+      $("region-mode").addEventListener("click", () => setMode("region"));
+      $("anchor-mode").addEventListener("click", () => setMode("anchor"));
+      $("full-page").addEventListener("click", () => {
+        current().regions.push({x: 0, y: 0, width: 1, height: 1});
+        renderOverlay();
+        scheduleSave();
+      });
+      $("save").addEventListener("click", () => save(true));
+      ["layout", "tags", "anonymized", "authorized", "recorded-at"].forEach(id => {
+        $(id).addEventListener("change", scheduleSave);
+      });
+      $("tags").addEventListener("input", scheduleSave);
+      $("finish").addEventListener("click", async () => {
+        if (!(await save(true))) return;
+        await request("/api/shutdown", {method: "POST"});
+        announce("标注服务已关闭，可以关闭此页面");
+      });
+      addEventListener("keydown", event => {
+        const editing = event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement;
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+          event.preventDefault();
+          save(true);
+        } else if (!editing && event.key.toLowerCase() === "n") navigate(1);
+        else if (!editing && event.key.toLowerCase() === "p") navigate(-1);
+        else if (!editing && event.key.toLowerCase() === "r") setMode("region");
+        else if (!editing && event.key.toLowerCase() === "a") setMode("anchor");
+      });
+      addEventListener("beforeunload", event => {
+        if (!dirty) return;
+        event.preventDefault();
+        event.returnValue = "";
+      });
+      request("/api/state").then(response => response.json()).then(value => {
+        state = value;
+        return render();
+      }).then(() => announce("已载入；拖动框选完整题目区域")).catch(error => {
+        $("empty").textContent = `无法启动标注：${error.message}`;
+        announce("本地标注服务连接失败");
+      });
+    })();
+  </script>
+</body>
+</html>

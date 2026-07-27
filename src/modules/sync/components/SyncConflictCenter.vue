@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { CheckCircle2, Cloud, GitCompareArrows, Laptop, RefreshCw, TriangleAlert } from '@lucide/vue'
-import { computed, nextTick, onMounted, ref, shallowRef } from 'vue'
+import { computed, inject, nextTick, onMounted, ref, shallowRef } from 'vue'
+import { syncControllerKey } from '../../../app/sync-controller'
 import {
   commands,
   type JsonValue,
@@ -23,6 +24,7 @@ type NativeJsonValue =
 const emit = defineEmits<{
   changed: []
 }>()
+const syncController = inject(syncControllerKey, undefined)
 
 const conflicts = shallowRef<SyncConflictSummary[]>([])
 const loading = ref(true)
@@ -200,6 +202,7 @@ async function resolveField(conflict: SyncConflictSummary, choice: SyncConflictC
     if (result.ok) {
       conflicts.value = result.data
       statusMessage.value = `${fieldLabel(conflict.fieldName)}已采用${choice === 'local' ? '本机' : '云端'}版本。`
+      syncController?.scheduleMutation()
       emit('changed')
       busyKey.value = ''
       await restoreFocus(groupKey)
@@ -229,6 +232,7 @@ async function resolveGroup(group: ConflictGroup, choice: SyncConflictChoice) {
     if (result.ok) {
       conflicts.value = result.data
       statusMessage.value = `${group.entityLabel}已全部采用${choice === 'local' ? '本机' : '云端'}版本。`
+      syncController?.scheduleMutation()
       emit('changed')
       busyKey.value = ''
       await restoreFocus(group.key)

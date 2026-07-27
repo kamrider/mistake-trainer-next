@@ -1,6 +1,10 @@
 pub mod assets;
+pub mod capture_recognition_worker;
 pub mod cloud_backend;
 pub mod database;
+pub mod recognition_anchor_layout;
+pub mod recognition_ppocr_runtime;
+pub mod recognition_visual_split;
 pub mod runtime;
 pub mod storage_location;
 pub mod supabase;

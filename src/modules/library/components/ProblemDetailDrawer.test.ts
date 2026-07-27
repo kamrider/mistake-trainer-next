@@ -9,6 +9,8 @@ describe('ProblemDetailDrawer', () => {
     const view = render(ProblemDetailDrawer, {
       props: {
         loading: false,
+        previousProblemId: 'problem-0',
+        nextProblemId: 'problem-2',
         detail: {
           id: 'problem-1',
           subject: '数学',
@@ -28,10 +30,16 @@ describe('ProblemDetailDrawer', () => {
     expect(screen.getByRole('heading', { name: '数学' })).toBeVisible()
     expect(screen.getByRole('img', { name: '题目图片 1' })).toBeVisible()
     expect(screen.getByRole('img', { name: '答案图片 1' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '下一题' }))
+    expect(screen.queryByRole('button', { name: '归档' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '更多题目操作' }))
+    expect(screen.getByRole('button', { name: '归档' })).toBeVisible()
+    expect(screen.getByRole('button', { name: '移入回收站' })).toBeVisible()
     await user.click(screen.getByRole('button', { name: '用这道题开始训练' }))
     await user.click(screen.getByRole('button', { name: '关闭题目详情' }))
 
     expect(view.emitted('train')).toEqual([['problem-1']])
+    expect(view.emitted('navigate')).toEqual([['problem-2']])
     expect(view.emitted('close')).toHaveLength(1)
   })
 

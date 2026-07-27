@@ -33,6 +33,7 @@ QUESTION_ANCHOR = re.compile(
     re.IGNORECASE,
 )
 OPTION_ONLY = re.compile(r"^\s*[A-HＡ-Ｈ][.、．)]\s*", re.IGNORECASE)
+RELAXED_QUESTION_ANCHOR = re.compile(r"^\s*(\d{1,3})(?:\s+|$)")
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,14 +51,24 @@ class OcrBox:
         return (self.left + self.right) / 2
 
 
-def is_question_anchor(text: str) -> bool:
+def question_anchor_number(text: str, *, allow_relaxed: bool = False) -> int | None:
     match = QUESTION_ANCHOR.match(text)
     if match is None or OPTION_ONLY.match(text):
-        return False
+        if not allow_relaxed:
+            return None
+        relaxed = RELAXED_QUESTION_ANCHOR.match(text)
+        return int(relaxed.group(1)) if relaxed else None
     # A decimal such as ``3.14`` starts with a syntactically valid ``3.``.
     # Treat a digit immediately after the matched marker as numeric content,
     # not as a question heading.
-    return match.end() >= len(text) or not text[match.end()].isdigit()
+    if match.end() < len(text) and text[match.end()].isdigit():
+        return None
+    digits = re.search(r"\d{1,3}", match.group(0))
+    return int(digits.group(0)) if digits else None
+
+
+def is_question_anchor(text: str) -> bool:
+    return question_anchor_number(text) is not None
 
 
 def _validate_boxes(width: int, height: int, boxes: Sequence[OcrBox]) -> None:
@@ -110,47 +121,116 @@ def _content_suggestion(
 
 def _anchor_columns(
     width: int,
-    anchors: Sequence[OcrBox],
-) -> tuple[tuple[OcrBox, ...], ...]:
-    ordered = sorted(anchors, key=lambda entry: entry.center_x)
+    anchors: Sequence[tuple[OcrBox, int]],
+) -> tuple[tuple[tuple[OcrBox, int], ...], ...]:
+    ordered = sorted(anchors, key=lambda entry: entry[0].left)
     if len(ordered) < 4:
-        return (tuple(sorted(ordered, key=lambda entry: entry.top)),)
+        return (tuple(sorted(ordered, key=lambda entry: entry[0].top)),)
     gaps = [
-        (ordered[index + 1].center_x - ordered[index].center_x, index)
+        (ordered[index + 1][0].left - ordered[index][0].left, index)
         for index in range(len(ordered) - 1)
     ]
     largest_gap, split_index = max(gaps)
     left = ordered[: split_index + 1]
     right = ordered[split_index + 1 :]
     if largest_gap < width * 0.20 or len(left) < 2 or len(right) < 2:
-        return (tuple(sorted(ordered, key=lambda entry: entry.top)),)
+        return (tuple(sorted(ordered, key=lambda entry: entry[0].top)),)
     return (
-        tuple(sorted(left, key=lambda entry: entry.top)),
-        tuple(sorted(right, key=lambda entry: entry.top)),
+        tuple(sorted(left, key=lambda entry: entry[0].top)),
+        tuple(sorted(right, key=lambda entry: entry[0].top)),
     )
 
 
-def _boxes_for_columns(
+def _select_question_run(
+    anchors: Sequence[tuple[OcrBox, int]],
+) -> tuple[tuple[OcrBox, int], ...]:
+    ordered = sorted(anchors, key=lambda entry: entry[0].top)
+    deduplicated: list[tuple[OcrBox, int]] = []
+    for candidate in ordered:
+        if deduplicated and abs(candidate[0].top - deduplicated[-1][0].top) <= 2:
+            current = deduplicated[-1]
+            if candidate[0].confidence > current[0].confidence:
+                deduplicated[-1] = candidate
+            continue
+        deduplicated.append(candidate)
+
+    # Exam instructions often form a numbered 1..N list before the actual
+    # questions restart at 1. Anything before the last such reset is metadata.
+    reset_start = 0
+    for index in range(1, len(deduplicated)):
+        if deduplicated[index][1] <= deduplicated[index - 1][1]:
+            reset_start = index
+    tail = deduplicated[reset_start:]
+
+    runs: list[list[tuple[OcrBox, int]]] = []
+    for candidate in tail:
+        if runs and candidate[1] == runs[-1][-1][1] + 1:
+            runs[-1].append(candidate)
+        else:
+            runs.append([candidate])
+    if not runs:
+        return ()
+    # Prefer a coherent sequence over an isolated footer/page number. For
+    # equal-length runs, the later run is normally the real question section.
+    selected = max(runs, key=lambda run: (len(run), run[-1][0].top))
+    return tuple(selected)
+
+
+def _candidate_anchors(
+    width: int,
     boxes: Sequence[OcrBox],
-    columns: Sequence[Sequence[OcrBox]],
-) -> tuple[tuple[OcrBox, ...], ...] | None:
-    if len(columns) == 1:
-        return (tuple(boxes),)
-    left_edge = max(anchor.center_x for anchor in columns[0])
-    right_edge = min(anchor.center_x for anchor in columns[1])
-    split = (left_edge + right_edge) / 2
-    assigned: list[list[OcrBox]] = [[], []]
+) -> tuple[tuple[OcrBox, int], ...]:
+    strong = tuple(
+        (entry, number)
+        for entry in boxes
+        if entry.kind == "text"
+        and entry.confidence >= MIN_ANCHOR_CONFIDENCE
+        and (number := question_anchor_number(entry.text)) is not None
+    )
+    strong_lefts = tuple(entry.left for entry, _ in strong)
+    relaxed: list[tuple[OcrBox, int]] = []
     for entry in boxes:
-        if entry.left < split < entry.right:
-            return None
-        assigned[0 if entry.center_x < split else 1].append(entry)
-    return tuple(tuple(entries) for entries in assigned)
+        if entry.kind != "text" or entry.confidence < MIN_ANCHOR_CONFIDENCE:
+            continue
+        if question_anchor_number(entry.text) is not None:
+            continue
+        number = question_anchor_number(entry.text, allow_relaxed=True)
+        if number is None:
+            continue
+        aligned = entry.left <= width * 0.15 or any(
+            abs(entry.left - left) <= width * 0.035 for left in strong_lefts
+        )
+        if aligned:
+            relaxed.append((entry, number))
+    return strong + tuple(relaxed)
+
+
+def _column_bounds(
+    width: int,
+    columns: Sequence[Sequence[tuple[OcrBox, int]]],
+) -> tuple[tuple[float, float], ...]:
+    if len(columns) == 1:
+        return ((0.0, float(width)),)
+    left_content_edge = max(entry.right for entry, _ in columns[0])
+    right_content_edge = min(entry.left for entry, _ in columns[1])
+    if left_content_edge < right_content_edge:
+        split = (left_content_edge + right_content_edge) / 2
+    else:
+        split = (
+            max(entry.left for entry, _ in columns[0])
+            + min(entry.left for entry, _ in columns[1])
+        ) / 2
+    overlap = width * 0.025
+    return (
+        (0.0, min(float(width), split + overlap)),
+        (max(0.0, split - overlap), float(width)),
+    )
 
 
 def _assemble_column(
     width: int,
     height: int,
-    anchors: Sequence[OcrBox],
+    anchors: Sequence[tuple[OcrBox, int]],
     boxes: Sequence[OcrBox],
     *,
     left_bound: float,
@@ -164,15 +244,26 @@ def _assemble_column(
             reason="insufficient_question_anchors",
         )
     suggestions: list[Suggestion] = []
-    for index, anchor in enumerate(anchors):
-        next_top = anchors[index + 1].top if index + 1 < len(anchors) else float(height)
-        content = [
-            entry
-            for entry in boxes
-            if entry.bottom > anchor.top and entry.top < next_top
-        ]
+    overlap_y = height * 0.015
+    for index, (anchor, _) in enumerate(anchors):
+        next_top = (
+            anchors[index + 1][0].top
+            if index + 1 < len(anchors)
+            else _last_question_bottom(
+                boxes,
+                anchor,
+                left_bound=left_bound,
+                right_bound=right_bound,
+                height=height,
+            )
+        )
+        # OCR text polygons can overlap a horizontal boundary by a few pixels
+        # on skewed scans. Only a non-text block crossing the next anchor is
+        # strong enough evidence that an automatic crop may cut a figure.
         if index + 1 < len(anchors) and any(
-            entry.bottom > next_top for entry in content
+            entry.kind == "non_text"
+            and entry.top < next_top < entry.bottom
+            for entry in boxes
         ):
             return _content_suggestion(
                 width,
@@ -184,8 +275,8 @@ def _assemble_column(
         # figure. Use the entire detected column and the next question anchor
         # as a conservative lower boundary so invisible visual content cannot
         # be clipped by a tight text-only rectangle.
-        top = anchor.top
-        bottom = next_top
+        top = max(0.0, anchor.top - overlap_y)
+        bottom = min(float(height), next_top + overlap_y)
         confidence = min(0.96, max(0.75, anchor.confidence * 0.96))
         suggestions.append(
             Suggestion(
@@ -204,6 +295,35 @@ def _assemble_column(
     return tuple(suggestions)
 
 
+def _last_question_bottom(
+    boxes: Sequence[OcrBox],
+    anchor: OcrBox,
+    *,
+    left_bound: float,
+    right_bound: float,
+    height: int,
+) -> float:
+    candidates = tuple(
+        entry
+        for entry in boxes
+        if left_bound <= entry.center_x <= right_bound
+        and entry.bottom > anchor.top
+        and entry.top >= anchor.top - height * 0.01
+        and not _looks_like_page_footer(entry.text, entry.top / height)
+    )
+    group_bottom = max((entry.bottom for entry in candidates), default=anchor.bottom)
+    # The regular assembly padding contributes another 1.5%, for a total
+    # conservative tail margin of 2.5% on the final question.
+    return min(float(height), group_bottom + height * 0.01)
+
+
+def _looks_like_page_footer(text: str, normalized_top: float) -> bool:
+    if normalized_top < 0.90:
+        return False
+    normalized = text.strip()
+    return "页" in normalized or re.fullmatch(r"[-—–\s]*\d+[-—–\s]*", normalized) is not None
+
+
 def suggest_from_ocr_boxes(
     width: int,
     height: int,
@@ -211,13 +331,7 @@ def suggest_from_ocr_boxes(
 ) -> tuple[Suggestion, ...]:
     materialized = tuple(boxes)
     _validate_boxes(width, height, materialized)
-    anchors = tuple(
-        entry
-        for entry in materialized
-        if entry.kind == "text"
-        and entry.confidence >= MIN_ANCHOR_CONFIDENCE
-        and is_question_anchor(entry.text)
-    )
+    anchors = _candidate_anchors(width, materialized)
     if len(anchors) < 2:
         return _content_suggestion(
             width,
@@ -225,27 +339,19 @@ def suggest_from_ocr_boxes(
             materialized,
             reason="insufficient_question_anchors",
         )
-    columns = _anchor_columns(width, anchors)
-    assigned = _boxes_for_columns(materialized, columns)
-    if assigned is None:
+    columns = tuple(_select_question_run(column) for column in _anchor_columns(width, anchors))
+    if any(len(column) < 2 for column in columns):
         return _content_suggestion(
             width,
             height,
             materialized,
-            reason="cross_column_content",
+            reason="insufficient_question_anchors",
         )
-    if len(columns) == 1:
-        bounds = ((0.0, float(width)),)
-    else:
-        left_edge = max(anchor.center_x for anchor in columns[0])
-        right_edge = min(anchor.center_x for anchor in columns[1])
-        split = (left_edge + right_edge) / 2
-        bounds = ((0.0, split), (split, float(width)))
+    bounds = _column_bounds(width, columns)
 
     suggestions: list[Suggestion] = []
-    for column_anchors, column_boxes, (left_bound, right_bound) in zip(
+    for column_anchors, (left_bound, right_bound) in zip(
         columns,
-        assigned,
         bounds,
         strict=True,
     ):
@@ -253,7 +359,7 @@ def suggest_from_ocr_boxes(
             width,
             height,
             column_anchors,
-            column_boxes,
+            materialized,
             left_bound=left_bound,
             right_bound=right_bound,
         )

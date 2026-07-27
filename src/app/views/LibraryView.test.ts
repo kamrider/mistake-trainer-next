@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { createMemoryHistory } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createAppRouter } from '../router'
+import { syncControllerKey } from '../sync-controller'
 import LibraryView from './LibraryView.vue'
 
 const api = vi.hoisted(() => ({
@@ -28,13 +29,24 @@ const problems = [
     questionAssetCount: 1, answerAssetCount: 1, questionPreviewDataUrl: null, updatedAtUtcMs: 2,
   },
 ]
+const syncController = {
+  run: vi.fn(),
+  scheduleMutation: vi.fn(),
+  dispose: vi.fn(),
+}
 
 async function renderView() {
   const router = createAppRouter(createMemoryHistory())
   await router.push('/library')
   await router.isReady()
-  render(LibraryView, { global: { plugins: [router] } })
+  render(LibraryView, {
+    global: {
+      plugins: [router],
+      provide: { [syncControllerKey as symbol]: syncController },
+    },
+  })
   await screen.findByText('先看定义域。')
+  await userEvent.click(screen.getByRole('button', { name: '批量管理' }))
   return router
 }
 
@@ -58,6 +70,7 @@ describe('LibraryView manual review deck', () => {
         examQuestionIndex: 0, examCorrectCount: 0, examWrongCount: 0, items: [],
       },
     })
+    api.problemChangeStatus.mockResolvedValue({ ok: true, data: problems })
   })
 
   it('persists an ordered exam before routing and leaves ids out of the URL', async () => {
@@ -123,5 +136,29 @@ describe('LibraryView manual review deck', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('所选题目已经变化。')
     expect(screen.getByRole('checkbox', { name: '选择 数学 错题' })).toBeChecked()
     expect(screen.getByRole('button', { name: '开始训练 1 道题' })).toBeEnabled()
+  })
+
+  it('schedules sync after a batch status change but not after a failed change', async () => {
+    const user = userEvent.setup()
+    await renderView()
+    await user.click(screen.getByRole('checkbox', { name: '选择 数学 错题' }))
+    await user.click(screen.getByRole('button', { name: '移入回收站' }))
+
+    await waitFor(() => expect(syncController.scheduleMutation).toHaveBeenCalledOnce())
+
+    api.problemChangeStatus.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: 'problem_update_failed',
+        userMessage: '题目状态没有改变。',
+        retryable: true,
+        diagnosticId: 'problem-status',
+      },
+    })
+    await user.click(screen.getByRole('checkbox', { name: '选择 数学 错题' }))
+    await user.click(screen.getByRole('button', { name: '移入回收站' }))
+    await screen.findByRole('alert')
+
+    expect(syncController.scheduleMutation).toHaveBeenCalledOnce()
   })
 })

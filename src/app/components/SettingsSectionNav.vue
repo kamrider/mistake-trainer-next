@@ -13,6 +13,8 @@ const props = defineProps<{
 
 const activeId = ref('')
 const scroller = ref<HTMLElement>()
+const canScrollLeft = ref(false)
+const canScrollRight = ref(false)
 const visibleIds = new Set<string>()
 let observer: IntersectionObserver | undefined
 let bindVersion = 0
@@ -30,6 +32,22 @@ function prefersReducedMotion() {
   return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
 }
 
+function updateOverflow() {
+  const container = scroller.value
+  if (!container) return
+  canScrollLeft.value = container.scrollLeft > 2
+  canScrollRight.value = container.scrollLeft + container.clientWidth < container.scrollWidth - 2
+}
+
+function scrollDirectory(direction: -1 | 1) {
+  const container = scroller.value
+  if (!container) return
+  container.scrollBy({
+    left: direction * Math.max(180, container.clientWidth * 0.72),
+    behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+  })
+}
+
 async function revealActiveSection() {
   await nextTick()
   const container = scroller.value
@@ -39,6 +57,7 @@ async function revealActiveSection() {
     left: Math.max(0, button.offsetLeft - (container.clientWidth - button.offsetWidth) / 2),
     behavior: prefersReducedMotion() ? 'auto' : 'smooth',
   })
+  window.requestAnimationFrame(updateOverflow)
 }
 
 function selectSection(id: string) {
@@ -94,21 +113,41 @@ async function bindObserver() {
 
 watch(sectionKey, () => void bindObserver(), { flush: 'post' })
 watch(activeId, () => void revealActiveSection(), { flush: 'post' })
-onMounted(() => void bindObserver())
+function handleResize() {
+  updateOverflow()
+}
+
+onMounted(async () => {
+  await bindObserver()
+  updateOverflow()
+  window.addEventListener('resize', handleResize)
+})
 onBeforeUnmount(() => {
   bindVersion += 1
   observer?.disconnect()
+  window.removeEventListener('resize', handleResize)
 })
 </script>
 
 <template>
   <nav
     class="settings-section-nav"
+    :class="{ 'can-scroll-left': canScrollLeft, 'can-scroll-right': canScrollRight }"
     aria-label="设置目录"
   >
+    <button
+      class="directory-scroll previous"
+      type="button"
+      aria-label="查看前面的设置"
+      :disabled="!canScrollLeft"
+      @click="scrollDirectory(-1)"
+    >
+      ‹
+    </button>
     <div
       ref="scroller"
       class="settings-section-scroller"
+      @scroll="updateOverflow"
     >
       <div
         class="settings-section-track"
@@ -131,6 +170,15 @@ onBeforeUnmount(() => {
         </button>
       </div>
     </div>
+    <button
+      class="directory-scroll next"
+      type="button"
+      aria-label="查看更多设置"
+      :disabled="!canScrollRight"
+      @click="scrollDirectory(1)"
+    >
+      ›
+    </button>
   </nav>
 </template>
 
@@ -147,6 +195,46 @@ onBeforeUnmount(() => {
   box-shadow: 0 12px 34px rgba(34,48,43,.09);
   backdrop-filter: blur(13px);
 }
+.directory-scroll {
+  position: absolute;
+  z-index: 3;
+  top: 50%;
+  display: grid;
+  width: 30px;
+  height: 38px;
+  min-height: 0;
+  padding: 0;
+  place-items: center;
+  color: var(--green-deep);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper);
+  box-shadow: 0 5px 14px rgba(33,51,45,.12);
+  font-size: 22px;
+  opacity: .32;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+.directory-scroll.previous { left: 8px; }
+.directory-scroll.next { right: 8px; }
+.can-scroll-left .directory-scroll.previous,
+.can-scroll-right .directory-scroll.next { opacity: 1; pointer-events: auto; }
+.directory-scroll:disabled { opacity: .32; }
+.settings-section-nav::before,
+.settings-section-nav::after {
+  position: absolute;
+  z-index: 2;
+  top: 5px;
+  bottom: 5px;
+  width: 52px;
+  content: "";
+  opacity: 0;
+  pointer-events: none;
+}
+.settings-section-nav::before { left: 5px; background: linear-gradient(90deg,rgba(246,241,231,.98),transparent); }
+.settings-section-nav::after { right: 5px; background: linear-gradient(-90deg,rgba(246,241,231,.98),transparent); }
+.settings-section-nav.can-scroll-left::before,
+.settings-section-nav.can-scroll-right::after { opacity: 1; }
 .settings-section-scroller {
   overflow-x: auto;
   overscroll-behavior-inline: contain;
@@ -174,7 +262,7 @@ onBeforeUnmount(() => {
   transform: translate3d(var(--active-x),0,0);
   transition: transform var(--motion-page) var(--ease-standard);
 }
-button {
+.settings-section-track button {
   display: grid;
   min-width: 0;
   min-height: 54px;
@@ -189,29 +277,29 @@ button {
   text-align: center;
   transition: color var(--motion-standard) var(--ease-standard),transform var(--motion-feedback) var(--ease-standard);
 }
-button:hover { color: var(--green-deep); transform: translateY(-1px); }
-button.active { color: var(--green-deep); }
-button strong,button small {
+.settings-section-track button:hover { color: var(--green-deep); transform: translateY(-1px); }
+.settings-section-track button.active { color: var(--green-deep); }
+.settings-section-track button strong,.settings-section-track button small {
   display: block;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-button strong { font-size: 12px; font-weight: 790; }
-button small { margin-top: 3px; color: inherit; font-size: 9px; opacity: .72; }
-button:focus-visible { outline: 3px solid rgba(185,88,63,.28); outline-offset: -2px; }
+.settings-section-track button strong { font-size: 12px; font-weight: 790; }
+.settings-section-track button small { margin-top: 3px; color: inherit; font-size: 9px; opacity: .72; }
+.settings-section-track button:focus-visible,.directory-scroll:focus-visible { outline: 3px solid rgba(185,88,63,.28); outline-offset: -2px; }
 @media(max-width:760px) {
   .settings-section-nav { top: 8px; margin: -5px 0 16px; padding: 4px; border-radius: 14px; }
   .settings-section-track { min-width: 650px; }
-  button { min-height: 50px; padding-inline: 8px; }
+  .settings-section-track button { min-height: 50px; padding-inline: 8px; }
 }
 @media(forced-colors:active) {
   .settings-section-indicator { border-color: Highlight; background: Highlight; forced-color-adjust: auto; }
-  button.active { color: HighlightText; }
+  .settings-section-track button.active { color: HighlightText; }
 }
 @media(prefers-reduced-motion:reduce) {
-  .settings-section-indicator,button { transition: none; }
-  button:hover { transform: none; }
+  .settings-section-indicator,.settings-section-track button { transition: none; }
+  .settings-section-track button:hover { transform: none; }
 }
 </style>

@@ -104,4 +104,35 @@ describe('CaptureCropEditor', () => {
     const recipes = requests[0]![0] as CaptureCropRecipe[]
     expect(recipes.map(recipe => recipe.rect.x)).toEqual([0.06, 0.096, 0.078])
   })
+
+  it('edits proposed regions without creating crop assets', async () => {
+    const user = userEvent.setup()
+    const view = render(CaptureCropEditor, {
+      props: {
+        dataUrl: 'data:image/png;base64,iVBORw0KGgo=',
+        itemName: '整页练习.png',
+        busy: false,
+        mode: 'proposal',
+        initialRecipes: [{
+          rect: { x: 0.1, y: 0.2, width: 0.7, height: 0.4 },
+          rotationDegrees: 0,
+          outputMediaType: 'image/png',
+          maxEdge: 4096,
+          jpegQuality: 90,
+        }],
+      },
+    })
+
+    expect(screen.getByText('这里只调整建议边界')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '保存 1 个建议区域' }))
+    expect(view.emitted('apply')).toBeUndefined()
+    const proposals = view.emitted('saveProposal') as unknown[][]
+    expect(proposals[0]?.[0]).toEqual([{
+      rect: { x: 0.1, y: 0.2, width: 0.7, height: 0.4 },
+      rotationDegrees: 0,
+      outputMediaType: 'image/png',
+      maxEdge: 4096,
+      jpegQuality: 90,
+    }])
+  })
 })
