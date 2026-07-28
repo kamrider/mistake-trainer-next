@@ -41,11 +41,13 @@ fn windows_10_22h2_and_ltsc_are_extended_compatibility() {
 
 #[test]
 fn native_windows_11_arm64_is_extended_compatibility() {
-    let status = assess_windows_compatibility(facts(26_100, "arm64"));
+    let status = assess_windows_compatibility(facts(26_100, "aarch64"));
 
     assert_eq!(status.support_level, WindowsSupportLevel::Extended);
     assert!(status.supported);
     assert!(status.summary.contains("ARM64 原生版本"));
+    assert_eq!(status.process_architecture, "arm64");
+    assert_eq!(status.native_architecture, "arm64");
 }
 
 #[test]

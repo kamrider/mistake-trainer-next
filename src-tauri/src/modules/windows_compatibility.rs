@@ -42,10 +42,12 @@ pub struct WindowsCompatibilityStatus {
 pub fn assess_windows_compatibility(
     facts: WindowsCompatibilityFacts,
 ) -> WindowsCompatibilityStatus {
-    let x64_process = facts.process_architecture == "x86_64";
-    let arm64_process = facts.process_architecture == "arm64";
-    let native_x64 = facts.native_architecture == "x86_64";
-    let native_arm64 = facts.native_architecture == "arm64";
+    let process_architecture = normalize_architecture(&facts.process_architecture);
+    let native_architecture = normalize_architecture(&facts.native_architecture);
+    let x64_process = process_architecture == "x86_64";
+    let arm64_process = process_architecture == "arm64";
+    let native_x64 = native_architecture == "x86_64";
+    let native_arm64 = native_architecture == "arm64";
     let support_level = if x64_process && native_x64 && facts.build_number >= WINDOWS_11_FIRST_BUILD
     {
         WindowsSupportLevel::Supported
@@ -60,8 +62,8 @@ pub fn assess_windows_compatibility(
         WindowsSupportLevel::Supported => {
             "Windows 11 x64 正式支持；当前系统满足付费版运行基线。".to_owned()
         }
-        WindowsSupportLevel::Extended if facts.native_architecture == "arm64" => {
-            if facts.process_architecture == "arm64" {
+        WindowsSupportLevel::Extended if native_architecture == "arm64" => {
+            if process_architecture == "arm64" {
                 "Windows 11 ARM64 原生版本处于延伸兼容；基础功能已原生验证，本地识别性能仍需单独验收。"
                     .to_owned()
             } else {
@@ -86,11 +88,18 @@ pub fn assess_windows_compatibility(
         display_version: facts.display_version,
         build_number: facts.build_number,
         update_build_revision: facts.update_build_revision,
-        process_architecture: facts.process_architecture,
-        native_architecture: facts.native_architecture,
+        process_architecture: process_architecture.to_owned(),
+        native_architecture: native_architecture.to_owned(),
         webview2_version: facts.webview2_version,
         minimum_windows_build: MINIMUM_WINDOWS_BUILD,
         summary,
+    }
+}
+
+fn normalize_architecture(architecture: &str) -> &str {
+    match architecture {
+        "aarch64" => "arm64",
+        other => other,
     }
 }
 
