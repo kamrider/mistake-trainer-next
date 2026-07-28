@@ -236,11 +236,11 @@ pub fn report_summary(
         )?;
         for row in rows {
             let (day, count, duration) = row?;
-            if let Ok(index) = usize::try_from((day - start).div_euclid(DAY_MS)) {
-                if let Some(item) = daily_activity.get_mut(index) {
-                    item.review_count = bounded_i32(count);
-                    item.duration_ms = duration as f64;
-                }
+            if let Ok(index) = usize::try_from((day - start).div_euclid(DAY_MS))
+                && let Some(item) = daily_activity.get_mut(index)
+            {
+                item.review_count = bounded_i32(count);
+                item.duration_ms = duration as f64;
             }
         }
     }

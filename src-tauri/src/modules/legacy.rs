@@ -1283,11 +1283,11 @@ fn import_entity_ids(
          WHERE import_id = ?1 AND entity_type = ?2 AND created_by_import = ?3
          ORDER BY entity_id",
     )?;
-    Ok(statement
+    statement
         .query_map(params![import_id, entity_type, i64::from(created)], |row| {
             row.get(0)
         })?
-        .collect::<Result<Vec<_>, _>>()?)
+        .collect::<Result<Vec<_>, _>>()
 }
 
 fn restore_quarantined_assets(paths: &[(PathBuf, PathBuf)]) {

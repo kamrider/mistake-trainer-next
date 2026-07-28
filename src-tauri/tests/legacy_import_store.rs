@@ -18,7 +18,7 @@ const ACCOUNT: &str = "0191365e-2f2f-7b89-b3b0-aaaaaaaaaaaa";
 const KEY: [u8; 32] = [41; 32];
 
 struct Fixture {
-    root: TempDir,
+    _root: TempDir,
     source: TempDir,
     blob_root: std::path::PathBuf,
     connection: rusqlite::Connection,
@@ -82,7 +82,7 @@ fn fixture() -> Fixture {
     ).unwrap();
 
     Fixture {
-        root,
+        _root: root,
         source,
         blob_root,
         connection,

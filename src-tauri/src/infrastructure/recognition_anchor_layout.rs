@@ -115,7 +115,7 @@ pub fn analyze_ocr_page(
 
     let mut regions = Vec::with_capacity(anchors.len());
     let mut pairing_tokens = Vec::with_capacity(anchors.len());
-    for (column_anchors, (left, right)) in columns.iter().zip(bounds.into_iter()) {
+    for (column_anchors, (left, right)) in columns.iter().zip(bounds) {
         for (index, (anchor, number)) in column_anchors.iter().enumerate() {
             let next_top = column_anchors.get(index + 1).map_or_else(
                 || last_question_bottom(&page.boxes, anchor, left, right, page.height),
@@ -249,19 +249,17 @@ fn anchor_columns<'a>(
     vec![left, right]
 }
 
-fn select_question_run<'a>(
-    mut anchors: Vec<(&'a LocalOcrBox, u16)>,
-) -> Vec<(&'a LocalOcrBox, u16)> {
+fn select_question_run(mut anchors: Vec<(&LocalOcrBox, u16)>) -> Vec<(&LocalOcrBox, u16)> {
     anchors.sort_by(|(left, _), (right, _)| left.top.total_cmp(&right.top));
     let mut deduplicated: Vec<(&LocalOcrBox, u16)> = Vec::with_capacity(anchors.len());
     for candidate in anchors {
-        if let Some(current) = deduplicated.last_mut() {
-            if (candidate.0.top - current.0.top).abs() <= 2.0 {
-                if candidate.0.confidence > current.0.confidence {
-                    *current = candidate;
-                }
-                continue;
+        if let Some(current) = deduplicated.last_mut()
+            && (candidate.0.top - current.0.top).abs() <= 2.0
+        {
+            if candidate.0.confidence > current.0.confidence {
+                *current = candidate;
             }
+            continue;
         }
         deduplicated.push(candidate);
     }

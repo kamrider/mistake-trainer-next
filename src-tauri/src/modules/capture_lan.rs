@@ -125,10 +125,10 @@ impl Drop for CaptureLanManager {
         if Arc::strong_count(&self.active) != 1 {
             return;
         }
-        if let Ok(mut active) = self.active.lock() {
-            if let Some(active) = active.take() {
-                let _ = active.shutdown.send(true);
-            }
+        if let Ok(mut active) = self.active.lock()
+            && let Some(active) = active.take()
+        {
+            let _ = active.shutdown.send(true);
         }
     }
 }
@@ -635,7 +635,7 @@ async fn upload_item(
             received = received
                 .checked_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX))
                 .filter(|total| *total <= MAX_ORIGINAL_UPLOAD_BYTES)
-                .ok_or_else(|| ApiError::too_large())?;
+                .ok_or_else(ApiError::too_large)?;
             output
                 .write_all(&chunk)
                 .await

@@ -360,12 +360,7 @@ fn replace_file_atomically(source: &Path, target: &Path) -> Result<(), StorageLo
             PCWSTR::from_raw(target.as_ptr()),
             MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
         )
-        .map_err(|error| {
-            StorageLocationError::File(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                error.to_string(),
-            ))
-        })
+        .map_err(|error| StorageLocationError::File(std::io::Error::other(error.to_string())))
     }
 }
 

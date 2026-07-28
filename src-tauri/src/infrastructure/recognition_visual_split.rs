@@ -373,11 +373,11 @@ fn boolean_runs(values: &[bool]) -> Vec<(usize, usize)> {
 fn merge_runs(runs: Vec<(usize, usize)>, maximum_gap: usize) -> Vec<(usize, usize)> {
     let mut merged = Vec::<(usize, usize)>::new();
     for (start, end) in runs {
-        if let Some(last) = merged.last_mut() {
-            if start.saturating_sub(last.1) <= maximum_gap {
-                last.1 = end;
-                continue;
-            }
+        if let Some(last) = merged.last_mut()
+            && start.saturating_sub(last.1) <= maximum_gap
+        {
+            last.1 = end;
+            continue;
         }
         merged.push((start, end));
     }

@@ -1,3 +1,5 @@
+#![allow(clippy::manual_async_fn)]
+
 use std::{
     future::Future,
     sync::{Arc, Mutex},

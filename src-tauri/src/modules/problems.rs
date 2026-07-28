@@ -424,15 +424,15 @@ fn read_decrypted_asset(
     decrypt_asset(&encrypted, key).map_err(ProblemUseCaseError::Crypto)
 }
 
-fn make_preview<'a>(
-    bytes: &'a [u8],
+fn make_preview(
+    bytes: &[u8],
     media_type: &str,
 ) -> Result<(&'static str, Vec<u8>), ProblemUseCaseError> {
     make_preview_with_dimension(bytes, media_type, PREVIEW_MAX_DIMENSION)
 }
 
-fn make_preview_with_dimension<'a>(
-    bytes: &'a [u8],
+fn make_preview_with_dimension(
+    bytes: &[u8],
     media_type: &str,
     max_dimension: u32,
 ) -> Result<(&'static str, Vec<u8>), ProblemUseCaseError> {

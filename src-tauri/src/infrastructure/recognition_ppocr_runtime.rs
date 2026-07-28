@@ -27,10 +27,10 @@ pub fn extract_character_dictionary(model: &[u8]) -> Result<&str, OnnxMetadataEr
         let wire = (key & 0x07) as u8;
         if field == 14 && wire == 2 {
             let entry = read_length_delimited(model, &mut offset)?;
-            if let Some(value) = parse_metadata_entry(entry)? {
-                if dictionary.replace(value).is_some() {
-                    return Err(OnnxMetadataError::InvalidCharacterMetadata);
-                }
+            if let Some(value) = parse_metadata_entry(entry)?
+                && dictionary.replace(value).is_some()
+            {
+                return Err(OnnxMetadataError::InvalidCharacterMetadata);
             }
         } else {
             skip_value(model, &mut offset, wire)?;

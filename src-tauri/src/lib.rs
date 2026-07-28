@@ -1,3 +1,11 @@
+#![allow(
+    clippy::drop_non_drop,
+    clippy::enum_variant_names,
+    clippy::manual_async_fn,
+    clippy::result_large_err,
+    clippy::too_many_arguments
+)]
+
 pub mod application;
 pub mod bindings;
 pub mod commands;

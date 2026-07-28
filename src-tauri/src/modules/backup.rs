@@ -1734,7 +1734,7 @@ fn safe_windows_component(value: &std::ffi::OsStr) -> bool {
         .split('.')
         .next()
         .unwrap_or_default()
-        .trim_end_matches(|character| character == '.' || character == ' ')
+        .trim_end_matches(['.', ' '])
         .to_ascii_uppercase();
     !matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$")
         && !matches!(

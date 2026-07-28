@@ -1058,10 +1058,7 @@ fn apply_asset_tombstone(
 }
 
 fn remove_orphan_blob(blob_root: &Path, relative_path: &str) {
-    match remove_asset_blob(blob_root, relative_path) {
-        Ok(_) => {}
-        Err(_) => {}
-    }
+    let _ = remove_asset_blob(blob_root, relative_path);
 }
 
 fn cleanup_staged(staged: &[StagedAsset], remove_final: bool) {

@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use mistake_trainer_next_lib::{
     infrastructure::database::run_migrations,
     modules::sync_store::{

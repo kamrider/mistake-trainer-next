@@ -388,7 +388,8 @@ pub async fn sync_now(
         sync_admission(true, capture_active).map_err(SyncAdmissionError::stable_code)?;
         let mut connection = connection.lock().map_err(|_| "sync_database_locked")?;
         let runtime = tokio::runtime::Runtime::new().map_err(|_| "sync_runtime_failed")?;
-        let result = runtime.block_on(async {
+
+        runtime.block_on(async {
             let pushed = push_once(
                 &mut connection,
                 client.as_ref(),
@@ -422,8 +423,7 @@ pub async fn sync_now(
                 downloaded_asset_count: pulled.downloaded_asset_count,
                 final_cursor: pulled.final_cursor as f64,
             })
-        });
-        result
+        })
     });
     match worker.await {
         Ok(Ok(report)) => {
