@@ -4,7 +4,7 @@ import { CheckCircle2, ShieldAlert, X } from '@lucide/vue'
 import { computed, onErrorCaptured, onMounted, onUnmounted, provide, ref, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import { failure, type AppResult } from '../shared/api/app-result'
-import { commands, type BackupRestoreReceipt, type ProfileOverview, type ProfileSummary, type SyncNowReport, type SystemStatus } from '../shared/api/bindings'
+import { commands, type BackupRestoreReceipt, type ProfileOverview, type ProfileSummary, type SyncNowReport, type SystemStatus, type WindowsCompatibilityStatus } from '../shared/api/bindings'
 import { normalizeAppResult } from '../shared/api/normalize-result'
 import { loadSystemStatus } from '../shared/api/system-status'
 import AppShell, { type AppPage } from './AppShell.vue'
@@ -60,6 +60,8 @@ const profileBusy = ref(false)
 const profileError = ref('')
 const profileEpoch = ref(0)
 const restoreNotice = ref<BackupRestoreReceipt>()
+const windowsCompatibility = ref<WindowsCompatibilityStatus>()
+const compatibilityNoticeDismissed = ref(false)
 const routeError = ref('')
 const routeErrorDetail = ref('')
 const mutationSyncPhases = new Set<SyncPhase>([
@@ -111,6 +113,7 @@ onErrorCaptured((error, _instance, info) => {
 onMounted(() => {
   window.addEventListener('online', handleOnline)
   document.addEventListener('visibilitychange', handleVisibilityChange)
+  void loadWindowsCompatibility()
   void loadLibraryAccess()
 })
 
@@ -324,6 +327,34 @@ const restoreNoticeCopy = computed(() => {
   return { kind: 'warning', title: '恢复包未通过最终校验', detail: `“${receipt.label}”没有替换当前资料库，请重新选择备份后再试。` }
 })
 
+const compatibilityNoticeCopy = computed(() => {
+  const status = windowsCompatibility.value
+  if (!status || status.supportLevel === 'supported' || compatibilityNoticeDismissed.value) return undefined
+  if (status.supportLevel === 'unsupported') {
+    return {
+      title: '当前 Windows 环境不在支持范围',
+      detail: `${status.summary} 建议先导出备份，再迁移到受支持的 Windows 11 x64 设备。`,
+    }
+  }
+  return {
+    title: '当前设备使用扩展兼容模式',
+    detail: `${status.summary} 核心功能可继续使用，但发布前会优先在 Windows 11 x64 上完整验证。`,
+  }
+})
+
+async function loadWindowsCompatibility() {
+  if (!desktopRuntime) return
+  try {
+    const invocation = await commands.compatibilityStatus()
+    if (invocation.status === 'error') return
+    const result = normalizeAppResult(invocation.data)
+    if (result.ok) windowsCompatibility.value = result.data
+  }
+  catch {
+    // Compatibility guidance is supplementary and must never block library access.
+  }
+}
+
 async function loadRestoreReceipt() {
   if (!desktopRuntime) return
   try {
@@ -448,6 +479,24 @@ function selectProfile(profileId: string) {
         </button>
       </aside>
     </Transition>
+    <Transition name="restore-notice">
+      <aside
+        v-if="compatibilityNoticeCopy"
+        class="restore-notice compatibility-notice warning"
+        role="alert"
+        aria-live="polite"
+      >
+        <ShieldAlert :size="21" />
+        <span><strong>{{ compatibilityNoticeCopy.title }}</strong><small>{{ compatibilityNoticeCopy.detail }}</small></span>
+        <button
+          type="button"
+          aria-label="关闭 Windows 兼容性通知"
+          @click="compatibilityNoticeDismissed = true"
+        >
+          <X :size="16" />
+        </button>
+      </aside>
+    </Transition>
     <RouterView v-slot="{ Component }">
       <Transition
         :name="pageTransitionName"
@@ -525,8 +574,9 @@ function selectProfile(profileId: string) {
 }
 .restore-notice { position: fixed; z-index: 60; top: 20px; right: 24px; display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 11px; align-items: center; width: min(440px,calc(100vw - 48px)); padding: 14px 15px; color: #fffdf7; border: 1px solid rgba(255,255,255,.28); border-radius: 15px; background: #365446; box-shadow: 0 18px 46px rgba(26,38,33,.24); }
 .restore-notice.warning { background: #874a38; }.restore-notice span { display: grid; gap: 3px; }.restore-notice strong { font-size: 13px; }.restore-notice small { color: rgba(255,253,247,.82); font-size: 11px; line-height: 1.5; }.restore-notice button { display: grid; width: 30px; height: 30px; padding: 0; place-items: center; color: inherit; border: 0; border-radius: 50%; background: rgba(255,255,255,.1); cursor: pointer; }
+.compatibility-notice { top: 20px; left: 24px; right: auto; }
 .restore-notice-enter-active,.restore-notice-leave-active { transition: opacity var(--motion-standard) var(--ease-standard), transform var(--motion-page) var(--ease-standard); }.restore-notice-enter-from,.restore-notice-leave-to { opacity: 0; transform: translateY(-10px) scale(.98); }
-@media (max-width: 760px) { .restore-notice { top: 12px; right: 12px; width: calc(100vw - 24px); } }
+@media (max-width: 760px) { .restore-notice { top: 12px; right: 12px; width: calc(100vw - 24px); } .compatibility-notice { left: 12px; right: auto; } }
 @media (prefers-reduced-motion: reduce) { .restore-notice-enter-active,.restore-notice-leave-active { transition: none; } }
 .route-loading { display: grid; min-height: 50vh; place-items: center; color: var(--ink-muted); font-size: 14px; }
 .route-error { display: grid; min-height: 50vh; padding: 52px 24px; place-items: center; align-content: center; gap: 10px; color: var(--ink-muted); text-align: center; }.route-error svg { color: var(--cinnabar); }.route-error h1 { margin: 0; color: var(--ink); font-family: var(--font-serif); font-size: 28px; }.route-error p { max-width: 420px; margin: 0; line-height: 1.7; }.route-error button { min-height: 42px; margin-top: 8px; padding: 0 18px; color: var(--paper); border: 0; border-radius: 999px; background: var(--green-deep); cursor: pointer; }

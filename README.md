@@ -28,3 +28,5 @@ See [docs/windows-capture-acceptance.md](docs/windows-capture-acceptance.md) for
 phone and desktop acceptance walkthrough.
 See [docs/cloud-regional-deployment.md](docs/cloud-regional-deployment.md) for the
 mainland network and cloud-provider boundary.
+See [docs/windows-support-policy.md](docs/windows-support-policy.md) for the
+commercial Windows support matrix, installer prerequisites, and release evidence.

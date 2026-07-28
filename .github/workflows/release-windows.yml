@@ -1,0 +1,65 @@
+name: Signed Windows Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing vX.Y.Z tag to build
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  signed-windows:
+    runs-on: windows-2025
+    timeout-minutes: 90
+    environment: production
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      WINDOWS_CERTIFICATE_THUMBPRINT: ${{ secrets.WINDOWS_CERTIFICATE_THUMBPRINT }}
+      WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.11.0
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.15.0
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.0
+      - name: Install native build prerequisite
+        shell: powershell
+        run: choco install strawberryperl --no-progress -y
+      - run: pnpm install --frozen-lockfile
+      - name: Build and verify signed installer
+        shell: powershell
+        run: .\scripts\windows-signed-release.ps1 -ReleaseTag $env:RELEASE_TAG
+      - name: Upload verified release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mistake-trainer-next-${{ env.RELEASE_TAG }}-windows-x64
+          if-no-files-found: error
+          path: |
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+            src-tauri/target/release/bundle/nsis/*-setup.exe.sha256
+      - name: Create draft GitHub release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $installer = Get-ChildItem src-tauri\target\release\bundle\nsis\*-setup.exe
+          $checksum = Get-ChildItem src-tauri\target\release\bundle\nsis\*-setup.exe.sha256
+          gh release create $env:RELEASE_TAG --draft --verify-tag --generate-notes $installer.FullName $checksum.FullName

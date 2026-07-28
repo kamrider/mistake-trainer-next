@@ -28,6 +28,7 @@ const api = vi.hoisted(() => ({
   storageMigrateSelect: vi.fn(),
   storageMigrationReceipt: vi.fn(),
   diagnosticsExport: vi.fn(),
+  compatibilityStatus: vi.fn(),
   ocrCapabilityStatus: vi.fn(),
   ocrComponentInstall: vi.fn(),
   ocrComponentRemove: vi.fn(),
@@ -80,6 +81,19 @@ describe('SettingsView', () => {
     api.storageMigrateSelect.mockResolvedValue({ status: 'ok', data: { ok: true, data: null } })
     api.storageMigrationReceipt.mockResolvedValue({ ok: true, data: null })
     api.diagnosticsExport.mockResolvedValue({ status: 'ok', data: { ok: true, data: null } })
+    api.compatibilityStatus.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      supportLevel: 'supported',
+      supported: true,
+      osName: 'Windows 11 Pro',
+      displayVersion: '24H2',
+      buildNumber: 26100,
+      updateBuildRevision: 1000,
+      processArchitecture: 'x86_64',
+      nativeArchitecture: 'x86_64',
+      webview2Version: '138.0.3351.83',
+      minimumWindowsBuild: 17763,
+      summary: '当前设备处于完整支持范围。',
+    } } })
     api.ocrCapabilityStatus.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
       assessment: {
         tier: 'balanced',
@@ -151,6 +165,24 @@ describe('SettingsView', () => {
         },
       },
     })
+  })
+
+  it('shows the detected Windows build, architecture, and WebView2 runtime', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+
+    render(SettingsView)
+
+    const card = await screen.findByRole('article', { name: 'Windows 兼容性' })
+    expect(card).toHaveTextContent('完整支持')
+    expect(card).toHaveTextContent('Windows 11 Pro')
+    expect(card).toHaveTextContent('Build 26100.1000')
+    expect(card).toHaveTextContent('x86_64')
+    expect(card).toHaveTextContent('WebView2 138.0.3351.83')
+    expect(api.compatibilityStatus).toHaveBeenCalledOnce()
   })
 
   it('keeps the two smart modes clear and reachable from the settings directory', async () => {

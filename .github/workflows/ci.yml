@@ -63,7 +63,13 @@ jobs:
         shell: powershell
         run: choco install strawberryperl --no-progress -y
       - run: pnpm install --frozen-lockfile
+      - name: Verify Windows release contract
+        shell: powershell
+        run: .\scripts\windows-release-contract.ps1
       - run: pnpm tauri build
+      - name: Smoke test installed application
+        shell: powershell
+        run: .\scripts\windows-installer-smoke.ps1
 
   supabase:
     runs-on: ubuntu-24.04

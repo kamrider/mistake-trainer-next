@@ -11,7 +11,9 @@ use specta::Type;
 use thiserror::Error;
 use uuid::Uuid;
 
-const REPORT_SCHEMA_VERSION: u32 = 1;
+use super::windows_compatibility::{WindowsCompatibilityStatus, WindowsSupportLevel};
+
+const REPORT_SCHEMA_VERSION: u32 = 2;
 const APPLICATION_NAME: &str = "Mistake Trainer Next";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Type)]
@@ -26,6 +28,7 @@ pub struct DiagnosticContext<'a> {
     pub app_version: &'a str,
     pub storage_kind: DiagnosticStorageKind,
     pub now_utc_ms: i64,
+    pub windows_compatibility: &'a WindowsCompatibilityStatus,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Type)]
@@ -82,6 +85,7 @@ struct DiagnosticApplication {
     version: String,
     platform: &'static str,
     architecture: &'static str,
+    windows: WindowsCompatibilityStatus,
 }
 
 #[derive(Debug, Serialize)]
@@ -166,13 +170,27 @@ fn build_report(
                 DiagnosticIntegrity::Failed
             }
         })?;
-    let warnings = if matches!(integrity, DiagnosticIntegrity::Failed) {
+    let mut warnings = if matches!(integrity, DiagnosticIntegrity::Failed) {
         vec![DiagnosticWarning {
             code: "library_integrity_check_failed",
         }]
     } else {
         Vec::new()
     };
+    match context.windows_compatibility.support_level {
+        WindowsSupportLevel::Unsupported => warnings.push(DiagnosticWarning {
+            code: "windows_release_unsupported",
+        }),
+        WindowsSupportLevel::Extended => warnings.push(DiagnosticWarning {
+            code: "windows_extended_support_only",
+        }),
+        WindowsSupportLevel::Supported => {}
+    }
+    if context.windows_compatibility.webview2_version.is_none() {
+        warnings.push(DiagnosticWarning {
+            code: "webview2_runtime_not_detected",
+        });
+    }
 
     Ok(DiagnosticReport {
         schema_version: REPORT_SCHEMA_VERSION,
@@ -183,6 +201,7 @@ fn build_report(
             version: context.app_version.to_owned(),
             platform: std::env::consts::OS,
             architecture: std::env::consts::ARCH,
+            windows: context.windows_compatibility.clone(),
         },
         library: DiagnosticLibrary {
             storage_kind: context.storage_kind,

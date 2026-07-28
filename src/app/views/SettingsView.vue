@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { isTauri } from '@tauri-apps/api/core'
-import { Archive, ArchiveRestore, BookOpen, CheckCircle2, CloudOff, Database, FileJson2, FolderCheck, LockKeyhole, Plus, RotateCcw, ShieldCheck, Trash2, TriangleAlert, Volume2 } from '@lucide/vue'
+import { Archive, ArchiveRestore, BookOpen, CheckCircle2, CloudOff, Database, FileJson2, FolderCheck, Laptop, LockKeyhole, Plus, RotateCcw, ShieldCheck, Trash2, TriangleAlert, Volume2 } from '@lucide/vue'
 import { computed, inject, nextTick, onMounted, ref } from 'vue'
 import { routeLocationKey, routerKey } from 'vue-router'
 import type { AppResult } from '../../shared/api/app-result'
-import { commands, type AuthStatusKind, type BackupRestoreCandidate, type BackupSummary, type CloudAuthState, type CloudBackendKind, type CloudBackendStatus, type DiagnosticExportReceipt, type LibraryAccessStatus, type ReviewFocusPolicy, type ReviewPreferences, type SettingsOverview, type StorageLocationStatus, type StorageMigrationReceipt, type SubjectPreferences } from '../../shared/api/bindings'
+import { commands, type AuthStatusKind, type BackupRestoreCandidate, type BackupSummary, type CloudAuthState, type CloudBackendKind, type CloudBackendStatus, type DiagnosticExportReceipt, type LibraryAccessStatus, type ReviewFocusPolicy, type ReviewPreferences, type SettingsOverview, type StorageLocationStatus, type StorageMigrationReceipt, type SubjectPreferences, type WindowsCompatibilityStatus } from '../../shared/api/bindings'
 import { normalizeAppResult } from '../../shared/api/normalize-result'
 import { backendKindLabel, backendStatusLabel, loadSyncBackendStatus, setSyncBackend } from '../../shared/api/sync-backend'
 import LegacyImportPanel from '../../modules/legacy/components/LegacyImportPanel.vue'
@@ -62,6 +62,7 @@ const diagnosticsReceipt = ref<DiagnosticExportReceipt>()
 const exportingDiagnostics = ref(false)
 const diagnosticsMessage = ref('')
 const diagnosticsTrigger = ref<HTMLButtonElement>()
+const windowsCompatibility = ref<WindowsCompatibilityStatus>()
 const backendStatus = ref<AppResult<CloudBackendStatus>>()
 const backendBusy = ref(false)
 const backendMessage = ref('')
@@ -463,6 +464,7 @@ async function load() {
       loadStorageStatus(),
       loadStorageMigrationReceipt(),
       loadDeviceAccessStatus(),
+      loadWindowsCompatibility(),
     ])
   }
   catch {
@@ -470,6 +472,18 @@ async function load() {
   }
   finally {
     loading.value = false
+  }
+}
+
+async function loadWindowsCompatibility() {
+  try {
+    const invocation = await commands.compatibilityStatus()
+    if (invocation.status === 'error') return
+    const result = normalizeAppResult(invocation.data)
+    if (result.ok) windowsCompatibility.value = result.data
+  }
+  catch {
+    // The settings page remains usable when this optional probe is unavailable.
   }
 }
 
@@ -925,6 +939,32 @@ onMounted(async () => {
         <div class="icon">
           <Database :size="22" />
         </div><div><p>题库状态</p><h2>{{ overview?.activeProblemCount ?? 0 }} 道活动题</h2><span><Archive :size="13" /> {{ overview?.archivedProblemCount ?? 0 }} 道归档 · <Trash2 :size="13" /> {{ overview?.trashedProblemCount ?? 0 }} 道回收站</span></div>
+      </article>
+      <article
+        v-if="windowsCompatibility"
+        class="setting-card windows-compatibility-card"
+        aria-label="Windows 兼容性"
+      >
+        <div class="icon">
+          <Laptop :size="22" />
+        </div>
+        <div>
+          <p>Windows 兼容性</p>
+          <h2>
+            {{ windowsCompatibility.supportLevel === 'supported'
+              ? '完整支持'
+              : windowsCompatibility.supportLevel === 'extended' ? '扩展兼容' : '不受支持' }}
+          </h2>
+          <span>
+            {{ windowsCompatibility.osName }}
+            · Build {{ windowsCompatibility.buildNumber }}.{{ windowsCompatibility.updateBuildRevision }}
+            · {{ windowsCompatibility.nativeArchitecture }}
+          </span>
+          <small>
+            WebView2 {{ windowsCompatibility.webview2Version ?? '未检测到' }}
+            · 最低 Build {{ windowsCompatibility.minimumWindowsBuild }}
+          </small>
+        </div>
       </article>
       <article class="setting-card">
         <div class="icon">

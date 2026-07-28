@@ -1,7 +1,8 @@
 # Release plan
 
 1. Enforce lint, typecheck, unit, integration, database, E2E and build gates.
-2. Add Windows signing, signed updater, installer metadata and rollback notes.
+2. Windows signing, installer metadata, installed self-check, and rollback notes are implemented
+   in the commercial release workflow; signed updater hosting remains future work.
 3. Verify cold start, JS budgets, 60 Hz review interactions and reduced motion.
 4. Produce diagnostics that contain correlation IDs but no secrets or image content.
 
