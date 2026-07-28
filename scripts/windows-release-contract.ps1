@@ -8,7 +8,7 @@ Set-StrictMode -Version Latest
 
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $configurationPath = Join-Path $repositoryRoot 'src-tauri\tauri.conf.json'
-$configuration = Get-Content -LiteralPath $configurationPath -Raw | ConvertFrom-Json -Depth 100
+$configuration = Get-Content -LiteralPath $configurationPath -Raw | ConvertFrom-Json
 
 function Assert-Contract {
     param(

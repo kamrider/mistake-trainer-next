@@ -82,7 +82,7 @@ try {
     Select-Object -First 1
   Assert-Release ($null -ne $signingCertificate) 'imported PFX did not contain the expected signing certificate.'
   Assert-Release ($signingCertificate.HasPrivateKey) 'expected signing certificate has no private key.'
-  @{
+  $overrideJson = @{
     bundle = @{
       windows = @{
         certificateThumbprint = $expectedThumbprint
@@ -91,7 +91,12 @@ try {
         tsp = $true
       }
     }
-  } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $overridePath -Encoding utf8NoBOM
+  } | ConvertTo-Json -Depth 5
+  [System.IO.File]::WriteAllText(
+    $overridePath,
+    $overrideJson,
+    [System.Text.UTF8Encoding]::new($false)
+  )
 
   & (Join-Path $repositoryRoot 'scripts\windows-release-contract.ps1')
 
