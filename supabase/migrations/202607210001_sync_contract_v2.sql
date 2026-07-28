@@ -407,7 +407,7 @@ begin
         nullif(v_payload ->> 'profileId', '')::uuid, v_entity_type, v_entity_id,
         (v_payload ->> 'deletedRevision')::bigint,
         to_timestamp((v_payload ->> 'purgeAfterUtcMs')::double precision / 1000), 1
-      ) on conflict on constraint tombstones_account_id_profile_id_entity_type_entity_id_key
+      ) on conflict on constraint tombstones_entity_identity
       do update set
         deleted_revision = excluded.deleted_revision,
         purge_after = excluded.purge_after,
