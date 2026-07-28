@@ -232,12 +232,30 @@ begin
       continue;
     end if;
 
-    if exists (select 1 from public.learner_profiles where id = v_entity_id and account_id <> v_account)
-       or exists (select 1 from public.assets where id = v_entity_id and account_id <> v_account)
-       or exists (select 1 from public.problems where id = v_entity_id and account_id <> v_account)
-       or exists (select 1 from public.review_events where id = v_entity_id and account_id <> v_account)
-       or exists (select 1 from public.export_snapshots where id = v_entity_id and account_id <> v_account)
-       or exists (select 1 from public.tombstones where entity_id = v_entity_id and account_id <> v_account) then
+    if exists (
+         select 1 from public.learner_profiles lp
+         where lp.id = v_entity_id and lp.account_id <> v_account
+       )
+       or exists (
+         select 1 from public.assets a
+         where a.id = v_entity_id and a.account_id <> v_account
+       )
+       or exists (
+         select 1 from public.problems p
+         where p.id = v_entity_id and p.account_id <> v_account
+       )
+       or exists (
+         select 1 from public.review_events r
+         where r.id = v_entity_id and r.account_id <> v_account
+       )
+       or exists (
+         select 1 from public.export_snapshots e
+         where e.id = v_entity_id and e.account_id <> v_account
+       )
+       or exists (
+         select 1 from public.tombstones t
+         where t.entity_id = v_entity_id and t.account_id <> v_account
+       ) then
       raise exception 'entity is not owned by the account' using errcode = '42501';
     end if;
 
