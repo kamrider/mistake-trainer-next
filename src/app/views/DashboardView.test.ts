@@ -1,0 +1,68 @@
+import { render, screen, waitFor } from '@testing-library/vue'
+import userEvent from '@testing-library/user-event'
+import { createMemoryHistory } from 'vue-router'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { createAppRouter } from '../router'
+import DashboardView from './DashboardView.vue'
+
+const api = vi.hoisted(() => ({ dashboardOverview: vi.fn() }))
+
+vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => true }))
+vi.mock('../../shared/api/bindings', () => ({ commands: api }))
+
+const dashboardData = {
+  profileName: '小树',
+  activeProblemCount: 20,
+  dueProblemCount: 6,
+  reviewedTodayCount: 2,
+  rememberedRate30Days: 0.8,
+  currentStreakDays: 4,
+  pendingCaptureBatchCount: 1,
+  pendingCaptureItemCount: 9,
+}
+
+async function renderWithRouter() {
+  const router = createAppRouter(createMemoryHistory())
+  await router.push('/')
+  await router.isReady()
+  render(DashboardView, { global: { plugins: [router] } })
+  return router
+}
+
+describe('DashboardView', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    api.dashboardOverview.mockResolvedValue({ ok: true, data: dashboardData })
+  })
+
+  it('loads the typed local overview with the browser timezone offset', async () => {
+    await renderWithRouter()
+
+    expect(await screen.findByText('小树，今天从 6 道到期题开始。')).toBeVisible()
+    expect(api.dashboardOverview).toHaveBeenCalledWith(-new Date().getTimezoneOffset())
+    expect(screen.getByText('1 个批次 · 9 张图片待整理')).toBeVisible()
+  })
+
+  it('shows a truthful failure and retries without displaying stale numbers', async () => {
+    const user = userEvent.setup()
+    api.dashboardOverview
+      .mockResolvedValueOnce({ ok: false, error: { code: 'dashboard_overview_failed', userMessage: '资料库忙碌。', retryable: true, diagnosticId: 'diag-1' } })
+      .mockResolvedValueOnce({ ok: true, data: dashboardData })
+    await renderWithRouter()
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('资料库忙碌。')
+    expect(screen.queryByText('80%')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '重新读取' }))
+    expect(await screen.findByText('小树，今天从 6 道到期题开始。')).toBeVisible()
+    expect(api.dashboardOverview).toHaveBeenCalledTimes(2)
+  })
+
+  it('routes an all-clear primary action to the real library', async () => {
+    const user = userEvent.setup()
+    api.dashboardOverview.mockResolvedValue({ ok: true, data: { ...dashboardData, dueProblemCount: 0 } })
+    const router = await renderWithRouter()
+
+    await user.click(await screen.findByRole('button', { name: '查看题库' }))
+    await waitFor(() => expect(router.currentRoute.value.name).toBe('library'))
+  })
+})

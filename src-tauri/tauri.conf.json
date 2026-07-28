@@ -27,7 +27,14 @@
     }
   },
   "bundle": {
-    "active": false,
-    "targets": "all"
+    "active": true,
+    "targets": ["nsis"],
+    "resources": {
+      "../THIRD_PARTY_NOTICES.md": "licenses/THIRD_PARTY_NOTICES.md",
+      "../third-party-licenses/Apache-2.0.txt": "licenses/Apache-2.0.txt",
+      "../third-party-licenses/heic2any-MIT.txt": "licenses/heic2any-MIT.txt",
+      "../third-party-licenses/libheif-js-LGPL-3.0.txt": "licenses/libheif-js-LGPL-3.0.txt",
+      "../third-party-licenses/libheif-LICENSE.txt": "licenses/libheif-LICENSE.txt"
+    }
   }
 }

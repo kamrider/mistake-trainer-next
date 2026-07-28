@@ -1,26 +1,45 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import {
   BookOpen,
   ChartNoAxesColumnIncreasing,
-  CircleUserRound,
   Cloud,
   Inbox,
   LayoutDashboard,
   Settings,
   SquareStack,
 } from '@lucide/vue'
+import ProfileSwitcher from '../modules/profiles/components/ProfileSwitcher.vue'
+import type { ProfileSummary } from '../shared/api/bindings'
+import type { SyncStatusCopy } from './sync-controller'
 
 export type AppPage = 'dashboard' | 'inbox' | 'library' | 'review' | 'report' | 'settings'
 
-defineProps<{
-  learnerName: string
+const props = defineProps<{
+  profiles: ProfileSummary[]
+  activeProfileId: string
+  profileBusy: boolean
+  profileError: string
   activePage: AppPage
-  systemStatus: string
+  syncStatus: SyncStatusCopy
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   navigate: [page: AppPage]
+  profileSelect: [profileId: string]
+  profileCreate: [name: string]
+  profileRename: [profileId: string, name: string]
+  profileDelete: [profileId: string, confirmationName: string]
+  profileRetry: []
 }>()
+
+function emitProfileRename(profileId: string, name: string) {
+  emit('profileRename', profileId, name)
+}
+
+function emitProfileDelete(profileId: string, confirmationName: string) {
+  emit('profileDelete', profileId, confirmationName)
+}
 
 const navigation = [
   { id: 'dashboard', label: '训练台', icon: LayoutDashboard },
@@ -30,6 +49,10 @@ const navigation = [
   { id: 'report', label: '学习报告', icon: ChartNoAxesColumnIncreasing },
   { id: 'settings', label: '设置', icon: Settings },
 ] as const
+
+const activeNavigationIndex = computed(() =>
+  Math.max(0, navigation.findIndex(item => item.id === props.activePage)),
+)
 </script>
 
 <template>
@@ -43,7 +66,18 @@ const navigation = [
         <span><strong>Mistake</strong><small>Trainer Next</small></span>
       </div>
 
-      <nav aria-label="主导航">
+      <nav
+        aria-label="主导航"
+        :style="{
+          '--active-index': activeNavigationIndex,
+          '--active-y': `${activeNavigationIndex * 48}px`,
+          '--active-x': `${activeNavigationIndex * 100}%`,
+        }"
+      >
+        <span
+          class="nav-indicator"
+          aria-hidden="true"
+        />
         <button
           v-for="item in navigation"
           :key="item.id"
@@ -64,24 +98,27 @@ const navigation = [
       <div class="rail-footer">
         <div
           class="sync-state"
+          role="status"
           aria-live="polite"
+          :data-tone="syncStatus.tone"
         >
           <Cloud
             :size="15"
             aria-hidden="true"
-          /><span>{{ systemStatus }}</span>
-        </div>
-        <button
-          class="profile-button"
-          type="button"
-          :aria-label="`当前学习档案：${learnerName}`"
-        >
-          <CircleUserRound
-            :size="21"
-            aria-hidden="true"
           />
-          <span><strong>{{ learnerName }}</strong><small>私人学习档案</small></span>
-        </button>
+          <span>{{ syncStatus.label }}</span>
+        </div>
+        <ProfileSwitcher
+          :profiles="profiles"
+          :active-profile-id="activeProfileId"
+          :busy="profileBusy"
+          :error-message="profileError"
+          @select="$emit('profileSelect', $event)"
+          @create="$emit('profileCreate', $event)"
+          @rename="emitProfileRename"
+          @delete="emitProfileDelete"
+          @retry="$emit('profileRetry')"
+        />
       </div>
     </aside>
     <section class="app-content">
@@ -98,18 +135,25 @@ const navigation = [
 .brand strong, .brand small { display: block; }
 .brand strong { font-family: Georgia, serif; font-size: 17px; letter-spacing: .02em; }
 .brand small { margin-top: 1px; color: var(--ink-muted); font-size: 10px; letter-spacing: .13em; text-transform: uppercase; }
-nav { display: grid; gap: 5px; }
-.nav-item { display: flex; gap: 12px; align-items: center; width: 100%; min-height: 43px; padding: 0 13px; color: var(--ink-muted); border: 0; border-radius: 11px; background: transparent; cursor: pointer; text-align: left; transition: color var(--motion-standard) var(--ease-standard), background var(--motion-standard) var(--ease-standard), transform var(--motion-feedback) var(--ease-standard); }
+nav { position: relative; display: grid; gap: 5px; isolation: isolate; }
+.nav-indicator { position: absolute; z-index: -1; top: 0; left: 0; width: 100%; height: 43px; border: 1px solid rgba(33,51,45,.08); border-radius: 11px; background: var(--green-soft); box-shadow: 0 8px 22px rgba(33,51,45,.06); pointer-events: none; transform: translate3d(0,var(--active-y),0); transition: transform var(--motion-page) var(--ease-standard), border-radius var(--motion-standard) var(--ease-standard); will-change: transform; }
+.nav-item { position: relative; z-index: 1; display: flex; gap: 12px; align-items: center; width: 100%; min-height: 43px; padding: 0 13px; color: var(--ink-muted); border: 0; border-radius: 11px; background: transparent; cursor: pointer; text-align: left; transition: color var(--motion-standard) var(--ease-standard), background var(--motion-standard) var(--ease-standard), transform var(--motion-feedback) var(--ease-standard); }
 .nav-item:hover { color: var(--ink); background: rgba(232,221,199,.52); }
 .nav-item:active { transform: scale(.985); }
-.nav-item.active { color: var(--green-deep); background: var(--green-soft); font-weight: 700; }
+.nav-item.active { color: var(--green-deep); background: transparent; font-weight: 700; }
+.nav-item svg { transition: transform var(--motion-standard) var(--ease-standard); }
+.nav-item.active svg { transform: scale(1.06); }
 .rail-footer { display: grid; gap: 12px; margin-top: auto; }
-.sync-state { display: flex; gap: 7px; align-items: center; padding: 0 11px; color: var(--ink-muted); font-size: 12px; }
-.sync-state svg { color: #657f70; }
-.profile-button { display: flex; gap: 10px; align-items: center; width: 100%; padding: 12px; border: 1px solid var(--line); border-radius: 13px; background: rgba(255,253,247,.66); cursor: pointer; text-align: left; }
-.profile-button strong, .profile-button small { display: block; }
-.profile-button strong { font-size: 13px; }
-.profile-button small { margin-top: 3px; color: var(--ink-muted); font-size: 10px; }
+.sync-state { display: flex; gap: 7px; align-items: center; min-height: 19px; padding: 0 11px; color: var(--ink-muted); font-size: 12px; }
+.sync-state svg { flex: 0 0 auto; color: #657f70; transition: color var(--motion-standard) var(--ease-standard), transform var(--motion-standard) var(--ease-standard), opacity var(--motion-standard) var(--ease-standard); }
+.sync-state[data-tone="active"] svg { color: var(--cinnabar); transform: scale(1.08); }
+.sync-state[data-tone="success"] { color: #557263; }
+.sync-state[data-tone="success"] svg { color: #557263; }
+.sync-state[data-tone="waiting"] { color: #8a653c; }
+.sync-state[data-tone="waiting"] svg { color: #9a7143; }
+.sync-state[data-tone="warning"] { color: #8d4635; }
+.sync-state[data-tone="warning"] svg { color: var(--cinnabar); }
 .app-content { min-width: 0; }
-@media (max-width: 760px) { .app-frame { grid-template-columns: 1fr; padding-bottom: 68px; } .side-rail { position: fixed; z-index: 20; top: auto; right: 0; bottom: 0; left: 0; height: 68px; padding: 8px 10px; border-top: 1px solid var(--line); border-right: 0; } .brand, .rail-footer { display: none; } nav { display: grid; grid-template-columns: repeat(6,1fr); } .nav-item { justify-content: center; min-height: 50px; padding: 0; } .nav-item span { display: none; } }
+@media (max-width: 760px) { .app-frame { grid-template-columns: 1fr; padding-bottom: 68px; } .side-rail { position: fixed; z-index: 20; top: auto; right: 0; bottom: 0; left: 0; height: 68px; padding: 8px 10px; border-top: 1px solid var(--line); border-right: 0; } .brand, .rail-footer { display: none; } nav { display: grid; grid-template-columns: repeat(6,1fr); } .nav-indicator { width: calc(100% / 6); height: 50px; transform: translate3d(var(--active-x),0,0); } .nav-item { justify-content: center; min-height: 50px; padding: 0; } .nav-item span { display: none; } }
+@media (prefers-reduced-motion: reduce) { .nav-indicator, .nav-item, .nav-item svg, .sync-state svg { transition: none; } .sync-state[data-tone="active"] svg { transform: none; } }
 </style>

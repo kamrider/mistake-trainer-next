@@ -15,12 +15,12 @@ describe('loadSystemStatus', () => {
   it('normalizes the generated command result inside Tauri', async () => {
     const invoke = vi.fn().mockResolvedValue({
       ok: true,
-      data: { appVersion: '0.1.0', storage: 'locked', sync: 'offline' },
+      data: { appVersion: '0.1.0', storage: 'ready', sync: 'offline' },
     })
 
     await expect(loadSystemStatus(() => true, invoke)).resolves.toEqual({
       ok: true,
-      data: { appVersion: '0.1.0', storage: 'locked', sync: 'offline' },
+      data: { appVersion: '0.1.0', storage: 'ready', sync: 'offline' },
     })
     expect(invoke).toHaveBeenCalledOnce()
   })

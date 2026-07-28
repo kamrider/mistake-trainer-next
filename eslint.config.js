@@ -8,9 +8,11 @@ export default tseslint.config(
     ignores: [
       'dist/**',
       'src-tauri/gen/**',
+      'src-tauri/mobile/vendor/**',
       'src-tauri/target/**',
       'src/shared/api/bindings.ts',
       '.tools/**',
+      '.worktrees/**',
     ],
   },
   js.configs.recommended,

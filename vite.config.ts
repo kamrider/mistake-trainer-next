@@ -13,6 +13,7 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./tests/setup.ts'],
     css: true,
+    exclude: ['.worktrees/**', 'node_modules/**', 'dist/**', 'src-tauri/**'],
   },
   build: {
     target: 'es2022',

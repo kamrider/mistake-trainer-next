@@ -17,3 +17,9 @@ src-tauri/target/
 .tools/
 .worktrees/
 Thumbs.db
+__pycache__/
+*.py[cod]
+.venv/
+labs/question-region-bakeoff/data/
+labs/question-region-bakeoff/output/
+labs/question-region-bakeoff/fixtures/images/

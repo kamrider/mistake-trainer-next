@@ -4,7 +4,104 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 
 /** Commands */
 export const commands = {
+	libraryAccessStatus: () => __TAURI_INVOKE<AppResult<LibraryAccessStatus>>("library_access_status"),
+	libraryLock: () => __TAURI_INVOKE<AppResult<LibraryAccessStatus>>("library_lock"),
+	libraryUnlock: () => __TAURI_INVOKE<AppResult<LibraryAccessStatus>>("library_unlock"),
+	backupCreate: () => typedError<AppResult<BackupSummary | null>, null>(__TAURI_INVOKE("backup_create")),
+	backupPrepareRestore: () => typedError<AppResult<BackupRestoreCandidate | null>, null>(__TAURI_INVOKE("backup_prepare_restore")),
+	backupRestore: (candidateId: string) => typedError<AppResult<boolean>, null>(__TAURI_INVOKE("backup_restore", { candidateId })),
+	backupRestoreStatus: () => __TAURI_INVOKE<AppResult<BackupRestoreReceipt | null>>("backup_restore_status"),
+	storageStatus: () => typedError<AppResult<StorageLocationStatus>, null>(__TAURI_INVOKE("storage_status")),
+	storageMigrateSelect: () => typedError<AppResult<StorageMigrationReceipt | null>, null>(__TAURI_INVOKE("storage_migrate_select")),
+	storageMigrationReceipt: () => __TAURI_INVOKE<AppResult<StorageMigrationReceipt | null>>("storage_migration_receipt"),
+	diagnosticsExport: () => typedError<AppResult<DiagnosticExportReceipt | null>, null>(__TAURI_INVOKE("diagnostics_export")),
+	ocrCapabilityStatus: () => typedError<AppResult<OcrCapabilityStatus>, null>(__TAURI_INVOKE("ocr_capability_status")),
+	ocrComponentInstall: (componentId: OcrComponentId) => typedError<AppResult<OcrComponentStatus>, null>(__TAURI_INVOKE("ocr_component_install", { componentId })),
+	ocrComponentRemove: (componentId: OcrComponentId) => typedError<AppResult<OcrComponentStatus>, null>(__TAURI_INVOKE("ocr_component_remove", { componentId })),
 	systemStatus: () => __TAURI_INVOKE<AppResult<SystemStatus>>("system_status"),
+	profileList: () => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_list"),
+	profileCreate: (input: ProfileNameInput) => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_create", { input }),
+	profileRename: (input: ProfileRenameInput) => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_rename", { input }),
+	profileSelect: (profileId: string) => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_select", { profileId }),
+	profileDelete: (input: ProfileDeleteInput) => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_delete", { input }),
+	libraryContext: () => __TAURI_INVOKE<AppResult<LibraryContext>>("library_context"),
+	problemDetail: (problemId: string) => __TAURI_INVOKE<AppResult<ProblemDetail>>("problem_detail", { problemId }),
+	problemChangeStatus: (input: ProblemStatusInput) => __TAURI_INVOKE<AppResult<number>>("problem_change_status", { input }),
+	problemList: (status: ProblemStatusFilter, search: string | null) => __TAURI_INVOKE<AppResult<ProblemSummary[]>>("problem_list", { status, search }),
+	problemUpdate: (input: ProblemUpdateInput) => __TAURI_INVOKE<AppResult<boolean>>("problem_update", { input }),
+	legacyScan: () => typedError<AppResult<LegacyImportCandidate | null>, null>(__TAURI_INVOKE("legacy_scan")),
+	legacyImport: (candidateId: string) => typedError<AppResult<LegacyImportReceipt>, null>(__TAURI_INVOKE("legacy_import", { candidateId })),
+	legacyImportList: () => __TAURI_INVOKE<AppResult<LegacyImportSummary[]>>("legacy_import_list"),
+	legacyRollback: (importId: string) => typedError<AppResult<LegacyRollbackReceipt>, null>(__TAURI_INVOKE("legacy_rollback", { importId })),
+	reviewQueue: () => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_queue"),
+	reviewCurrentProblem: () => __TAURI_INVOKE<AppResult<ProblemDetail>>("review_current_problem"),
+	reviewManualStart: (input: ReviewManualStartInput) => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_manual_start", { input }),
+	reviewExamStart: (input: ReviewExamStartInput) => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_exam_start", { input }),
+	reviewExamNavigate: (input: ReviewExamNavigateInput) => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_exam_navigate", { input }),
+	reviewExamBeginGrading: () => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_exam_begin_grading"),
+	reviewSubmit: (input: ReviewSubmitInput) => __TAURI_INVOKE<AppResult<ReviewSubmission>>("review_submit", { input }),
+	reviewFocusSelect: (input: ReviewFocusSelectInput) => __TAURI_INVOKE<AppResult<ReviewFocusState | null>>("review_focus_select", { input }),
+	reviewFocusSkip: () => __TAURI_INVOKE<AppResult<ReviewFocusState | null>>("review_focus_skip"),
+	reviewHistoryList: (input: ReviewHistoryInput) => __TAURI_INVOKE<AppResult<ReviewHistoryPage>>("review_history_list", { input }),
+	reviewHistoryDetail: (eventId: string) => __TAURI_INVOKE<AppResult<ReviewHistoryDetail>>("review_history_detail", { eventId }),
+	dashboardOverview: (utcOffsetMinutes: number) => __TAURI_INVOKE<AppResult<DashboardOverview>>("dashboard_overview", { utcOffsetMinutes }),
+	reportSummary: () => __TAURI_INVOKE<AppResult<ReportSummary>>("report_summary"),
+	settingsOverview: () => __TAURI_INVOKE<AppResult<SettingsOverview>>("settings_overview"),
+	subjectPreferencesGet: () => __TAURI_INVOKE<AppResult<SubjectPreferences>>("subject_preferences_get"),
+	subjectPreferencesSave: (input: SubjectPreferencesInput) => __TAURI_INVOKE<AppResult<SubjectPreferences>>("subject_preferences_save", { input }),
+	reviewPreferencesGet: () => __TAURI_INVOKE<AppResult<ReviewPreferences>>("review_preferences_get"),
+	reviewPreferencesSave: (input: ReviewPreferencesInput) => __TAURI_INVOKE<AppResult<ReviewPreferences>>("review_preferences_save", { input }),
+	exportCandidates: (source: ExportCandidateSource) => __TAURI_INVOKE<AppResult<ExportCandidate[]>>("export_candidates", { source }),
+	exportList: () => __TAURI_INVOKE<AppResult<ExportSnapshotSummary[]>>("export_list"),
+	exportTrashList: () => __TAURI_INVOKE<AppResult<DeletedExportSnapshotSummary[]>>("export_trash_list"),
+	exportCreate: (input: ExportCreateInput) => __TAURI_INVOKE<AppResult<ExportSnapshotSummary>>("export_create", { input }),
+	exportGenerate: (snapshotId: string) => __TAURI_INVOKE<AppResult<GeneratedExportSummary | null>>("export_generate", { snapshotId }),
+	exportDelete: (snapshotId: string) => __TAURI_INVOKE<AppResult<boolean>>("export_delete", { snapshotId }),
+	exportRestore: (snapshotId: string) => __TAURI_INVOKE<AppResult<boolean>>("export_restore", { snapshotId }),
+	captureBatchCreate: (input: CaptureBatchCreateInput) => __TAURI_INVOKE<AppResult<CaptureBatchSummary>>("capture_batch_create", { input }),
+	captureBatchList: () => __TAURI_INVOKE<AppResult<CaptureBatchSummary[]>>("capture_batch_list"),
+	captureBatchDetail: (batchId: string) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_batch_detail", { batchId }),
+	captureBatchUpdate: (input: CaptureBatchUpdateInput) => __TAURI_INVOKE<AppResult<CaptureBatchSummary>>("capture_batch_update", { input }),
+	captureBatchAssignSubject: (input: CaptureBatchSubjectInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_batch_assign_subject", { input }),
+	captureBatchDiscard: (batchId: string) => __TAURI_INVOKE<AppResult<boolean>>("capture_batch_discard", { batchId }),
+	captureImportSelect: (batchId: string) => __TAURI_INVOKE<AppResult<CaptureImportReport>>("capture_import_select", { batchId }),
+	captureImportBytes: (input: CaptureImportBytesInput) => __TAURI_INVOKE<AppResult<CaptureItemSummary>>("capture_import_bytes", { input }),
+	captureItemPreview: (batchId: string, itemId: string) => __TAURI_INVOKE<AppResult<CaptureItemPreview>>("capture_item_preview", { batchId, itemId }),
+	captureCropSourcePreview: (batchId: string, itemId: string) => __TAURI_INVOKE<AppResult<CaptureItemPreview>>("capture_crop_source_preview", { batchId, itemId }),
+	captureCropApply: (input: CaptureCropApplyInput) => __TAURI_INVOKE<AppResult<CaptureCropApplyReport>>("capture_crop_apply", { input }),
+	captureCropRevert: (input: CaptureCropRevertInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_crop_revert", { input }),
+	captureItemRemove: (batchId: string, expectedRevision: number, itemId: string) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_item_remove", { batchId, expectedRevision, itemId }),
+	captureLayoutApply: (input: CaptureLayoutInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_layout_apply", { input }),
+	captureItemMove: (input: CaptureItemMoveInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_item_move", { input }),
+	captureItemStageRole: (input: CaptureItemStageRoleInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_item_stage_role", { input }),
+	captureCardMerge: (input: CaptureCardMergeInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_card_merge", { input }),
+	captureDraftDelete: (batchId: string, expectedRevision: number, draftId: string) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_draft_delete", { batchId, expectedRevision, draftId }),
+	captureDraftUpdate: (input: CaptureDraftUpdateInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_draft_update", { input }),
+	captureCommitReady: (batchId: string, expectedRevision: number) => __TAURI_INVOKE<AppResult<CaptureCommitReport>>("capture_commit_ready", { batchId, expectedRevision }),
+	captureLanAddresses: () => __TAURI_INVOKE<AppResult<CaptureLanAddress[]>>("capture_lan_addresses"),
+	captureLanPreflight: () => __TAURI_INVOKE<AppResult<CaptureLanPreflight>>("capture_lan_preflight"),
+	captureLanFirewallRepair: () => __TAURI_INVOKE<AppResult<CaptureLanPreflight>>("capture_lan_firewall_repair"),
+	captureLanStart: (input: CaptureLanStartInput) => __TAURI_INVOKE<AppResult<CaptureLanSession>>("capture_lan_start", { input }),
+	captureLanStatus: () => __TAURI_INVOKE<AppResult<CaptureLanSession | null>>("capture_lan_status"),
+	captureLanStop: () => __TAURI_INVOKE<AppResult<boolean>>("capture_lan_stop"),
+	captureRecognitionStart: (input: CaptureRecognitionStartInput) => __TAURI_INVOKE<AppResult<CaptureRecognitionJob>>("capture_recognition_start", { input }),
+	captureRecognitionStatus: (batchId: string) => __TAURI_INVOKE<AppResult<CaptureRecognitionJob | null>>("capture_recognition_status", { batchId }),
+	captureRecognitionReview: (input: CaptureRecognitionReviewInput) => __TAURI_INVOKE<AppResult<CaptureRecognitionJob>>("capture_recognition_review", { input }),
+	captureRecognitionCancel: (jobId: string) => typedError<AppResult<CaptureRecognitionJob>, null>(__TAURI_INVOKE("capture_recognition_cancel", { jobId })),
+	captureRecognitionApply: (input: CaptureRecognitionApplyInput) => typedError<AppResult<CaptureRecognitionApplyReport>, null>(__TAURI_INVOKE("capture_recognition_apply", { input })),
+	captureRecognitionRevert: (input: CaptureRecognitionRevertInput) => typedError<AppResult<CaptureRecognitionRevertReport>, null>(__TAURI_INVOKE("capture_recognition_revert", { input })),
+	captureRecognitionLastOperation: (batchId: string) => __TAURI_INVOKE<AppResult<CaptureRecognitionOperationSummary | null>>("capture_recognition_last_operation", { batchId }),
+	syncBackendStatus: () => __TAURI_INVOKE<AppResult<CloudBackendStatus>>("sync_backend_status"),
+	syncBackendSet: (request: SetBackendRequest) => __TAURI_INVOKE<AppResult<CloudBackendStatus>>("sync_backend_set", { request }),
+	authStatusCommand: () => __TAURI_INVOKE<AppResult<CloudAuthState>>("auth_status_command"),
+	authSignUp: (request: AuthCredentials) => typedError<AppResult<CloudAuthState>, null>(__TAURI_INVOKE("auth_sign_up", { request })),
+	authSignIn: (request: AuthCredentials) => typedError<AppResult<CloudAuthState>, null>(__TAURI_INVOKE("auth_sign_in", { request })),
+	authRestore: () => typedError<AppResult<CloudAuthState>, null>(__TAURI_INVOKE("auth_restore")),
+	authDisconnect: () => typedError<AppResult<CloudAuthState>, null>(__TAURI_INVOKE("auth_disconnect")),
+	syncNow: () => typedError<AppResult<SyncNowReport>, null>(__TAURI_INVOKE("sync_now")),
+	syncConflictList: () => __TAURI_INVOKE<AppResult<SyncConflictSummary[]>>("sync_conflict_list"),
+	syncConflictResolve: (input: ResolveSyncConflictFieldInput) => __TAURI_INVOKE<AppResult<SyncConflictSummary[]>>("sync_conflict_resolve", { input }),
+	syncConflictResolveEntity: (input: ResolveSyncConflictEntityInput) => __TAURI_INVOKE<AppResult<SyncConflictSummary[]>>("sync_conflict_resolve_entity", { input }),
 };
 
 /* Types */
@@ -17,8 +114,855 @@ export type AppError = {
 
 export type AppResult<T> = ({ ok: boolean; data: T }) & { error?: never } | ({ ok: boolean; error: AppError }) & { data?: never };
 
+export type AuthCredentials = {
+	email: string,
+	password: string,
+};
+
+export type AuthStatus = {
+	kind: AuthStatusKind,
+	emailHint: string | null,
+};
+
+export type AuthStatusKind = "unconfigured" | "signed_out" | "verification_required" | "connected" | "offline";
+
+export type BackupRestoreCandidate = {
+	id: string,
+	summary: BackupSummary,
+	expiresAtUtcMs: number | null,
+};
+
+export type BackupRestoreReceipt = {
+	status: string,
+	label: string,
+	finishedAtUtcMs: number | null,
+};
+
+export type BackupSummary = {
+	formatVersion: number,
+	createdAtUtcMs: number | null,
+	assetCount: number,
+	encryptedBytes: number | null,
+	label: string,
+	readyForRestore: boolean,
+};
+
+export type CaptureBatchCreateInput = {
+	subject: string,
+};
+
+export type CaptureBatchDetail = {
+	batch: CaptureBatchSummary,
+	items: CaptureItemSummary[],
+	drafts: CaptureDraftSummary[],
+	unassignedItemIds: string[],
+};
+
+export type CaptureBatchState = "collecting" | "organizing" | "completed";
+
+export type CaptureBatchSubjectInput = {
+	batchId: string,
+	expectedRevision: number,
+	subject: string,
+};
+
+export type CaptureBatchSummary = {
+	id: string,
+	subject: string,
+	state: CaptureBatchState,
+	itemCount: number,
+	draftCount: number,
+	readyCount: number,
+	updatedAtUtcMs: number | null,
+	revision: number,
+};
+
+export type CaptureBatchUpdateInput = {
+	batchId: string,
+	expectedRevision: number,
+	subject: string,
+	finishCollecting: boolean,
+};
+
+export type CaptureCardMergeInput = {
+	batchId: string,
+	expectedRevision: number,
+	targetDraftId: string | null,
+	itemIds: string[],
+	newDraftSubject: string | null,
+};
+
+export type CaptureCommitReport = {
+	committedProblemIds: string[],
+	committedCount: number,
+	remainingDraftCount: number,
+};
+
+export type CaptureCropApplyInput = {
+	batchId: string,
+	expectedRevision: number,
+	itemId: string,
+	recipes: CaptureCropRecipe[],
+};
+
+export type CaptureCropApplyReport = {
+	detail: CaptureBatchDetail,
+	operationId: string,
+	sourceItemId: string,
+	derivedItemIds: string[],
+	derivationIds: string[],
+};
+
+export type CaptureCropRecipe = {
+	rect: NormalizedCropRect,
+	rotationDegrees: number,
+	outputMediaType: string,
+	maxEdge: number,
+	jpegQuality: number,
+};
+
+export type CaptureCropRevertInput = {
+	batchId: string,
+	expectedRevision: number,
+	derivationId: string,
+};
+
+export type CaptureDraftSummary = {
+	id: string,
+	position: number,
+	subject: string,
+	tags: string[],
+	note: string,
+	questionItemIds: string[],
+	answerItemIds: string[],
+	ready: boolean,
+};
+
+export type CaptureDraftUpdateInput = {
+	batchId: string,
+	expectedRevision: number,
+	draftId: string,
+	subject: string,
+	tags: string[],
+	note: string,
+};
+
+export type CaptureImportBytesInput = {
+	batchId: string,
+	clientUploadId: string,
+	sourceName: string,
+	sourceSequence: number | null,
+	bytes: number[],
+};
+
+export type CaptureImportReport = {
+	importedItems: CaptureItemSummary[],
+	importedCount: number,
+};
+
+export type CaptureItemMoveInput = {
+	batchId: string,
+	expectedRevision: number,
+	itemId: string,
+	targetDraftId: string | null,
+	targetRole: string | null,
+	targetPosition: number,
+};
+
+export type CaptureItemPreview = {
+	itemId: string,
+	mediaType: string,
+	dataUrl: string,
+};
+
+export type CaptureItemStageRoleInput = {
+	batchId: string,
+	expectedRevision: number,
+	itemId: string,
+	stagedRole: string,
+};
+
+export type CaptureItemSummary = {
+	id: string,
+	sourceName: string,
+	sourceSequence: number,
+	mediaType: string,
+	byteLength: number | null,
+	width: number,
+	height: number,
+	stagedRole: string,
+	draftId: string | null,
+	role: string | null,
+	position: number | null,
+	cropDerivationId: string | null,
+	cropSourceItemId: string | null,
+};
+
+export type CaptureLanAddress = {
+	label: string,
+	address: string,
+};
+
+export type CaptureLanFirewallRuleState = "ready" | "missing" | "invalid" | "unavailable";
+
+export type CaptureLanPreflight = {
+	supported: boolean,
+	activeProfiles: CaptureLanProfile[],
+	firewallRule: CaptureLanFirewallRuleState,
+	canStart: boolean,
+	needsNetworkChange: boolean,
+	needsFirewallRepair: boolean,
+};
+
+export type CaptureLanProfile = "domain" | "private" | "public";
+
+export type CaptureLanSession = {
+	sessionId: string,
+	batchId: string,
+	qrSvgDataUrl: string,
+	selectedAddress: string,
+	expiresAtUtcMs: number | null,
+	receivedItemCount: number,
+	receivedBytes: number | null,
+};
+
+export type CaptureLanStartInput = {
+	batchId: string,
+	selectedAddress: string | null,
+};
+
+export type CaptureLayoutInput = {
+	batchId: string,
+	expectedRevision: number,
+	mode: CaptureLayoutMode,
+	questionImagesPerDraft: number,
+	answerImagesPerDraft: number,
+	splitIndex: number | null,
+};
+
+export type CaptureLayoutMode = "alternating" | "split" | "questions_only" | "manual";
+
+export type CaptureRecognitionApplyInput = {
+	batchId: string,
+	jobId: string,
+	expectedRevision: number,
+	acceptedSuggestionIds: string[],
+};
+
+export type CaptureRecognitionApplyReport = {
+	operationId: string,
+	appliedSuggestionCount: number,
+	createdDraftCount: number,
+	createdItemCount: number,
+	unmatchedAnswerCount: number,
+	staleSuggestionCount: number,
+	detail: CaptureBatchDetail,
+};
+
+export type CaptureRecognitionDecision = "accepted" | "rejected";
+
+export type CaptureRecognitionJob = {
+	id: string,
+	batchId: string,
+	state: CaptureRecognitionJobState,
+	totalItems: number,
+	processedItems: number,
+	suggestions: CaptureRecognitionSuggestion[],
+	createdAtUtcMs: number | null,
+	updatedAtUtcMs: number | null,
+};
+
+export type CaptureRecognitionJobState = "queued" | "running" | "review" | "applied" | "cancelled" | "failed";
+
+export type CaptureRecognitionOperationSummary = {
+	operationId: string,
+	batchId: string,
+	afterRevision: number,
+	createdItemCount: number,
+	reverted: boolean,
+};
+
+export type CaptureRecognitionReasonCode = "clear_question_anchor" | "matched_question_answer_anchor" | "consistent_reading_order" | "weak_anchor" | "ambiguous_columns" | "possible_content_cut";
+
+export type CaptureRecognitionRegionProposal = {
+	rect: NormalizedCropRect,
+	role: CaptureRecognitionRole,
+	groupSlot: number | null,
+	confidenceBasisPoints: number,
+};
+
+export type CaptureRecognitionRevertInput = {
+	batchId: string,
+	operationId: string,
+	expectedRevision: number,
+};
+
+export type CaptureRecognitionRevertReport = {
+	operationId: string,
+	revertedItemCount: number,
+	detail: CaptureBatchDetail,
+};
+
+export type CaptureRecognitionReviewBand = "high" | "review" | "low";
+
+export type CaptureRecognitionReviewInput = {
+	jobId: string,
+	suggestionId: string,
+	decision: CaptureRecognitionDecision,
+	editedRegions: CaptureRecognitionRegionProposal[] | null,
+};
+
+export type CaptureRecognitionRole = "question" | "answer";
+
+export type CaptureRecognitionStartInput = {
+	batchId: string,
+	itemIds: string[],
+};
+
+export type CaptureRecognitionSuggestion = {
+	id: string,
+	itemId: string,
+	regions: CaptureRecognitionRegionProposal[],
+	confidenceBasisPoints: number,
+	reviewBand: CaptureRecognitionReviewBand,
+	state: CaptureRecognitionSuggestionState,
+	reasonCodes: CaptureRecognitionReasonCode[],
+};
+
+export type CaptureRecognitionSuggestionState = "proposed" | "accepted" | "rejected" | "stale";
+
+export type CloudAuthState = {
+	configured: boolean,
+	status: AuthStatus,
+};
+
+/**
+ *  The remote implementation used for optional synchronization.
+ * 
+ *  The product remains usable without a remote provider. Keeping this choice in
+ *  Rust prevents the Vue layer from depending on a particular cloud vendor.
+ */
+export type CloudBackendKind = "local-only" | "supabase" | "tencent";
+
+/**
+ *  The configuration/status exposed to the desktop settings UI.
+ * 
+ *  `configured` means that the provider has the minimum build-time endpoint
+ *  and public credential. Supabase is backed by the authenticated Tauri sync
+ *  commands; Tencent remains a reserved provider in v1.
+ */
+export type CloudBackendStatus = {
+	kind: CloudBackendKind,
+	configured: boolean,
+	ready: boolean,
+	syncEnabled: boolean,
+};
+
+export type CurrentScheduleProjection = {
+	dueAtUtcMs: number | null,
+	stability: number | null,
+	difficulty: number | null,
+	lastReviewedAtUtcMs: number | null,
+	algorithmVersion: string,
+	parameterVersion: string,
+};
+
+export type DailyActivity = {
+	dayStartUtcMs: number | null,
+	reviewCount: number,
+	durationMs: number | null,
+};
+
+export type DashboardOverview = {
+	profileName: string,
+	activeProblemCount: number,
+	dueProblemCount: number,
+	reviewedTodayCount: number,
+	rememberedRate30Days: number | null,
+	currentStreakDays: number,
+	pendingCaptureBatchCount: number,
+	pendingCaptureItemCount: number,
+};
+
+export type DeletedExportSnapshotSummary = {
+	snapshot: ExportSnapshotSummary,
+	deletedAtUtcMs: number | null,
+	purgeAfterUtcMs: number | null,
+};
+
+export type DiagnosticExportReceipt = {
+	reportId: string,
+	fileLabel: string,
+	generatedAtUtcMs: number | null,
+	warningCount: number,
+};
+
+export type ExportCandidate = {
+	id: string,
+	subject: string,
+	note: string,
+	questionAssetCount: number,
+	answerAssetCount: number,
+	dueAtUtcMs: number | null,
+	reviewCount: number,
+};
+
+export type ExportCandidateSource = "due" | "latest_review_session" | "all_active";
+
+export type ExportCreateInput = {
+	title: string,
+	problemIds: string[],
+	layout: ExportLayout,
+};
+
+export type ExportLayout = "question_answer_alternating" | "questions_then_answers" | "original_image_folder";
+
+export type ExportSnapshotSummary = {
+	id: string,
+	title: string,
+	problemCount: number,
+	layout: ExportLayout,
+	createdAtUtcMs: number | null,
+};
+
+export type FsrsRating = "again" | "hard" | "good" | "easy";
+
+export type GeneratedExportSummary = {
+	snapshotId: string,
+	outputName: string,
+	problemCount: number,
+	layout: ExportLayout,
+};
+
+export type JsonValue = { kind: "null" } | { kind: "bool"; value: boolean } | { kind: "number"; value: string } | { kind: "string"; value: string } | { kind: "array"; value: JsonValue[] } | { kind: "object"; value: { [key in string]: JsonValue } };
+
+export type LegacyImportCandidate = {
+	candidateId: string,
+	report: LegacyScanReport,
+	problemCount: number,
+	expiresAtUtcMs: number | null,
+};
+
+export type LegacyImportReceipt = {
+	importId: string,
+	memberCount: number,
+	problemCount: number,
+	assetCount: number,
+	reviewCount: number,
+	frozenProblemCount: number,
+	createdAtUtcMs: number | null,
+};
+
+export type LegacyImportSummary = {
+	importId: string,
+	memberCount: number,
+	problemCount: number,
+	assetCount: number,
+	reviewCount: number,
+	status: string,
+	createdAtUtcMs: number | null,
+	rolledBackAtUtcMs: number | null,
+};
+
+export type LegacyIssue = {
+	code: string,
+	member: string,
+	recordId: string | null,
+	detail: string,
+};
+
+export type LegacyRollbackReceipt = {
+	importId: string,
+	removedProblemCount: number,
+	removedProfileCount: number,
+	removedAssetCount: number,
+	preservedEntityCount: number,
+	rolledBackAtUtcMs: number | null,
+};
+
+export type LegacyScanReport = {
+	members: number,
+	metadataRecords: number,
+	existingAssets: number,
+	trainingRecords: number,
+	frozenRecords: number,
+	duplicateAssets: number,
+	truncated: boolean,
+	issues: LegacyIssue[],
+};
+
+export type LibraryAccessStatus = {
+	locked: boolean,
+	trustedWindowsAccount: boolean,
+};
+
+export type LibraryContext = {
+	profileId: string,
+	profileName: string,
+	storage: string,
+};
+
+export type NormalizedCropRect = {
+	x: number | null,
+	y: number | null,
+	width: number | null,
+	height: number | null,
+};
+
+export type OcrCapabilityStatus = {
+	assessment: OcrHardwareAssessment,
+	components: OcrComponentStatus[],
+	recognitionFeature: OcrRecognitionFeatureStatus,
+	automaticRecognitionEnabled: boolean,
+};
+
+export type OcrComponentId = "ppocrv6_small" | "ppocrv6_medium" | "opencv_preprocess";
+
+export type OcrComponentState = "not_installed" | "installed" | "corrupt" | "unavailable";
+
+export type OcrComponentStatus = {
+	id: OcrComponentId,
+	displayName: string,
+	description: string,
+	state: OcrComponentState,
+	downloadBytes: number | null,
+	installedBytes: number | null,
+	recommended: boolean,
+	installAllowed: boolean,
+	statusDetail: string,
+	sourceLabel: string,
+	licenseLabel: string,
+};
+
+export type OcrHardwareAssessment = {
+	tier: OcrHardwareTier,
+	logicalProcessorCount: number,
+	totalMemoryMb: number | null,
+	availableComponentStorageMb: number | null,
+	avx2Supported: boolean,
+	estimatedSuitable: boolean,
+	recommendedComponentId: OcrComponentId | null,
+	summary: string,
+};
+
+export type OcrHardwareTier = "manual_only" | "basic" | "balanced" | "performance";
+
+export type OcrRecognitionFeatureState = "evidence_gate_pending" | "runtime_missing" | "model_missing" | "ready";
+
+export type OcrRecognitionFeatureStatus = {
+	state: OcrRecognitionFeatureState,
+	requiredComponentId: OcrComponentId,
+	detail: string,
+};
+
+export type ProblemAssetPreview = {
+	id: string,
+	role: string,
+	position: number,
+	mediaType: string,
+	dataUrl: string,
+};
+
+export type ProblemDetail = {
+	id: string,
+	subject: string,
+	note: string,
+	tags: string[],
+	status: string,
+	timeLimitSeconds: number | null,
+	updatedAtUtcMs: number | null,
+	assets: ProblemAssetPreview[],
+};
+
+export type ProblemStatusFilter = "active" | "archived" | "trashed";
+
+export type ProblemStatusInput = {
+	problemIds: string[],
+	targetStatus: ProblemStatusFilter,
+};
+
+export type ProblemSummary = {
+	id: string,
+	subject: string,
+	note: string,
+	tags: string[],
+	status: string,
+	questionAssetCount: number,
+	answerAssetCount: number,
+	questionPreviewDataUrl: string | null,
+	updatedAtUtcMs: number | null,
+};
+
+export type ProblemUpdateInput = {
+	problemId: string,
+	subject: string,
+	note: string,
+	tags: string[],
+	timeLimitSeconds: number | null,
+};
+
+export type ProfileDeleteInput = {
+	profileId: string,
+	confirmationName: string,
+};
+
+export type ProfileNameInput = {
+	name: string,
+};
+
+export type ProfileOverview = {
+	activeProfileId: string,
+	profiles: ProfileSummary[],
+};
+
+export type ProfileRenameInput = {
+	profileId: string,
+	name: string,
+};
+
+export type ProfileSummary = {
+	id: string,
+	name: string,
+	createdAtUtcMs: number | null,
+	updatedAtUtcMs: number | null,
+	revision: number,
+};
+
+export type ReportSummary = {
+	activeProblemCount: number,
+	dueProblemCount: number,
+	reviewCount: number,
+	rememberedRate: number | null,
+	totalDurationMs: number | null,
+	currentStreakDays: number,
+	dailyActivity: DailyActivity[],
+	subjectActivity: SubjectActivity[],
+};
+
+export type ResolveSyncConflictEntityInput = {
+	entityType: string,
+	entityId: string,
+	choice: SyncConflictChoice,
+};
+
+export type ResolveSyncConflictFieldInput = {
+	conflictId: string,
+	choice: SyncConflictChoice,
+};
+
+export type ReviewExamNavigateInput = {
+	position: number,
+};
+
+export type ReviewExamStartInput = {
+	problemIds: string[],
+};
+
+export type ReviewFocusPolicy = "off" | "session_start" | "every_10";
+
+export type ReviewFocusSelectInput = {
+	number: number,
+	elapsedMs: number,
+};
+
+export type ReviewFocusState = {
+	kind: string,
+	roundIndex: number,
+	numbers: number[],
+	nextNumber: number,
+	elapsedMs: number,
+};
+
+export type ReviewHistoryDetail = {
+	eventId: string,
+	subject: string,
+	note: string,
+	problemStatus: string,
+	rating: FsrsRating,
+	durationMs: number | null,
+	occurredAtUtcMs: number | null,
+	algorithmVersion: string,
+	parameterVersion: string,
+	algorithmIsCurrent: boolean,
+	parametersAreCurrent: boolean,
+	isCurrentDevice: boolean,
+	reviewOrdinal: number,
+	problemReviewCount: number,
+	currentSchedule: CurrentScheduleProjection | null,
+};
+
+export type ReviewHistoryInput = {
+	range: ReviewHistoryRange,
+	rating: FsrsRating | null,
+	subject: string | null,
+	search: string,
+	cursor: string | null,
+	limit: number,
+};
+
+export type ReviewHistoryItem = {
+	eventId: string,
+	subject: string,
+	notePreview: string,
+	problemStatus: string,
+	rating: FsrsRating,
+	durationMs: number | null,
+	occurredAtUtcMs: number | null,
+	algorithmVersion: string,
+	parameterVersion: string,
+	algorithmIsCurrent: boolean,
+	parametersAreCurrent: boolean,
+};
+
+export type ReviewHistoryPage = {
+	items: ReviewHistoryItem[],
+	nextCursor: string | null,
+	totalCount: number,
+	availableSubjects: string[],
+};
+
+export type ReviewHistoryRange = "all" | "7_days" | "30_days";
+
+export type ReviewManualStartInput = {
+	problemIds: string[],
+};
+
+export type ReviewPreferences = {
+	focusPolicy: ReviewFocusPolicy,
+};
+
+export type ReviewPreferencesInput = {
+	focusPolicy: ReviewFocusPolicy,
+};
+
+export type ReviewQueueItem = {
+	problemId: string,
+	dueAtUtcMs: number | null,
+	reviewCount: number,
+};
+
+export type ReviewQueueOverview = {
+	sessionId: string | null,
+	mode: string,
+	resumed: boolean,
+	completedCount: number,
+	totalCount: number,
+	examPhase: string | null,
+	examQuestionIndex: number,
+	examCorrectCount: number,
+	examWrongCount: number,
+	focus: ReviewFocusState | null,
+	items: ReviewQueueItem[],
+};
+
+export type ReviewSubmission = {
+	eventId: string,
+	problemId: string,
+	rating: string,
+	dueAtUtcMs: number | null,
+	stability: number | null,
+	difficulty: number | null,
+	algorithmVersion: string,
+	parameterVersion: string,
+	focus: ReviewFocusState | null,
+};
+
+export type ReviewSubmitInput = {
+	problemId: string,
+	rating: FsrsRating,
+	durationMs: number,
+};
+
+/**
+ *  DTO used by the generated command client when changing the sync provider.
+ *  Keeping this as a named request leaves room for non-secret provider options
+ *  (for example a region) without exposing credentials to the Vue layer.
+ */
+export type SetBackendRequest = {
+	kind: CloudBackendKind,
+};
+
+export type SettingsOverview = {
+	activeProblemCount: number,
+	archivedProblemCount: number,
+	trashedProblemCount: number,
+	pendingOperationCount: number,
+	failedOperationCount: number,
+	unresolvedConflictCount: number,
+	localEncryptionReady: boolean,
+	cloudSyncConfigured: boolean,
+};
+
+export type StorageLocationKind = "default" | "custom";
+
+export type StorageLocationStatus = {
+	kind: StorageLocationKind,
+	locationLabel: string,
+	databaseBytes: number | null,
+	assetBytes: number | null,
+	migrationPending: boolean,
+};
+
+export type StorageMigrationOutcome = "scheduled" | "moved" | "rolled_back" | "cleanup_required";
+
+export type StorageMigrationReceipt = {
+	outcome: StorageMigrationOutcome,
+	destinationLabel: string,
+	copiedAssetCount: number,
+	copiedBytes: number | null,
+};
+
+export type SubjectActivity = {
+	subject: string,
+	problemCount: number,
+	reviewCount: number,
+};
+
+export type SubjectPreferences = {
+	enabledSubjects: string[],
+	customSubjects: string[],
+	captureSoundEnabled: boolean,
+};
+
+export type SubjectPreferencesInput = {
+	enabledSubjects: string[],
+	customSubjects: string[],
+	captureSoundEnabled: boolean,
+};
+
+export type SyncConflictChoice = "local" | "remote";
+
+export type SyncConflictSummary = {
+	id: string,
+	entityType: string,
+	entityId: string,
+	entityLabel: string,
+	fieldName: string,
+	localValue: JsonValue,
+	remoteValue: JsonValue,
+	createdAtUtcMs: number | null,
+};
+
+export type SyncNowReport = {
+	pushedOperationCount: number,
+	uploadedAssetCount: number,
+	pulledChangeCount: number,
+	downloadedAssetCount: number,
+	finalCursor: number | null,
+};
+
 export type SystemStatus = {
 	appVersion: string,
 	storage: string,
 	sync: string,
 };
+
+/* Tauri Specta runtime */
+async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {
+    try {
+        return { status: "ok", data: await result };
+    } catch (e) {
+        if (e instanceof Error) throw e;
+        return { status: "error", error: e as any };
+    }
+}
