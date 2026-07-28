@@ -2,7 +2,10 @@ use std::{fs, sync::Mutex};
 
 use mistake_trainer_next_lib::{
     infrastructure::database::{open_encrypted_database, run_migrations},
-    modules::diagnostics::{DiagnosticContext, DiagnosticStorageKind, export_diagnostic_report},
+    modules::{
+        diagnostics::{DiagnosticContext, DiagnosticStorageKind, export_diagnostic_report},
+        windows_compatibility::{WindowsCompatibilityFacts, assess_windows_compatibility},
+    },
 };
 use rusqlite::params;
 use serde_json::Value;
@@ -18,6 +21,19 @@ const TAG_SENTINEL: &str = "SECRET_TAG_29431e";
 const PATH_SENTINEL: &str = "SECRET_PATH_13d4b1.jpeg";
 const PAYLOAD_SENTINEL: &str = "SECRET_PAYLOAD_b650cf";
 const FILE_SENTINEL: &str = "SECRET_FILENAME_1ad02e.jpg";
+
+fn supported_windows()
+-> mistake_trainer_next_lib::modules::windows_compatibility::WindowsCompatibilityStatus {
+    assess_windows_compatibility(WindowsCompatibilityFacts {
+        os_name: "Windows 11 Pro".to_owned(),
+        display_version: "24H2".to_owned(),
+        build_number: 26_100,
+        update_build_revision: 4_200,
+        process_architecture: "x86_64".to_owned(),
+        native_architecture: "x86_64".to_owned(),
+        webview2_version: Some("140.0.0.0".to_owned()),
+    })
+}
 
 #[test]
 fn report_contains_only_fixed_aggregates_and_no_user_content() {
@@ -127,6 +143,7 @@ fn report_contains_only_fixed_aggregates_and_no_user_content() {
         )
         .unwrap();
 
+    let windows = supported_windows();
     let receipt = export_diagnostic_report(
         &Mutex::new(connection),
         destination.path(),
@@ -134,6 +151,7 @@ fn report_contains_only_fixed_aggregates_and_no_user_content() {
             app_version: "0.1.0-test",
             storage_kind: DiagnosticStorageKind::Custom,
             now_utc_ms: NOW_UTC_MS,
+            windows_compatibility: &windows,
         },
     )
     .unwrap();
@@ -154,7 +172,7 @@ fn report_contains_only_fixed_aggregates_and_no_user_content() {
 
     let bytes = fs::read(destination.path().join(&receipt.file_label)).unwrap();
     let report: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(report["schemaVersion"], 1);
+    assert_eq!(report["schemaVersion"], 2);
     assert_eq!(report["reportId"], receipt.report_id);
     assert_eq!(report["generatedAtUtcMs"], NOW_UTC_MS);
     assert_eq!(report["application"]["name"], "Mistake Trainer Next");
@@ -163,6 +181,15 @@ fn report_contains_only_fixed_aggregates_and_no_user_content() {
     assert_eq!(
         report["application"]["architecture"],
         std::env::consts::ARCH
+    );
+    assert_eq!(
+        report["application"]["windows"]["supportLevel"],
+        "supported"
+    );
+    assert_eq!(report["application"]["windows"]["buildNumber"], 26_100);
+    assert_eq!(
+        report["application"]["windows"]["webview2Version"],
+        "140.0.0.0"
     );
     assert_eq!(report["library"]["storageKind"], "custom");
     assert_eq!(report["library"]["schemaVersion"], 15);
@@ -211,6 +238,7 @@ fn report_rejects_a_non_directory_destination() {
         open_encrypted_database(&library.path().join("library.db"), "diagnostic-key").unwrap();
     run_migrations(&mut connection).unwrap();
 
+    let windows = supported_windows();
     let error = export_diagnostic_report(
         &Mutex::new(connection),
         &not_a_directory,
@@ -218,10 +246,52 @@ fn report_rejects_a_non_directory_destination() {
             app_version: "0.1.0-test",
             storage_kind: DiagnosticStorageKind::Default,
             now_utc_ms: NOW_UTC_MS,
+            windows_compatibility: &windows,
         },
     )
     .unwrap_err();
 
     assert_eq!(error.code(), "invalid_destination");
     assert!(destination.path().join("plain-file").is_file());
+}
+
+#[test]
+fn report_uses_only_fixed_windows_compatibility_warning_codes() {
+    let library = tempdir().unwrap();
+    let destination = tempdir().unwrap();
+    let mut connection =
+        open_encrypted_database(&library.path().join("library.db"), "diagnostic-key").unwrap();
+    run_migrations(&mut connection).unwrap();
+    let windows = assess_windows_compatibility(WindowsCompatibilityFacts {
+        os_name: "Windows".to_owned(),
+        display_version: "unknown".to_owned(),
+        build_number: 17_000,
+        update_build_revision: 0,
+        process_architecture: "x86".to_owned(),
+        native_architecture: "x86".to_owned(),
+        webview2_version: None,
+    });
+
+    let receipt = export_diagnostic_report(
+        &Mutex::new(connection),
+        destination.path(),
+        DiagnosticContext {
+            app_version: "0.1.0-test",
+            storage_kind: DiagnosticStorageKind::Default,
+            now_utc_ms: NOW_UTC_MS,
+            windows_compatibility: &windows,
+        },
+    )
+    .unwrap();
+    let report: Value =
+        serde_json::from_slice(&fs::read(destination.path().join(receipt.file_label)).unwrap())
+            .unwrap();
+
+    assert_eq!(
+        report["warnings"],
+        serde_json::json!([
+            { "code": "windows_release_unsupported" },
+            { "code": "webview2_runtime_not_detected" }
+        ])
+    );
 }

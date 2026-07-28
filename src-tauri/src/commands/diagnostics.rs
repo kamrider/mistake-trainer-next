@@ -14,6 +14,7 @@ use crate::{
         DiagnosticContext, DiagnosticError, DiagnosticExportReceipt, DiagnosticStorageKind,
         export_diagnostic_report,
     },
+    modules::windows_compatibility::current_windows_compatibility,
 };
 
 #[tauri::command]
@@ -54,6 +55,7 @@ pub async fn diagnostics_export(
         } else {
             DiagnosticStorageKind::Default
         };
+        let windows_compatibility = current_windows_compatibility();
         export_diagnostic_report(
             &connection,
             &selected,
@@ -61,6 +63,7 @@ pub async fn diagnostics_export(
                 app_version: env!("CARGO_PKG_VERSION"),
                 storage_kind,
                 now_utc_ms: current_utc_millis(),
+                windows_compatibility: &windows_compatibility,
             },
         )
         .map(Some)

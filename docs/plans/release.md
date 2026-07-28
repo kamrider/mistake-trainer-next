@@ -1,7 +1,8 @@
 # Release plan
 
 1. Enforce lint, typecheck, unit, integration, database, E2E and build gates.
-2. Add Windows signing, signed updater, installer metadata and rollback notes.
+2. Windows signing, installer metadata, installed self-check, and rollback notes are implemented
+   in the commercial release workflow; signed updater hosting remains future work.
 3. Verify cold start, JS budgets, 60 Hz review interactions and reduced motion.
 4. Produce diagnostics that contain correlation IDs but no secrets or image content.
 
@@ -21,8 +22,11 @@
 
 ## Remaining release acceptance
 
-- Configure Windows code signing, signed updates, installer metadata, and rollback notes.
+- Provision the production code-signing secrets and execute the fail-closed x64/ARM64 release
+  workflow on a real version tag.
+- Add signed automatic-updater hosting after the installer release channel is operational.
 - Measure cold start and 60 Hz review/capture interactions on the Windows reference machine.
-- Run clean-machine installation, upgrade, uninstall, and rollback smoke tests.
+- Complete the manual clean-machine, upgrade, uninstall, rollback, DPI, antivirus and native
+  Windows ARM64 matrix from the Windows release runbook.
 
-Exit: a signed Windows v1 installer passes clean-machine smoke tests.
+Exit: signed Windows v1 x64 and ARM64 installers pass the documented release matrix.

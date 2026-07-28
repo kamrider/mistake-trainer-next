@@ -14,7 +14,7 @@ pub mod infrastructure;
 pub mod modules;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
+pub fn run() -> tauri::Result<()> {
     use tauri::Manager as _;
 
     let specta = bindings::builder();
@@ -25,7 +25,17 @@ pub fn run() {
     )
     .expect("failed to export TypeScript bindings");
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(windows)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    }));
+
+    builder
         .invoke_handler(specta.invoke_handler())
         .setup(move |app| {
             let control_root = app.path().app_data_dir()?;
@@ -118,7 +128,6 @@ pub fn run() {
             }
         })
         .run(tauri::generate_context!())
-        .expect("failed to run Mistake Trainer Next");
 }
 
 fn current_utc_millis() -> i64 {

@@ -94,6 +94,7 @@ pub fn builder() -> Builder<tauri::Wry> {
         commands::capture_recognition::capture_recognition_apply,
         commands::capture_recognition::capture_recognition_revert,
         commands::capture_recognition::capture_recognition_last_operation,
+        commands::compatibility::compatibility_status,
         commands::sync::sync_backend_status,
         commands::sync::sync_backend_set,
         commands::sync::auth_status_command,

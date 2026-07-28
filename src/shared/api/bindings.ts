@@ -91,6 +91,7 @@ export const commands = {
 	captureRecognitionApply: (input: CaptureRecognitionApplyInput) => typedError<AppResult<CaptureRecognitionApplyReport>, null>(__TAURI_INVOKE("capture_recognition_apply", { input })),
 	captureRecognitionRevert: (input: CaptureRecognitionRevertInput) => typedError<AppResult<CaptureRecognitionRevertReport>, null>(__TAURI_INVOKE("capture_recognition_revert", { input })),
 	captureRecognitionLastOperation: (batchId: string) => __TAURI_INVOKE<AppResult<CaptureRecognitionOperationSummary | null>>("capture_recognition_last_operation", { batchId }),
+	compatibilityStatus: () => typedError<AppResult<WindowsCompatibilityStatus>, null>(__TAURI_INVOKE("compatibility_status")),
 	syncBackendStatus: () => __TAURI_INVOKE<AppResult<CloudBackendStatus>>("sync_backend_status"),
 	syncBackendSet: (request: SetBackendRequest) => __TAURI_INVOKE<AppResult<CloudBackendStatus>>("sync_backend_set", { request }),
 	authStatusCommand: () => __TAURI_INVOKE<AppResult<CloudAuthState>>("auth_status_command"),
@@ -956,6 +957,22 @@ export type SystemStatus = {
 	storage: string,
 	sync: string,
 };
+
+export type WindowsCompatibilityStatus = {
+	supportLevel: WindowsSupportLevel,
+	supported: boolean,
+	osName: string,
+	displayVersion: string,
+	buildNumber: number,
+	updateBuildRevision: number,
+	processArchitecture: string,
+	nativeArchitecture: string,
+	webview2Version: string | null,
+	minimumWindowsBuild: number,
+	summary: string,
+};
+
+export type WindowsSupportLevel = "supported" | "extended" | "unsupported";
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {
