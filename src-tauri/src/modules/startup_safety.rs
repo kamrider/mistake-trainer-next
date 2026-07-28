@@ -1,10 +1,10 @@
 use std::{
     fs::{self, OpenOptions},
-    io::Write as _,
+    io::{Read as _, Write as _},
     path::{Path, PathBuf},
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::windows_compatibility::{
     WindowsCompatibilityStatus, WindowsSupportLevel, current_windows_compatibility,
@@ -12,14 +12,23 @@ use super::windows_compatibility::{
 
 pub const STARTUP_FAILURE_FILE_NAME: &str = "startup-failure.json";
 pub const SELF_CHECK_SCHEMA_VERSION: u32 = 2;
+const STARTUP_FAILURE_SCHEMA_VERSION: u32 = 1;
+const MAX_STARTUP_FAILURE_BYTES: u64 = 4_096;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StartupFailureReason {
+    TauriStartupFailed,
+    RustPanic,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StartupFailureRecord {
     pub schema_version: u32,
     pub application_version: String,
     pub occurred_at_utc_ms: i64,
-    pub reason_code: &'static str,
+    pub reason_code: StartupFailureReason,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -44,6 +53,7 @@ pub fn write_startup_failure_record(
     application_data_root: &Path,
     application_version: &str,
     occurred_at_utc_ms: i64,
+    reason_code: StartupFailureReason,
 ) -> std::io::Result<PathBuf> {
     fs::create_dir_all(application_data_root)?;
     let final_path = application_data_root.join(STARTUP_FAILURE_FILE_NAME);
@@ -53,10 +63,10 @@ pub fn write_startup_failure_record(
         occurred_at_utc_ms
     ));
     let record = StartupFailureRecord {
-        schema_version: 1,
+        schema_version: STARTUP_FAILURE_SCHEMA_VERSION,
         application_version: application_version.to_owned(),
         occurred_at_utc_ms,
-        reason_code: "tauri_startup_failed",
+        reason_code,
     };
     let bytes = serde_json::to_vec_pretty(&record).map_err(std::io::Error::other)?;
 
@@ -68,6 +78,48 @@ pub fn write_startup_failure_record(
         let _ = fs::remove_file(&temporary_path);
     }
     result.map(|()| final_path)
+}
+
+pub fn read_startup_failure_record(
+    application_data_root: &Path,
+) -> std::io::Result<Option<StartupFailureRecord>> {
+    let path = application_data_root.join(STARTUP_FAILURE_FILE_NAME);
+    let input = match fs::File::open(path) {
+        Ok(input) => input,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    if input.metadata()?.len() > MAX_STARTUP_FAILURE_BYTES {
+        return Ok(None);
+    }
+
+    let mut bytes = Vec::new();
+    input
+        .take(MAX_STARTUP_FAILURE_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_STARTUP_FAILURE_BYTES {
+        return Ok(None);
+    }
+    let Ok(record) = serde_json::from_slice::<StartupFailureRecord>(&bytes) else {
+        return Ok(None);
+    };
+    if record.schema_version != STARTUP_FAILURE_SCHEMA_VERSION {
+        return Ok(None);
+    }
+    Ok(Some(record))
+}
+
+pub fn install_panic_recording_hook(application_data_root: PathBuf, application_version: String) {
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        let _ = write_startup_failure_record(
+            &application_data_root,
+            &application_version,
+            current_utc_millis(),
+            StartupFailureReason::RustPanic,
+        );
+        previous_hook(panic_info);
+    }));
 }
 
 pub fn write_windows_self_check(
@@ -112,6 +164,13 @@ pub fn default_application_data_root() -> Option<PathBuf> {
     std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .map(|root| root.join("com.mistaketrainer.next"))
+}
+
+fn current_utc_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or_default()
 }
 
 fn write_new_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {

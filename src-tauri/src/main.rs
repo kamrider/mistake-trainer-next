@@ -19,14 +19,22 @@ fn main() {
         return;
     }
 
+    let startup_record_root =
+        mistake_trainer_next_lib::modules::startup_safety::default_application_data_root();
+    if let Some(root) = startup_record_root.clone() {
+        mistake_trainer_next_lib::modules::startup_safety::install_panic_recording_hook(
+            root,
+            env!("CARGO_PKG_VERSION").to_owned(),
+        );
+    }
+
     if mistake_trainer_next_lib::run().is_err() {
-        if let Some(root) =
-            mistake_trainer_next_lib::modules::startup_safety::default_application_data_root()
-        {
+        if let Some(root) = startup_record_root {
             let _ = mistake_trainer_next_lib::modules::startup_safety::write_startup_failure_record(
                 &root,
                 env!("CARGO_PKG_VERSION"),
                 current_utc_millis(),
+                mistake_trainer_next_lib::modules::startup_safety::StartupFailureReason::TauriStartupFailed,
             );
         }
         let _ = rfd::MessageDialog::new()
