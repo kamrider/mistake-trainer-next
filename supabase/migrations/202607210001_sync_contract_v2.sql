@@ -458,7 +458,7 @@ as $$
         'timeLimitSeconds', p.answer_limit_seconds,
         'assets', coalesce((select jsonb_agg(jsonb_build_object(
           'assetId', pa.asset_id, 'role', pa.role, 'position', pa.position)
-          order by pa.role, pa.position
+          order by pa.role, pa.position)
           from public.problem_assets pa
           where pa.account_id = p.account_id and pa.problem_id = p.id), '[]'::jsonb),
         'revision', p.revision,
