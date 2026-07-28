@@ -11,9 +11,12 @@ use specta::Type;
 use thiserror::Error;
 use uuid::Uuid;
 
-use super::windows_compatibility::{WindowsCompatibilityStatus, WindowsSupportLevel};
+use super::{
+    startup_safety::StartupFailureRecord,
+    windows_compatibility::{WindowsCompatibilityStatus, WindowsSupportLevel},
+};
 
-const REPORT_SCHEMA_VERSION: u32 = 2;
+const REPORT_SCHEMA_VERSION: u32 = 3;
 const APPLICATION_NAME: &str = "Mistake Trainer Next";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Type)]
@@ -29,6 +32,7 @@ pub struct DiagnosticContext<'a> {
     pub storage_kind: DiagnosticStorageKind,
     pub now_utc_ms: i64,
     pub windows_compatibility: &'a WindowsCompatibilityStatus,
+    pub startup_failure: Option<&'a StartupFailureRecord>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Type)]
@@ -86,6 +90,8 @@ struct DiagnosticApplication {
     platform: &'static str,
     architecture: &'static str,
     windows: WindowsCompatibilityStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_startup_failure: Option<StartupFailureRecord>,
 }
 
 #[derive(Debug, Serialize)]
@@ -191,6 +197,11 @@ fn build_report(
             code: "webview2_runtime_not_detected",
         });
     }
+    if context.startup_failure.is_some() {
+        warnings.push(DiagnosticWarning {
+            code: "previous_startup_failure_detected",
+        });
+    }
 
     Ok(DiagnosticReport {
         schema_version: REPORT_SCHEMA_VERSION,
@@ -202,6 +213,7 @@ fn build_report(
             platform: std::env::consts::OS,
             architecture: std::env::consts::ARCH,
             windows: context.windows_compatibility.clone(),
+            last_startup_failure: context.startup_failure.cloned(),
         },
         library: DiagnosticLibrary {
             storage_kind: context.storage_kind,

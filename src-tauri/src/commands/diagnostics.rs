@@ -14,6 +14,7 @@ use crate::{
         DiagnosticContext, DiagnosticError, DiagnosticExportReceipt, DiagnosticStorageKind,
         export_diagnostic_report,
     },
+    modules::startup_safety::read_startup_failure_record,
     modules::windows_compatibility::current_windows_compatibility,
 };
 
@@ -49,6 +50,7 @@ pub async fn diagnostics_export(
     };
 
     let worker = tauri::async_runtime::spawn_blocking(move || {
+        let startup_failure = read_startup_failure_record(&control_root).ok().flatten();
         let storage = resolve_storage(&control_root).map_err(DiagnosticCommandError::Storage)?;
         let storage_kind = if storage.is_custom() {
             DiagnosticStorageKind::Custom
@@ -64,6 +66,7 @@ pub async fn diagnostics_export(
                 storage_kind,
                 now_utc_ms: current_utc_millis(),
                 windows_compatibility: &windows_compatibility,
+                startup_failure: startup_failure.as_ref(),
             },
         )
         .map(Some)

@@ -4,6 +4,7 @@ use mistake_trainer_next_lib::{
     infrastructure::database::{open_encrypted_database, run_migrations},
     modules::{
         diagnostics::{DiagnosticContext, DiagnosticStorageKind, export_diagnostic_report},
+        startup_safety::{StartupFailureReason, StartupFailureRecord},
         windows_compatibility::{WindowsCompatibilityFacts, assess_windows_compatibility},
     },
 };
@@ -144,6 +145,12 @@ fn report_contains_only_fixed_aggregates_and_no_user_content() {
         .unwrap();
 
     let windows = supported_windows();
+    let startup_failure = StartupFailureRecord {
+        schema_version: 1,
+        application_version: "0.1.0-test".to_owned(),
+        occurred_at_utc_ms: NOW_UTC_MS - 1_000,
+        reason_code: StartupFailureReason::RustPanic,
+    };
     let receipt = export_diagnostic_report(
         &Mutex::new(connection),
         destination.path(),
@@ -152,12 +159,13 @@ fn report_contains_only_fixed_aggregates_and_no_user_content() {
             storage_kind: DiagnosticStorageKind::Custom,
             now_utc_ms: NOW_UTC_MS,
             windows_compatibility: &windows,
+            startup_failure: Some(&startup_failure),
         },
     )
     .unwrap();
 
     assert_eq!(receipt.generated_at_utc_ms, NOW_UTC_MS as f64);
-    assert_eq!(receipt.warning_count, 0);
+    assert_eq!(receipt.warning_count, 1);
     assert!(
         receipt
             .file_label
@@ -172,7 +180,7 @@ fn report_contains_only_fixed_aggregates_and_no_user_content() {
 
     let bytes = fs::read(destination.path().join(&receipt.file_label)).unwrap();
     let report: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(report["schemaVersion"], 2);
+    assert_eq!(report["schemaVersion"], 3);
     assert_eq!(report["reportId"], receipt.report_id);
     assert_eq!(report["generatedAtUtcMs"], NOW_UTC_MS);
     assert_eq!(report["application"]["name"], "Mistake Trainer Next");
@@ -191,6 +199,15 @@ fn report_contains_only_fixed_aggregates_and_no_user_content() {
         report["application"]["windows"]["webview2Version"],
         "140.0.0.0"
     );
+    assert_eq!(
+        report["application"]["lastStartupFailure"],
+        serde_json::json!({
+            "schemaVersion": 1,
+            "applicationVersion": "0.1.0-test",
+            "occurredAtUtcMs": NOW_UTC_MS - 1_000,
+            "reasonCode": "rust_panic"
+        })
+    );
     assert_eq!(report["library"]["storageKind"], "custom");
     assert_eq!(report["library"]["schemaVersion"], 15);
     assert_eq!(report["library"]["integrity"], "ok");
@@ -203,7 +220,10 @@ fn report_contains_only_fixed_aggregates_and_no_user_content() {
     assert_eq!(report["sync"]["pendingOperationCount"], 1);
     assert_eq!(report["sync"]["failedOperationCount"], 0);
     assert_eq!(report["sync"]["unresolvedConflictCount"], 1);
-    assert_eq!(report["warnings"], serde_json::json!([]));
+    assert_eq!(
+        report["warnings"],
+        serde_json::json!([{ "code": "previous_startup_failure_detected" }])
+    );
 
     let serialized = String::from_utf8(bytes).unwrap();
     for forbidden in [
@@ -247,6 +267,7 @@ fn report_rejects_a_non_directory_destination() {
             storage_kind: DiagnosticStorageKind::Default,
             now_utc_ms: NOW_UTC_MS,
             windows_compatibility: &windows,
+            startup_failure: None,
         },
     )
     .unwrap_err();
@@ -280,6 +301,7 @@ fn report_uses_only_fixed_windows_compatibility_warning_codes() {
             storage_kind: DiagnosticStorageKind::Default,
             now_utc_ms: NOW_UTC_MS,
             windows_compatibility: &windows,
+            startup_failure: None,
         },
     )
     .unwrap();
