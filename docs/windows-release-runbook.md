@@ -41,6 +41,9 @@ Rotate credentials through a separate audited procedure.
 1. Update the same semantic version in `package.json`, `src-tauri/Cargo.toml`, and
    `src-tauri/tauri.conf.json`.
 2. Run all repository gates and the unsigned installer smoke test on a clean Windows machine.
+   The smoke must report runtime readiness, create a real WebView2 window, keep it alive for
+   10 seconds, prove a second launch hands off to the first instance, and close without producing
+   `startup-failure.json`.
 3. Merge only reviewed changes to `main`.
 4. Create and push an annotated `vX.Y.Z` tag from the reviewed commit.
 5. Wait for **Signed Windows Release**. Missing secrets, certificate mismatch, non-HTTPS
@@ -81,6 +84,8 @@ Ask the customer for:
 4. exact reproducible actions, without sharing question images unless the customer explicitly
    consents.
 
-The startup failure record under the app's local application-data category contains only schema
-version, app version, timestamp, and the fixed reason code `tauri_startup_failed`. It never
-contains an internal error, database path, account identity, or question content.
+The startup failure record under the app's application-data category contains only schema
+version, app version, timestamp, and one of the fixed reason codes `tauri_startup_failed` or
+`rust_panic`. It never contains panic text, an internal error, stack trace, database path,
+account identity, or question content. A valid record is included automatically when the user
+exports a safe diagnostic report.

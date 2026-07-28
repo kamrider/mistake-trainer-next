@@ -67,7 +67,7 @@ jobs:
         shell: powershell
         run: .\scripts\windows-release-contract.ps1
       - run: pnpm tauri build
-      - name: Smoke test installed application
+      - name: Smoke test installed GUI and single instance
         shell: powershell
         run: .\scripts\windows-installer-smoke.ps1
 
@@ -99,7 +99,7 @@ jobs:
         run: pnpm tauri build --target aarch64-pc-windows-msvc
       - name: Rust ARM64 compatibility tests
         run: cargo test --release --manifest-path src-tauri/Cargo.toml --test windows_compatibility --test startup_safety
-      - name: Smoke test native ARM64 installation
+      - name: Smoke test native ARM64 GUI and single instance
         shell: powershell
         run: .\scripts\windows-installer-smoke.ps1 -InstallerDirectory src-tauri\target\aarch64-pc-windows-msvc\release\bundle\nsis -ExpectedArchitecture arm64
 
