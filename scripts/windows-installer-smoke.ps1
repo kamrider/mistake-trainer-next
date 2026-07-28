@@ -1,11 +1,15 @@
 [CmdletBinding()]
 param(
-  [string]$InstallerDirectory = (Join-Path $PSScriptRoot '..\src-tauri\target\release\bundle\nsis'),
+  [string]$InstallerDirectory,
   [ValidateSet('x86_64', 'arm64')]
   [string]$ExpectedArchitecture = 'x86_64'
 )
 
 $ErrorActionPreference = 'Stop'
+
+if ([string]::IsNullOrWhiteSpace($InstallerDirectory)) {
+  $InstallerDirectory = Join-Path $PSScriptRoot '..\src-tauri\target\release\bundle\nsis'
+}
 
 function Assert-Smoke {
   param([bool]$Condition, [string]$Message)

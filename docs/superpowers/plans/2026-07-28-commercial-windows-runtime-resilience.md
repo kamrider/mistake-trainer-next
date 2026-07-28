@@ -35,7 +35,7 @@
 - Consumes: `WindowsCompatibilityStatus`, including `support_level` and `webview2_version`.
 - Produces: `WindowsSelfCheckReport`, schema version `2`, `ready: bool`, and `failure_codes: Vec<WindowsSelfCheckFailureCode>`.
 
-- [ ] **Step 1: Write failing self-check readiness tests**
+- [x] **Step 1: Write failing self-check readiness tests**
 
 Add a deterministic report builder and test it with explicit compatibility fixtures:
 
@@ -66,7 +66,7 @@ fn self_check_requires_supported_windows_and_webview2() {
 
 Serialize the missing-runtime case and assert schema version `2`, `ready: false`, and the exact public code `webview2_runtime_missing`.
 
-- [ ] **Step 2: Run the focused tests and verify failure**
+- [x] **Step 2: Run the focused tests and verify failure**
 
 Run:
 
@@ -76,7 +76,7 @@ Run:
 
 Expected: compilation fails because the report builder and failure-code enum do not exist.
 
-- [ ] **Step 3: Implement the closed readiness contract**
+- [x] **Step 3: Implement the closed readiness contract**
 
 In `startup_safety.rs`, define:
 
@@ -106,13 +106,13 @@ pub struct WindowsSelfCheckReport {
 
 Change `main.rs` so `--windows-self-check` exits `0` only for `Ok(true)`, `10` for `Ok(false)`, and `11` for invalid input or write failure.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Run the command from Step 2.
 
 Expected: all startup-safety and Windows compatibility tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add src-tauri/src/modules/startup_safety.rs src-tauri/src/main.rs src-tauri/tests/startup_safety.rs src-tauri/tests/windows_compatibility.rs
@@ -132,7 +132,7 @@ git commit -m "feat: make Windows self-check verify runtime readiness"
 - Consumes: the fixed application data root returned by `default_application_data_root()`.
 - Produces: `StartupFailureReason`, `write_startup_failure_record`, `read_startup_failure_record`, and `install_panic_recording_hook`.
 
-- [ ] **Step 1: Write failing record safety tests**
+- [x] **Step 1: Write failing record safety tests**
 
 Add tests that write both reasons, replace a forged record containing a private path, and reject malformed or oversized input:
 
@@ -158,7 +158,7 @@ fn startup_failure_reasons_are_fixed_and_private() {
 
 The existing atomic replacement test must continue to prove that only one final file remains.
 
-- [ ] **Step 2: Run the focused test and verify failure**
+- [x] **Step 2: Run the focused test and verify failure**
 
 Run:
 
@@ -168,7 +168,7 @@ Run:
 
 Expected: compilation fails because the reason enum and reader do not exist.
 
-- [ ] **Step 3: Implement fixed reason recording**
+- [x] **Step 3: Implement fixed reason recording**
 
 Define:
 
@@ -187,13 +187,13 @@ Keep the record bounded to schema version, application version, UTC timestamp, a
 
 Install the hook only on the normal application path after helper/self-check/binding CLI modes have returned. Pass `TauriStartupFailed` when `run()` returns an error.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Run the command from Step 2.
 
 Expected: every startup-safety test passes and serialized records contain no panic message or path.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add src-tauri/src/modules/startup_safety.rs src-tauri/src/main.rs src-tauri/tests/startup_safety.rs
@@ -214,7 +214,7 @@ git commit -m "feat: record sanitized Windows startup failures"
 - Consumes: `read_startup_failure_record(&control_root)`.
 - Produces: diagnostic schema version `3`, optional `application.lastStartupFailure`, and warning code `previous_startup_failure_detected`.
 
-- [ ] **Step 1: Write failing privacy and schema tests**
+- [x] **Step 1: Write failing privacy and schema tests**
 
 Extend the real encrypted-database diagnostic test to pass a fixed startup summary and require:
 
@@ -236,7 +236,7 @@ Extend the real encrypted-database diagnostic test to pass a fixed startup summa
 
 Keep the existing sentinel scan and add panic text, an absolute Windows path, and a username as forbidden sentinels.
 
-- [ ] **Step 2: Run the diagnostic test and verify failure**
+- [x] **Step 2: Run the diagnostic test and verify failure**
 
 Run:
 
@@ -246,7 +246,7 @@ Run:
 
 Expected: assertions fail because schema version `2` has no startup failure summary.
 
-- [ ] **Step 3: Add the optional fixed summary**
+- [x] **Step 3: Add the optional fixed summary**
 
 Add `startup_failure: Option<&StartupFailureRecord>` to `DiagnosticContext`. Serialize an owned, fixed-field copy under `DiagnosticApplication.last_startup_failure`; append `previous_startup_failure_detected` when present.
 
@@ -254,7 +254,7 @@ In the command, read the record from `control_root` before exporting. Treat abse
 
 Update the support policy to state that exported startup evidence contains only a fixed reason code, application version, and timestamp.
 
-- [ ] **Step 4: Run diagnostic and command contract tests**
+- [x] **Step 4: Run diagnostic and command contract tests**
 
 Run:
 
@@ -265,7 +265,7 @@ corepack pnpm bindings:check
 
 Expected: tests pass and generated TypeScript bindings are unchanged because the report body remains file-only.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add src-tauri/src/modules/diagnostics.rs src-tauri/src/commands/diagnostics.rs src-tauri/tests/diagnostics.rs docs/windows-support-policy.md
@@ -285,7 +285,7 @@ git commit -m "feat: include fixed startup evidence in diagnostics"
 - Consumes: self-check schema version `2`, the installed executable, and the existing per-user NSIS uninstaller.
 - Produces: x64 and ARM64 evidence for install, runtime readiness, real WebView2 startup, single-instance behavior, and uninstall.
 
-- [ ] **Step 1: Tighten the self-check assertions**
+- [x] **Step 1: Tighten the self-check assertions**
 
 Require:
 
@@ -296,13 +296,13 @@ Assert-Smoke (@($selfCheck.failureCodes).Count -eq 0) 'installed runtime readine
 Assert-Smoke (-not [string]::IsNullOrWhiteSpace($selfCheck.windows.webview2Version)) 'WebView2 Runtime was not detected after installation.'
 ```
 
-- [ ] **Step 2: Add isolated real-startup and second-launch checks**
+- [x] **Step 2: Add isolated real-startup and second-launch checks**
 
 Before launching, save `APPDATA` and `LOCALAPPDATA`, then point both to directories inside `$smokeRoot`. Start the installed executable and require it to remain alive for ten seconds. Start the executable a second time, require that process to exit within ten seconds with code `0`, and require the first process to remain alive.
 
 Stop only the exact first process, wait for exit, then assert that the isolated application-data directory contains no `startup-failure.json`. Restore both environment variables in `finally` before removing the smoke root.
 
-- [ ] **Step 3: Verify under Windows PowerShell 5.1 locally**
+- [x] **Step 3: Verify under Windows PowerShell 5.1 locally**
 
 Run:
 
@@ -313,11 +313,11 @@ C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionP
 
 Expected: release contract and full installed GUI smoke pass.
 
-- [ ] **Step 4: Document and gate both architectures**
+- [x] **Step 4: Document and gate both architectures**
 
 Update the runbook so the automated evidence explicitly includes actual WebView2 startup and duplicate-launch focus behavior. Keep both existing CI jobs calling the shared smoke script; no architecture-specific bypass is allowed.
 
-- [ ] **Step 5: Run repository gates**
+- [x] **Step 5: Run repository gates**
 
 Run:
 
@@ -335,7 +335,7 @@ git diff --check
 
 Expected: all commands exit `0`. Existing SQLCipher `VirtualLock` and OpenSSL missing-PDB messages may remain non-fatal environment warnings.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add scripts/windows-installer-smoke.ps1 docs/windows-release-runbook.md .github/workflows/ci.yml
