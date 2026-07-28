@@ -59,13 +59,8 @@ fn run_windows_self_check_if_requested() -> Option<i32> {
                 env!("CARGO_PKG_VERSION"),
                 current_utc_millis(),
             ) {
-                Ok(
-                    mistake_trainer_next_lib::modules::windows_compatibility::WindowsSupportLevel::Supported
-                    | mistake_trainer_next_lib::modules::windows_compatibility::WindowsSupportLevel::Extended,
-                ) => 0,
-                Ok(
-                    mistake_trainer_next_lib::modules::windows_compatibility::WindowsSupportLevel::Unsupported,
-                ) => 10,
+                Ok(true) => 0,
+                Ok(false) => 10,
                 Err(_) => 11,
             },
         );
