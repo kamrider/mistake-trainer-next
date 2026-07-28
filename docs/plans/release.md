@@ -22,8 +22,11 @@
 
 ## Remaining release acceptance
 
-- Configure Windows code signing, signed updates, installer metadata, and rollback notes.
+- Provision the production code-signing secrets and execute the fail-closed x64/ARM64 release
+  workflow on a real version tag.
+- Add signed automatic-updater hosting after the installer release channel is operational.
 - Measure cold start and 60 Hz review/capture interactions on the Windows reference machine.
-- Run clean-machine installation, upgrade, uninstall, and rollback smoke tests.
+- Complete the manual clean-machine, upgrade, uninstall, rollback, DPI, antivirus and native
+  Windows ARM64 matrix from the Windows release runbook.
 
-Exit: a signed Windows v1 installer passes clean-machine smoke tests.
+Exit: signed Windows v1 x64 and ARM64 installers pass the documented release matrix.

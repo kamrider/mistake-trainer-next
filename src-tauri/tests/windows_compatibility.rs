@@ -40,8 +40,21 @@ fn windows_10_22h2_and_ltsc_are_extended_compatibility() {
 }
 
 #[test]
+fn native_windows_11_arm64_is_extended_compatibility() {
+    let status = assess_windows_compatibility(facts(26_100, "arm64"));
+
+    assert_eq!(status.support_level, WindowsSupportLevel::Extended);
+    assert!(status.supported);
+    assert!(status.summary.contains("ARM64 原生版本"));
+}
+
+#[test]
 fn old_windows_and_32_bit_processes_are_unsupported() {
-    for candidate in [facts(17_762, "x86_64"), facts(22_631, "x86")] {
+    for candidate in [
+        facts(17_762, "x86_64"),
+        facts(19_045, "arm64"),
+        facts(22_631, "x86"),
+    ] {
         let status = assess_windows_compatibility(candidate);
 
         assert_eq!(status.support_level, WindowsSupportLevel::Unsupported);

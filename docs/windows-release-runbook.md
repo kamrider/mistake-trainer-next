@@ -5,7 +5,7 @@ unsigned executable is a development artifact, not a product release.
 
 ## Release contract
 
-- Publish Windows x64 only under the scope in
+- Publish separately labeled Windows x64 and native ARM64 installers under the scope in
   [windows-support-policy.md](windows-support-policy.md).
 - Ship the per-user NSIS installer with the offline Evergreen WebView2 prerequisite.
 - Sign both the application executable and installer with the same trusted code-signing
@@ -60,7 +60,8 @@ possible:
 | Windows 11 x64, current release | fresh install, launch, second-launch focus, capture, backup, uninstall |
 | Windows 11 x64, 125%, 150%, 200% DPI | primary workflows, dialogs, drag/drop, no clipped controls |
 | Windows 10 22H2 ESU or supported LTSC x64 | install, extended-support notice, core local workflows |
-| Windows 11 ARM64 x64 emulation | install/self-check and best-effort core workflow record |
+| Windows 11 ARM64 native | ARM64 installer, native self-check, capture/backup and optional recognition performance |
+| Windows 11 ARM64 x64 emulation | migration-only check; direct users to the native installer |
 | Offline machine | installer completes with bundled WebView2 prerequisite and app launches |
 | Antivirus/SmartScreen test machine | signed publisher is correct; record any warning or quarantine |
 | Upgrade from previous signed version | encrypted database/assets preserved; no downgrade allowed |

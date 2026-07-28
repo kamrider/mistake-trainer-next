@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
-  [string]$InstallerDirectory = (Join-Path $PSScriptRoot '..\src-tauri\target\release\bundle\nsis')
+  [string]$InstallerDirectory = (Join-Path $PSScriptRoot '..\src-tauri\target\release\bundle\nsis'),
+  [ValidateSet('x86_64', 'arm64')]
+  [string]$ExpectedArchitecture = 'x86_64'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -49,7 +51,7 @@ try {
 
   $selfCheck = Get-Content -LiteralPath $selfCheckPath -Raw | ConvertFrom-Json
   Assert-Smoke ($selfCheck.schemaVersion -eq 1) 'unexpected self-check schema version.'
-  Assert-Smoke ($selfCheck.windows.processArchitecture -eq 'x86_64') "installed process architecture was $($selfCheck.windows.processArchitecture), expected x86_64."
+  Assert-Smoke ($selfCheck.windows.processArchitecture -eq $ExpectedArchitecture) "installed process architecture was $($selfCheck.windows.processArchitecture), expected $ExpectedArchitecture."
   Assert-Smoke ($selfCheck.windows.buildNumber -ge 17763) "Windows build $($selfCheck.windows.buildNumber) is below 17763."
   Assert-Smoke (@('supported', 'extended') -contains $selfCheck.windows.supportLevel) "support level was $($selfCheck.windows.supportLevel)."
 

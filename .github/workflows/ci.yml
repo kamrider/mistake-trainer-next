@@ -71,6 +71,38 @@ jobs:
         shell: powershell
         run: .\scripts\windows-installer-smoke.ps1
 
+  windows-arm64-package:
+    runs-on: windows-11-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.11.0
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.15.0
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.0
+          targets: aarch64-pc-windows-msvc
+      - name: Install native build prerequisite
+        shell: powershell
+        run: choco install strawberryperl --no-progress -y
+      - run: pnpm install --frozen-lockfile
+      - name: Verify Windows release contract
+        shell: powershell
+        run: .\scripts\windows-release-contract.ps1
+      - name: Rust ARM64 compatibility tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test windows_compatibility --test startup_safety
+      - name: Build native ARM64 installer
+        run: pnpm tauri build --target aarch64-pc-windows-msvc
+      - name: Smoke test native ARM64 installation
+        shell: powershell
+        run: .\scripts\windows-installer-smoke.ps1 -InstallerDirectory src-tauri\target\aarch64-pc-windows-msvc\release\bundle\nsis -ExpectedArchitecture arm64
+
   supabase:
     runs-on: ubuntu-24.04
     timeout-minutes: 20

@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
-  [string]$ReleaseTag = $env:GITHUB_REF_NAME
+  [string]$ReleaseTag = $env:GITHUB_REF_NAME,
+  [ValidateSet('x64', 'arm64')]
+  [string]$Architecture = 'x64'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -30,6 +32,8 @@ foreach ($name in $requiredEnvironment) {
 Assert-Release (-not [string]::IsNullOrWhiteSpace($ReleaseTag)) 'release tag is missing.'
 $releaseVersion = $ReleaseTag.TrimStart('v')
 Assert-Release ($releaseVersion -match '^\d+\.\d+\.\d+([+-][0-9A-Za-z.-]+)?$') "tag '$ReleaseTag' is not a supported semantic version."
+$targetTriple = if ($Architecture -eq 'arm64') { 'aarch64-pc-windows-msvc' } else { 'x86_64-pc-windows-msvc' }
+$selfCheckArchitecture = if ($Architecture -eq 'arm64') { 'arm64' } else { 'x86_64' }
 
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $packageJson = Get-Content -LiteralPath (Join-Path $repositoryRoot 'package.json') -Raw | ConvertFrom-Json
@@ -93,18 +97,20 @@ try {
 
   Push-Location $repositoryRoot
   try {
-    corepack pnpm tauri build --config $overridePath
+    corepack pnpm tauri build --target $targetTriple --config $overridePath
     if ($LASTEXITCODE -ne 0) { throw "Tauri build exited with code $LASTEXITCODE." }
   }
   finally {
     Pop-Location
   }
 
-  $applicationExecutable = Join-Path $repositoryRoot 'src-tauri\target\release\mistake-trainer-next.exe'
-  $installerDirectory = Join-Path $repositoryRoot 'src-tauri\target\release\bundle\nsis'
+  $targetReleaseRoot = Join-Path $repositoryRoot "src-tauri\target\$targetTriple\release"
+  $applicationExecutable = Join-Path $targetReleaseRoot 'mistake-trainer-next.exe'
+  $installerDirectory = Join-Path $targetReleaseRoot 'bundle\nsis'
   $installers = @(Get-ChildItem -LiteralPath $installerDirectory -File -Filter '*-setup.exe')
   Assert-Release (Test-Path -LiteralPath $applicationExecutable -PathType Leaf) 'release application executable is missing.'
   Assert-Release ($installers.Count -eq 1) "expected one NSIS installer; found $($installers.Count)."
+  Assert-Release ($installers[0].Name -match "_$Architecture-setup\.exe$") "installer '$($installers[0].Name)' does not match requested architecture '$Architecture'."
 
   foreach ($artifact in @((Get-Item -LiteralPath $applicationExecutable), $installers[0])) {
     $signature = Get-AuthenticodeSignature -LiteralPath $artifact.FullName
@@ -113,7 +119,9 @@ try {
     Assert-Release ((Normalize-Thumbprint $signature.SignerCertificate.Thumbprint) -eq $expectedThumbprint) "$($artifact.Name) was signed by an unexpected certificate."
   }
 
-  & (Join-Path $repositoryRoot 'scripts\windows-installer-smoke.ps1') -InstallerDirectory $installerDirectory
+  & (Join-Path $repositoryRoot 'scripts\windows-installer-smoke.ps1') `
+    -InstallerDirectory $installerDirectory `
+    -ExpectedArchitecture $selfCheckArchitecture
 
   $hash = (Get-FileHash -LiteralPath $installers[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
   $checksumPath = "$($installers[0].FullName).sha256"

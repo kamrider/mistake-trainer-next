@@ -16,7 +16,15 @@ permissions:
 
 jobs:
   signed-windows:
-    runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x64
+            runner: windows-2025
+          - architecture: arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     environment: production
     env:
@@ -40,26 +48,41 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.97.0
+          targets: ${{ matrix.architecture == 'arm64' && 'aarch64-pc-windows-msvc' || 'x86_64-pc-windows-msvc' }}
       - name: Install native build prerequisite
         shell: powershell
         run: choco install strawberryperl --no-progress -y
       - run: pnpm install --frozen-lockfile
       - name: Build and verify signed installer
         shell: powershell
-        run: .\scripts\windows-signed-release.ps1 -ReleaseTag $env:RELEASE_TAG
+        run: .\scripts\windows-signed-release.ps1 -ReleaseTag $env:RELEASE_TAG -Architecture ${{ matrix.architecture }}
       - name: Upload verified release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: mistake-trainer-next-${{ env.RELEASE_TAG }}-windows-x64
+          name: mistake-trainer-next-${{ env.RELEASE_TAG }}-windows-${{ matrix.architecture }}
           if-no-files-found: error
           path: |
-            src-tauri/target/release/bundle/nsis/*-setup.exe
-            src-tauri/target/release/bundle/nsis/*-setup.exe.sha256
-      - name: Create draft GitHub release
+            src-tauri/target/*-pc-windows-msvc/release/bundle/nsis/*-setup.exe
+            src-tauri/target/*-pc-windows-msvc/release/bundle/nsis/*-setup.exe.sha256
+
+  draft-release:
+    needs: signed-windows
+    runs-on: windows-2025
+    environment: production
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: mistake-trainer-next-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}-windows-*
+          path: verified-installers
+          merge-multiple: true
+      - name: Create draft GitHub release with both architectures
         shell: powershell
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
-          $installer = Get-ChildItem src-tauri\target\release\bundle\nsis\*-setup.exe
-          $checksum = Get-ChildItem src-tauri\target\release\bundle\nsis\*-setup.exe.sha256
-          gh release create $env:RELEASE_TAG --draft --verify-tag --generate-notes $installer.FullName $checksum.FullName
+          $artifacts = @(Get-ChildItem verified-installers -File)
+          if ($artifacts.Count -ne 4) { throw "Expected two installers and two checksums; found $($artifacts.Count)." }
+          $artifactPaths = @($artifacts | ForEach-Object { $_.FullName })
+          & gh release create $env:RELEASE_TAG --draft --verify-tag --generate-notes $artifactPaths
+          if ($LASTEXITCODE -ne 0) { throw "GitHub release creation exited with code $LASTEXITCODE." }

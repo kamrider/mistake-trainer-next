@@ -10,17 +10,20 @@ WebView2 离线安装程序，因此首次安装不依赖外网。
 | --- | --- | --- |
 | 正式支持 | Microsoft 仍提供安全更新的 Windows 11 x64 | 完整安装、升级、备份恢复、采集、训练与智能切图支持 |
 | 延伸兼容 | Windows 10 22H2 x64 且已加入 ESU；仍在生命周期内的 Windows 10 LTSC x64 | 保持核心功能兼容；与系统生命周期或显卡驱动相关的问题可能要求升级 Windows |
-| 尽力而为 | Windows 11 ARM64 上运行 x64 仿真 | 基础功能可试用；本地 OCR、性能和驱动问题不作为原生 ARM64 缺陷处理 |
+| 延伸兼容 | Microsoft 仍提供安全更新的 Windows 11 ARM64，安装 ARM64 原生包 | 基础题库与采集使用原生构建；智能识图性能仍需按 ARM64 设备单独验收 |
+| 尽力而为 | Windows 11 ARM64 上运行旧 x64 包的系统仿真 | 仅用于迁移；应改装 ARM64 原生包 |
 | 不支持 | Windows 7、Windows 8/8.1、32 位 Windows、Windows Server、Wine、精简或修改版 Windows | 不发布兼容承诺，不接受以生产资料验证 |
 
-最低技术基线为 Windows 10 1809（内部版本 17763）x64。普通 Windows 10
+最低技术基线为 Windows 10 1809（内部版本 17763）x64；ARM64 原生包要求 Windows
+11（内部版本 22000 或更高）。普通 Windows 10
 Home/Pro 已在 2025-10-14 结束常规支持；继续使用时必须由用户或组织确保仍能获得
 Microsoft 安全更新。Windows 7/8 即使能运行某些旧 WebView2 组合，也不进入付费版
 支持范围。
 
 ## 安装与运行时
 
-- 发布 NSIS `-setup.exe`，默认安装到当前用户的 `%LOCALAPPDATA%`，不因应用本身
+- 分别发布 x64 与 ARM64 NSIS `-setup.exe`，文件名和下载页面必须清楚标注架构，禁止
+  用“通用安装包”掩盖实际架构。默认安装到当前用户的 `%LOCALAPPDATA%`，不因应用本身
   要求管理员权限。
 - 安装器包含 Evergreen WebView2 离线安装程序。没有 WebView2 的离线电脑也能完成
   先决条件安装；运行后仍使用 Microsoft 维护的共享 Evergreen Runtime，以获得安全
@@ -67,10 +70,10 @@ Windows 提示。支持人员应同时收集：
 每个候选版本至少验证：
 
 - Windows 11 23H2、24H2、25H2 x64；
+- Windows 11 当前受支持版本 ARM64，使用 ARM64 原生安装包；
 - Windows 10 22H2 ESU x64、Windows 10 LTSC 2019 x64；
 - 标准用户、中文用户名、Unicode 自定义路径、离线安装；
 - 从上一签名版本升级、阻止降级、卸载后资料保留；
 - 重复启动聚焦已有窗口；
 - NSIS 静默安装、自检与卸载；
 - 安装器和主程序 Authenticode 签名、时间戳与 SHA-256 校验值。
-

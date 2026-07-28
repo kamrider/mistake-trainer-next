@@ -43,11 +43,15 @@ pub fn assess_windows_compatibility(
     facts: WindowsCompatibilityFacts,
 ) -> WindowsCompatibilityStatus {
     let x64_process = facts.process_architecture == "x86_64";
+    let arm64_process = facts.process_architecture == "arm64";
     let native_x64 = facts.native_architecture == "x86_64";
+    let native_arm64 = facts.native_architecture == "arm64";
     let support_level = if x64_process && native_x64 && facts.build_number >= WINDOWS_11_FIRST_BUILD
     {
         WindowsSupportLevel::Supported
-    } else if x64_process && facts.build_number >= MINIMUM_WINDOWS_BUILD {
+    } else if (arm64_process && native_arm64 && facts.build_number >= WINDOWS_11_FIRST_BUILD)
+        || (x64_process && facts.build_number >= MINIMUM_WINDOWS_BUILD)
+    {
         WindowsSupportLevel::Extended
     } else {
         WindowsSupportLevel::Unsupported
@@ -57,8 +61,13 @@ pub fn assess_windows_compatibility(
             "Windows 11 x64 正式支持；当前系统满足付费版运行基线。".to_owned()
         }
         WindowsSupportLevel::Extended if facts.native_architecture == "arm64" => {
-            "当前通过 Windows ARM64 的 x64 仿真运行，属于延伸兼容；本地识别性能需要单独验证。"
-                .to_owned()
+            if facts.process_architecture == "arm64" {
+                "Windows 11 ARM64 原生版本处于延伸兼容；基础功能已原生验证，本地识别性能仍需单独验收。"
+                    .to_owned()
+            } else {
+                "当前通过 Windows ARM64 的 x64 仿真运行，属于延伸兼容；建议改装 ARM64 原生版本。"
+                    .to_owned()
+            }
         }
         WindowsSupportLevel::Extended => {
             "Windows 10 x64 延伸兼容；仅建议在仍有 Microsoft 安全更新的 ESU 或 LTSC 环境使用。"
