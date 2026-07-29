@@ -71,4 +71,27 @@ describe('repository quality gates', () => {
       'RECOGNITION_RUNTIME_AVAILABLE && cfg!(feature = "local-ocr-runtime")',
     )
   })
+
+  it('keeps signed update networking inside typed Rust commands', () => {
+    const commands = readFileSync(resolve('src-tauri/src/commands/updates.rs'), 'utf8')
+    const bindings = readFileSync(resolve('src-tauri/src/bindings.rs'), 'utf8')
+    const startup = readFileSync(resolve('src-tauri/src/lib.rs'), 'utf8')
+    const packageJson = readFileSync(resolve('package.json'), 'utf8')
+    const defaultCapability = readFileSync(
+      resolve('src-tauri/capabilities/default.json'),
+      'utf8',
+    )
+
+    for (const command of [
+      'windows_update_status',
+      'windows_update_check',
+      'windows_update_install',
+    ]) {
+      expect(commands).toContain(`fn ${command}`)
+      expect(bindings).toContain(`commands::updates::${command}`)
+    }
+    expect(packageJson).not.toContain('@tauri-apps/plugin-updater')
+    expect(defaultCapability).not.toContain('updater:')
+    expect(startup).toContain('commands::updates::updater_config_is_ready(')
+  })
 })

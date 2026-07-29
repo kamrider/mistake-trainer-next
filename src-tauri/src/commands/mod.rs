@@ -17,3 +17,4 @@ pub mod review_history;
 pub mod storage;
 pub mod sync;
 pub mod system;
+pub mod updates;

@@ -19,6 +19,9 @@ export const commands = {
 	ocrComponentInstall: (componentId: OcrComponentId) => typedError<AppResult<OcrComponentStatus>, null>(__TAURI_INVOKE("ocr_component_install", { componentId })),
 	ocrComponentRemove: (componentId: OcrComponentId) => typedError<AppResult<OcrComponentStatus>, null>(__TAURI_INVOKE("ocr_component_remove", { componentId })),
 	systemStatus: () => __TAURI_INVOKE<AppResult<SystemStatus>>("system_status"),
+	windowsUpdateStatus: () => typedError<AppResult<WindowsUpdateStatus>, null>(__TAURI_INVOKE("windows_update_status")),
+	windowsUpdateCheck: () => typedError<AppResult<WindowsUpdateCheckReport>, null>(__TAURI_INVOKE("windows_update_check")),
+	windowsUpdateInstall: (expectedVersion: string) => typedError<AppResult<WindowsUpdateInstallReceipt>, null>(__TAURI_INVOKE("windows_update_install", { expectedVersion })),
 	profileList: () => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_list"),
 	profileCreate: (input: ProfileNameInput) => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_create", { input }),
 	profileRename: (input: ProfileRenameInput) => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_rename", { input }),
@@ -973,6 +976,22 @@ export type WindowsCompatibilityStatus = {
 };
 
 export type WindowsSupportLevel = "supported" | "extended" | "unsupported";
+
+export type WindowsUpdateCheckReport = {
+	available: boolean,
+	currentVersion: string,
+	version: string | null,
+	publishedAt: string | null,
+};
+
+export type WindowsUpdateInstallReceipt = {
+	acceptedVersion: string,
+};
+
+export type WindowsUpdateStatus = {
+	enabled: boolean,
+	currentVersion: string,
+};
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

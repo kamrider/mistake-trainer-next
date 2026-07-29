@@ -18,6 +18,7 @@ pub fn run() -> tauri::Result<()> {
     use tauri::Manager as _;
 
     let specta = bindings::builder();
+    let context = tauri::generate_context!();
 
     #[cfg(debug_assertions)]
     bindings::export_typescript_bindings(
@@ -34,6 +35,13 @@ pub fn run() -> tauri::Result<()> {
             let _ = window.set_focus();
         }
     }));
+    #[cfg(windows)]
+    let builder =
+        if commands::updates::updater_config_is_ready(context.config().plugins.0.get("updater")) {
+            builder.plugin(tauri_plugin_updater::Builder::new().build())
+        } else {
+            builder
+        };
 
     builder
         .invoke_handler(specta.invoke_handler())
@@ -127,7 +135,7 @@ pub fn run() -> tauri::Result<()> {
                 let _ = std::fs::remove_dir_all(private_temp_root);
             }
         })
-        .run(tauri::generate_context!())
+        .run(context)
 }
 
 fn current_utc_millis() -> i64 {
