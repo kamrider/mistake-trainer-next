@@ -29,6 +29,9 @@ const api = vi.hoisted(() => ({
   storageMigrationReceipt: vi.fn(),
   diagnosticsExport: vi.fn(),
   compatibilityStatus: vi.fn(),
+  windowsUpdateStatus: vi.fn(),
+  windowsUpdateCheck: vi.fn(),
+  windowsUpdateInstall: vi.fn(),
   ocrCapabilityStatus: vi.fn(),
   ocrComponentInstall: vi.fn(),
   ocrComponentRemove: vi.fn(),
@@ -93,6 +96,19 @@ describe('SettingsView', () => {
       webview2Version: '138.0.3351.83',
       minimumWindowsBuild: 17763,
       summary: '当前设备处于完整支持范围。',
+    } } })
+    api.windowsUpdateStatus.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      enabled: false,
+      currentVersion: '0.1.0',
+    } } })
+    api.windowsUpdateCheck.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      available: false,
+      currentVersion: '0.1.0',
+      version: null,
+      publishedAt: null,
+    } } })
+    api.windowsUpdateInstall.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      acceptedVersion: '0.2.0',
     } } })
     api.ocrCapabilityStatus.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
       assessment: {
@@ -862,5 +878,118 @@ describe('SettingsView', () => {
     await userEvent.click(trigger)
     expect(await screen.findByRole('alert', { name: '诊断报告未生成' })).toBeVisible()
     expect(screen.queryByRole('status', { name: '诊断报告已生成' })).not.toBeInTheDocument()
+  })
+
+  it('shows ordinary builds as update-disabled without making a network check', async () => {
+    render(SettingsView)
+
+    expect(await screen.findByText('当前安装包未接入自动更新')).toBeVisible()
+    expect(screen.getByText('当前版本 0.1.0')).toBeVisible()
+    expect(screen.queryByRole('button', { name: '检查更新' })).not.toBeInTheDocument()
+    expect(api.windowsUpdateStatus).toHaveBeenCalledOnce()
+    expect(api.windowsUpdateCheck).not.toHaveBeenCalled()
+  })
+
+  it('checks once at a time and reports that the signed build is current', async () => {
+    api.windowsUpdateStatus.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      enabled: true,
+      currentVersion: '0.1.0',
+    } } })
+    let resolveCheck!: (value: unknown) => void
+    api.windowsUpdateCheck.mockReturnValue(new Promise(resolve => {
+      resolveCheck = resolve
+    }))
+    render(SettingsView)
+
+    const trigger = await screen.findByRole('button', { name: '检查更新' })
+    await fireEvent.click(trigger)
+    await fireEvent.click(trigger)
+
+    expect(api.windowsUpdateCheck).toHaveBeenCalledOnce()
+    expect(screen.getByRole('button', { name: '正在检查…' })).toBeDisabled()
+    resolveCheck({ status: 'ok', data: { ok: true, data: {
+      available: false,
+      currentVersion: '0.1.0',
+      version: null,
+      publishedAt: null,
+    } } })
+    expect(await screen.findByRole('status', { name: '应用更新状态' })).toHaveTextContent('当前已经是最新版本')
+    await waitFor(() => expect(trigger).toHaveFocus())
+  })
+
+  it('installs only the exact version returned by the verified update check', async () => {
+    api.windowsUpdateStatus.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      enabled: true,
+      currentVersion: '0.1.0',
+    } } })
+    api.windowsUpdateCheck.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      available: true,
+      currentVersion: '0.1.0',
+      version: '0.2.0',
+      publishedAt: '2026-07-28T00:00:00Z',
+      endpoint: 'https://private.example/latest.json',
+      signature: 'must-not-render',
+    } } })
+    render(SettingsView)
+
+    await userEvent.click(await screen.findByRole('button', { name: '检查更新' }))
+    const available = await screen.findByRole('status', { name: '应用更新状态' })
+    expect(available).toHaveTextContent('发现已签名版本 0.2.0')
+    expect(available).not.toHaveTextContent(/private\.example|must-not-render/)
+
+    await userEvent.click(screen.getByRole('button', { name: '安装 0.2.0' }))
+    expect(api.windowsUpdateInstall).toHaveBeenCalledWith('0.2.0')
+    expect(await screen.findByRole('status', { name: '应用更新状态' })).toHaveTextContent('安装程序已启动')
+  })
+
+  it('keeps update failures retryable and never renders private updater details', async () => {
+    api.windowsUpdateStatus.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      enabled: true,
+      currentVersion: '0.1.0',
+    } } })
+    api.windowsUpdateCheck.mockResolvedValue({ status: 'ok', data: { ok: false, error: {
+      code: 'update_check_failed',
+      userMessage: '暂时无法检查更新，请稍后重试。',
+      retryable: true,
+      diagnosticId: 'private-diagnostic',
+      rawError: 'https://private.example/latest.json?token=secret',
+    } } })
+    render(SettingsView)
+
+    const trigger = await screen.findByRole('button', { name: '检查更新' })
+    await userEvent.click(trigger)
+
+    const status = await screen.findByRole('status', { name: '应用更新状态' })
+    expect(status).toHaveTextContent('暂时无法检查更新，请稍后重试。')
+    expect(status).not.toHaveTextContent(/private-diagnostic|private\.example|token=secret/)
+    expect(trigger).toBeEnabled()
+    expect(trigger).toHaveFocus()
+  })
+
+  it('discards a stale available version when installation reports a version change', async () => {
+    api.windowsUpdateStatus.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      enabled: true,
+      currentVersion: '0.1.0',
+    } } })
+    api.windowsUpdateCheck.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      available: true,
+      currentVersion: '0.1.0',
+      version: '0.2.0',
+      publishedAt: null,
+    } } })
+    api.windowsUpdateInstall.mockResolvedValue({ status: 'ok', data: { ok: false, error: {
+      code: 'update_version_changed',
+      userMessage: '可用版本已经变化，请重新检查。',
+      retryable: true,
+      diagnosticId: 'update-version',
+    } } })
+    render(SettingsView)
+
+    await userEvent.click(await screen.findByRole('button', { name: '检查更新' }))
+    await userEvent.click(await screen.findByRole('button', { name: '安装 0.2.0' }))
+
+    expect(await screen.findByRole('status', { name: '应用更新状态' })).toHaveTextContent('可用版本已经变化，请重新检查。')
+    expect(screen.queryByRole('button', { name: '安装 0.2.0' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '检查更新' })).toBeEnabled()
   })
 })
