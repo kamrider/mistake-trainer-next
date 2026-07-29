@@ -10,6 +10,10 @@ unsigned executable is a development artifact, not a product release.
 - Ship the per-user NSIS installer with the offline Evergreen WebView2 prerequisite.
 - Sign both the application executable and installer with the same trusted code-signing
   certificate, SHA-256 digest, and an HTTPS RFC 3161 timestamp.
+- Sign every updater payload with the separate Tauri updater key. Publish one `latest.json`
+  containing both `windows-x86_64` and `windows-aarch64`; a partial manifest is not releasable.
+- Keep automatic update networking disabled in ordinary/local builds. Production builds receive
+  the HTTPS manifest endpoint and updater public key only through the protected release environment.
 - Never publish directly from CI. The workflow creates a draft GitHub Release for a human to
   review and promote.
 - Keep a previous signed installer available for rollback. Downgrades are blocked by the
@@ -20,6 +24,7 @@ Authoritative platform references:
 
 - [Tauri Windows installers](https://v2.tauri.app/distribute/windows-installer/)
 - [Tauri Windows code signing](https://v2.tauri.app/distribute/sign/windows/)
+- [Tauri updater signatures and static manifests](https://v2.tauri.app/plugin/updater/)
 - [Microsoft WebView2 distribution](https://learn.microsoft.com/microsoft-edge/webview2/concepts/distribution)
 - [Microsoft Authenticode timestamping](https://learn.microsoft.com/windows/win32/seccrypto/time-stamping-authenticode-signatures)
 
@@ -31,10 +36,18 @@ Create a protected `production` environment with required reviewers. Configure:
 - `WINDOWS_CERTIFICATE_PASSWORD`: PFX password secret;
 - `WINDOWS_CERTIFICATE_THUMBPRINT`: expected signer thumbprint secret;
 - `WINDOWS_TIMESTAMP_URL`: HTTPS RFC 3161 timestamp service environment variable.
+- `WINDOWS_UPDATE_ENDPOINT`: public HTTPS URL from which installed clients read `latest.json`;
+- `WINDOWS_UPDATE_ARTIFACT_BASE_URL`: public HTTPS release directory used inside `latest.json`;
+- `WINDOWS_UPDATER_PUBLIC_KEY`: public Tauri updater verification key;
+- `TAURI_SIGNING_PRIVATE_KEY`: Tauri updater private key secret;
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: updater private-key password secret.
 
-Do not store any of these in the repository, workflow artifacts, issue text, or support
-diagnostics. Prefer a hardware-backed or managed signing service when operationally available.
-Rotate credentials through a separate audited procedure.
+The updater key pair is independent from the Authenticode certificate. The public verification
+key is safe to distribute and is compiled into production builds; the private key and its
+password must never enter the repository, workflow artifacts, issue text, or support diagnostics.
+Back up the private key offline: losing it prevents shipping trusted updates to already-installed
+clients. Prefer a hardware-backed or managed Authenticode signing service when operationally
+available, and rotate credentials only through a separate audited migration procedure.
 
 ## Prepare a release
 
@@ -47,11 +60,15 @@ Rotate credentials through a separate audited procedure.
 3. Merge only reviewed changes to `main`.
 4. Create and push an annotated `vX.Y.Z` tag from the reviewed commit.
 5. Wait for **Signed Windows Release**. Missing secrets, certificate mismatch, non-HTTPS
-   timestamping, version drift, invalid signatures, or install/self-check/uninstall failure all
-   block the job.
-6. Download the workflow artifact. Verify the installer SHA-256 locally and inspect
-   `Get-AuthenticodeSignature` for `Valid` status and the expected publisher.
-7. Complete the manual matrix below, then publish the draft GitHub Release.
+   timestamping/update URLs, version drift, incomplete architecture artifacts, invalid
+   Authenticode/updater signatures, or install/self-check/uninstall failure all block the job.
+6. Download the workflow artifact. Verify both installer SHA-256 files, inspect
+   `Get-AuthenticodeSignature` for `Valid` status and the expected publisher, and confirm
+   `latest.json` contains exactly the x64 and ARM64 entries with the intended public URLs.
+7. Confirm the installers and `latest.json` are reachable at their configured HTTPS URLs before
+   publishing the draft. Never publish a manifest that points to inaccessible or private assets.
+8. Complete the manual matrix below, including an upgrade from the previous signed version, then
+   publish the draft GitHub Release.
 
 ## Required manual matrix
 

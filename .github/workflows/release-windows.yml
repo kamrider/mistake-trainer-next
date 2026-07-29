@@ -33,6 +33,11 @@ jobs:
       WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
       WINDOWS_CERTIFICATE_THUMBPRINT: ${{ secrets.WINDOWS_CERTIFICATE_THUMBPRINT }}
       WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
+      WINDOWS_UPDATE_ENDPOINT: ${{ vars.WINDOWS_UPDATE_ENDPOINT }}
+      WINDOWS_UPDATE_ARTIFACT_BASE_URL: ${{ vars.WINDOWS_UPDATE_ARTIFACT_BASE_URL }}
+      WINDOWS_UPDATER_PUBLIC_KEY: ${{ vars.WINDOWS_UPDATER_PUBLIC_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -63,6 +68,7 @@ jobs:
           if-no-files-found: error
           path: |
             src-tauri/target/*-pc-windows-msvc/release/bundle/nsis/*-setup.exe
+            src-tauri/target/*-pc-windows-msvc/release/bundle/nsis/*-setup.exe.sig
             src-tauri/target/*-pc-windows-msvc/release/bundle/nsis/*-setup.exe.sha256
 
   draft-release:
@@ -70,11 +76,27 @@ jobs:
     runs-on: windows-2025
     environment: production
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
       - uses: actions/download-artifact@v4
         with:
           pattern: mistake-trainer-next-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}-windows-*
           path: verified-installers
           merge-multiple: true
+      - name: Generate dual-architecture update manifest
+        shell: powershell
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          WINDOWS_UPDATE_ARTIFACT_BASE_URL: ${{ vars.WINDOWS_UPDATE_ARTIFACT_BASE_URL }}
+        run: |
+          $artifacts = @(Get-ChildItem verified-installers -File)
+          if ($artifacts.Count -ne 6) { throw "Expected two installers, two updater signatures, and two checksums; found $($artifacts.Count)." }
+          .\scripts\windows-update-manifest.ps1 `
+            -ArtifactDirectory verified-installers `
+            -ReleaseTag $env:RELEASE_TAG `
+            -ArtifactBaseUrl $env:WINDOWS_UPDATE_ARTIFACT_BASE_URL `
+            -OutputPath verified-installers\latest.json
       - name: Create draft GitHub release with both architectures
         shell: powershell
         env:
@@ -82,7 +104,7 @@ jobs:
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
           $artifacts = @(Get-ChildItem verified-installers -File)
-          if ($artifacts.Count -ne 4) { throw "Expected two installers and two checksums; found $($artifacts.Count)." }
+          if ($artifacts.Count -ne 7) { throw "Expected two installers, two updater signatures, two checksums, and latest.json; found $($artifacts.Count)." }
           $artifactPaths = @($artifacts | ForEach-Object { $_.FullName })
           & gh release create $env:RELEASE_TAG --draft --verify-tag --generate-notes $artifactPaths
           if ($LASTEXITCODE -ne 0) { throw "GitHub release creation exited with code $LASTEXITCODE." }
