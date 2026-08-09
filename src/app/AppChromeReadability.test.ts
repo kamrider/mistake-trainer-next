@@ -70,6 +70,21 @@ describe('application chrome readability contract', () => {
       .toContain('min-height:44px')
   })
 
+  it('keeps desktop settings and report actions at the 44px baseline', () => {
+    const baselines = [
+      ['src/app/views/SettingsView.vue', 'button'],
+      ['src/app/components/SettingsBackupPanel.vue', 'button'],
+      ['src/app/components/SettingsStoragePanel.vue', 'button'],
+      ['src/app/components/SettingsUpdatePanel.vue', 'button'],
+      ['src/app/views/ReportView.vue', '.page-heading button'],
+    ] as const
+
+    for (const [componentPath, selector] of baselines) {
+      expect(declarations(componentPath, selector), `${componentPath} ${selector}`)
+        .toContain('min-height:44px')
+    }
+  })
+
   it('stacks simultaneous global notices inside one bounded viewport layer', () => {
     const stack = declarations('src/app/App.vue', '.global-notice-stack')
 

@@ -104,7 +104,7 @@ header { display: flex; justify-content: space-between; gap: 24px; align-items: 
 header p { margin: 0 0 8px; color: var(--cinnabar); font-size: 12px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
 header span { display: block; max-width: 690px; margin-top: 9px; color: var(--ink-muted); }
 h2 { margin: 0; color: var(--green-deep); font-family: Georgia,'Microsoft YaHei',serif; font-size: 21px; }
-button { display: inline-flex; gap: 7px; align-items: center; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper-raised); cursor: pointer; }
+button { display: inline-flex; min-height: 44px; gap: 7px; align-items: center; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper-raised); cursor: pointer; }
 button:disabled { opacity: .5; }
 .backup-actions { display: flex; flex: 0 0 auto; gap: 8px; }
 .backup-boundary { margin: 0; padding: 13px 15px; color: var(--ink-muted); border-left: 3px solid var(--cinnabar); border-radius: 7px; background: rgba(232,221,199,.28); font-size: 12px; line-height: 1.7; }

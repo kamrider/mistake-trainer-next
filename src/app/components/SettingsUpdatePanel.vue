@@ -107,7 +107,7 @@ header p { margin: 0 0 8px; color: var(--cinnabar); font-size: 12px; font-weight
 header span { display: block; max-width: 690px; margin-top: 9px; color: var(--ink-muted); font-size: 12px; }
 header > svg { flex: 0 0 auto; color: var(--green-deep); }
 h2 { margin: 0; color: var(--green-deep); font-family: Georgia,'Microsoft YaHei',serif; font-size: 21px; }
-button { display: inline-flex; gap: 7px; align-items: center; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper-raised); cursor: pointer; }
+button { display: inline-flex; min-height: 44px; gap: 7px; align-items: center; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper-raised); cursor: pointer; }
 button:disabled { opacity: .5; }
 .update-contract { display: grid; grid-template-columns: 44px minmax(0,1fr) auto; gap: 14px; align-items: center; padding: 17px; border: 1px solid rgba(33,51,45,.15); border-radius: 14px; background: linear-gradient(135deg,rgba(220,228,220,.4),rgba(255,253,247,.62)); }
 .update-contract-icon { display: grid; width: 42px; height: 42px; place-items: center; color: var(--green-deep); border-radius: 13px 4px 13px 13px; background: rgba(33,51,45,.1); }

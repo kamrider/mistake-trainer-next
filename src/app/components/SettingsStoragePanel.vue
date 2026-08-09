@@ -117,7 +117,7 @@ header p { margin: 0 0 8px; color: var(--cinnabar); font-size: 12px; font-weight
 header span { display: block; max-width: 720px; margin-top: 9px; color: var(--ink-muted); }
 header > svg { color: var(--green-deep); }
 h2 { margin: 0; color: var(--green-deep); font-family: Georgia,'Microsoft YaHei',serif; font-size: 21px; }
-button { display: inline-flex; gap: 7px; align-items: center; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper-raised); cursor: pointer; }
+button { display: inline-flex; min-height: 44px; gap: 7px; align-items: center; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper-raised); cursor: pointer; }
 button:disabled { opacity: .5; }
 .storage-receipt { display: grid; grid-template-columns: 28px 1fr; gap: 10px; align-items: start; margin-bottom: 14px; padding: 13px 15px; color: #557263; border: 1px solid rgba(85,114,99,.18); border-radius: 12px; background: rgba(85,114,99,.08); }
 .storage-receipt.warning { color: #843d2c; border-color: rgba(185,88,63,.2); background: rgba(185,88,63,.07); }
