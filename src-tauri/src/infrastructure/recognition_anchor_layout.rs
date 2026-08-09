@@ -16,6 +16,11 @@ use crate::{
 // On readable low-resolution exam scans, clear numbered lines commonly land
 // around 0.62-0.70 even when the recognized number and text are correct.
 const MIN_ANCHOR_CONFIDENCE: f64 = 0.60;
+// A final short marker such as `4.` can score slightly below the normal text
+// threshold on answer sheets. It is admitted only when at least two strong
+// anchors establish the same left alignment; the consecutive-run selector
+// still has to validate the numbering.
+const MIN_ALIGNED_ANCHOR_CONFIDENCE: f64 = 0.55;
 const FALLBACK_CONFIDENCE_BASIS_POINTS: u16 = 4_500;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -82,12 +87,25 @@ pub fn analyze_ocr_page(
     let mut anchors = strong_anchors;
     anchors.extend(page.boxes.iter().filter_map(|entry| {
         if !entry.is_text
-            || entry.confidence < MIN_ANCHOR_CONFIDENCE
+            || entry.confidence < MIN_ALIGNED_ANCHOR_CONFIDENCE
             || question_anchor_number(&entry.text).is_some()
+                && entry.confidence >= MIN_ANCHOR_CONFIDENCE
         {
             return None;
         }
-        let number = relaxed_question_anchor_number(&entry.text)?;
+        if entry.confidence < MIN_ANCHOR_CONFIDENCE && strong_lefts.len() < 2 {
+            return None;
+        }
+        let number = relaxed_question_anchor_number(&entry.text).or_else(|| {
+            // Answer explanations can start with a number immediately after
+            // the question marker (for example `1.2, 8, 14...`). Keep the
+            // strict decimal guard, and only admit this ambiguous shape when
+            // unambiguous anchors on the same page provide an alignment and
+            // consecutive-sequence check.
+            (!strong_lefts.is_empty())
+                .then(|| ambiguous_punctuated_question_anchor_number(&entry.text))
+                .flatten()
+        })?;
         let aligned = entry.left <= f64::from(page.width) * 0.15
             || strong_lefts
                 .iter()
@@ -124,11 +142,23 @@ pub fn analyze_ocr_page(
             let overlap_y = f64::from(page.height) * 0.015;
             let content_left = (anchor.left - f64::from(page.width) * 0.01).max(left);
             if page.boxes.iter().any(|entry| {
+                let crossed_anchor_count = column_anchors
+                    .iter()
+                    .filter(|(candidate, _)| {
+                        entry.top < candidate.top - overlap_y
+                            && candidate.top + overlap_y < entry.bottom
+                    })
+                    .count();
                 !entry.is_text
                     && entry.right >= content_left
                     && entry.left <= right
                     && entry.top < next_top - overlap_y
                     && next_top + overlap_y < entry.bottom
+                    // A detector-only box covering several numbered rows is
+                    // an overlaid watermark/stamp, not content owned by one
+                    // question. A box crossing exactly one boundary remains
+                    // protected and falls back to manual review.
+                    && (column_anchors.len() < 3 || crossed_anchor_count < 2)
             }) {
                 return Ok(fallback_analysis(
                     staged_role,
@@ -264,35 +294,36 @@ fn select_question_run(mut anchors: Vec<(&LocalOcrBox, u16)>) -> Vec<(&LocalOcrB
         deduplicated.push(candidate);
     }
 
-    let mut reset_start = 0;
-    for index in 1..deduplicated.len() {
-        if deduplicated[index].1 <= deduplicated[index - 1].1 {
-            reset_start = index;
-        }
-    }
-
+    // Formula fragments can look like aligned bare question numbers. Build
+    // the longest consecutive subsequence while allowing those noisy
+    // candidates to be skipped. For equal lengths, a later sequence is more
+    // likely to be the actual question section after numbered instructions.
+    let mut best_ending_at: std::collections::HashMap<u16, Vec<(&LocalOcrBox, u16)>> =
+        std::collections::HashMap::new();
     let mut runs: Vec<Vec<(&LocalOcrBox, u16)>> = Vec::new();
-    for candidate in deduplicated.into_iter().skip(reset_start) {
-        if runs
-            .last()
-            .and_then(|run| run.last())
-            .is_some_and(|(_, number)| candidate.1 == number.saturating_add(1))
-        {
-            runs.last_mut()
-                .expect("the preceding check found a run")
-                .push(candidate);
-        } else {
-            runs.push(vec![candidate]);
+    for candidate in deduplicated {
+        let mut run = candidate
+            .1
+            .checked_sub(1)
+            .and_then(|previous| best_ending_at.get(&previous).cloned())
+            .unwrap_or_default();
+        run.push(candidate);
+        let replace = best_ending_at
+            .get(&candidate.1)
+            .is_none_or(|current| (run.len(), run[0].0.top).ge(&(current.len(), current[0].0.top)));
+        if replace {
+            best_ending_at.insert(candidate.1, run.clone());
         }
+        runs.push(run);
     }
     runs.into_iter()
         .max_by(|left, right| {
             left.len().cmp(&right.len()).then_with(|| {
-                left.last()
+                left.first()
                     .map_or(f64::NEG_INFINITY, |(entry, _)| entry.top)
                     .total_cmp(
                         &right
-                            .last()
+                            .first()
                             .map_or(f64::NEG_INFINITY, |(entry, _)| entry.top),
                     )
             })
@@ -391,6 +422,19 @@ fn relaxed_question_anchor_number(text: &str) -> Option<u16> {
     let (number, consumed) = leading_number(trimmed)?;
     let suffix = &trimmed[consumed..];
     (suffix.is_empty() || suffix.chars().next().is_some_and(char::is_whitespace)).then_some(number)
+}
+
+fn ambiguous_punctuated_question_anchor_number(text: &str) -> Option<u16> {
+    let trimmed = text.trim_start();
+    if option_marker(trimmed) {
+        return None;
+    }
+    let (number, consumed) = leading_number(trimmed)?;
+    trimmed[consumed..]
+        .chars()
+        .next()
+        .is_some_and(is_marker)
+        .then_some(number)
 }
 
 fn option_marker(text: &str) -> bool {
@@ -520,6 +564,27 @@ mod tests {
     }
 
     #[test]
+    fn recovers_an_ambiguous_numeric_first_question_only_from_an_aligned_sequence() {
+        let result = analyze_ocr_page(
+            LocalOcrPage {
+                width: 1_000,
+                height: 1_200,
+                boxes: vec![
+                    text_box(40.0, 100.0, 180.0, 140.0, "1.2, 8, 14, 16"),
+                    text_box(40.0, 350.0, 180.0, 390.0, "2. second"),
+                    text_box(40.0, 600.0, 180.0, 640.0, "3. third"),
+                    text_box(300.0, 800.0, 420.0, 840.0, "3.14"),
+                ],
+            },
+            CaptureRecognitionRole::Answer,
+        )
+        .unwrap();
+
+        assert_eq!(result.regions.len(), 3);
+        assert_eq!(result.pairing_tokens, vec![Some(1), Some(2), Some(3)]);
+    }
+
+    #[test]
     fn creates_conservative_full_width_regions_for_a_single_column() {
         let result = analyze_ocr_page(
             LocalOcrPage {
@@ -639,6 +704,84 @@ mod tests {
     }
 
     #[test]
+    fn ignores_a_watermark_overlay_that_crosses_multiple_numbered_rows() {
+        let result = analyze_ocr_page(
+            LocalOcrPage {
+                width: 1_000,
+                height: 1_000,
+                boxes: vec![
+                    text_box(100.0, 150.0, 700.0, 190.0, "1. first"),
+                    text_box(100.0, 350.0, 700.0, 390.0, "2. second"),
+                    text_box(100.0, 550.0, 700.0, 590.0, "3. third"),
+                    text_box(100.0, 750.0, 700.0, 790.0, "4. fourth"),
+                    LocalOcrBox {
+                        left: 300.0,
+                        top: 250.0,
+                        right: 800.0,
+                        bottom: 850.0,
+                        text: String::new(),
+                        confidence: 0.0,
+                        is_text: false,
+                    },
+                ],
+            },
+            CaptureRecognitionRole::Question,
+        )
+        .unwrap();
+
+        assert_eq!(result.regions.len(), 4);
+        assert_eq!(
+            result.pairing_tokens,
+            vec![Some(1), Some(2), Some(3), Some(4)]
+        );
+    }
+
+    #[test]
+    fn accepts_an_aligned_low_confidence_marker_only_as_part_of_a_strong_run() {
+        let mut weak_fourth = text_box(100.0, 650.0, 130.0, 690.0, "4.");
+        weak_fourth.confidence = 0.56;
+        let result = analyze_ocr_page(
+            LocalOcrPage {
+                width: 1_000,
+                height: 900,
+                boxes: vec![
+                    text_box(100.0, 150.0, 700.0, 190.0, "1. first"),
+                    text_box(100.0, 320.0, 700.0, 360.0, "2. second"),
+                    text_box(100.0, 490.0, 700.0, 530.0, "3. third"),
+                    weak_fourth,
+                ],
+            },
+            CaptureRecognitionRole::Answer,
+        )
+        .unwrap();
+        assert_eq!(result.regions.len(), 4);
+        assert_eq!(
+            result.pairing_tokens,
+            vec![Some(1), Some(2), Some(3), Some(4)]
+        );
+
+        let mut isolated_weak = text_box(100.0, 150.0, 130.0, 190.0, "1.");
+        isolated_weak.confidence = 0.56;
+        let fallback = analyze_ocr_page(
+            LocalOcrPage {
+                width: 1_000,
+                height: 900,
+                boxes: vec![
+                    isolated_weak,
+                    text_box(100.0, 320.0, 700.0, 360.0, "2. second"),
+                ],
+            },
+            CaptureRecognitionRole::Answer,
+        )
+        .unwrap();
+        assert_eq!(fallback.regions.len(), 1);
+        assert_eq!(
+            fallback.reason_codes,
+            vec![CaptureRecognitionReasonCode::WeakAnchor]
+        );
+    }
+
+    #[test]
     fn discards_numbered_instructions_and_recovers_aligned_bare_question_numbers() {
         let result = analyze_ocr_page(
             LocalOcrPage {
@@ -661,6 +804,31 @@ mod tests {
         assert_eq!(result.regions.len(), 3);
         assert_eq!(result.pairing_tokens, vec![Some(1), Some(2), Some(3)]);
         assert_eq!(result.regions[0].rect.y, 229.5 / 700.0);
+    }
+
+    #[test]
+    fn formula_numbers_do_not_break_a_consecutive_answer_sequence() {
+        let result = analyze_ocr_page(
+            LocalOcrPage {
+                width: 1_000,
+                height: 700,
+                boxes: vec![
+                    text_box(30.0, 80.0, 700.0, 120.0, "5. first answer"),
+                    text_box(30.0, 240.0, 700.0, 280.0, "6. second answer"),
+                    text_box(45.0, 360.0, 60.0, 385.0, "2"),
+                    text_box(30.0, 500.0, 700.0, 540.0, "7. third answer"),
+                    text_box(45.0, 610.0, 60.0, 635.0, "5"),
+                ],
+            },
+            CaptureRecognitionRole::Answer,
+        )
+        .unwrap();
+
+        assert_eq!(result.regions.len(), 3);
+        assert_eq!(result.pairing_tokens, vec![Some(5), Some(6), Some(7)]);
+        assert_eq!(result.regions[0].rect.y, 69.5 / 700.0);
+        assert_eq!(result.regions[1].rect.y, 229.5 / 700.0);
+        assert_eq!(result.regions[2].rect.y, 489.5 / 700.0);
     }
 
     #[test]

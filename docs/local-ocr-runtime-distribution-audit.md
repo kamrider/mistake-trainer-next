@@ -1,12 +1,16 @@
 # Local OCR runtime distribution audit
 
-Date: 2026-07-25
+Date: 2026-07-29
 
 ## Decision
 
-The candidate CPU inference path is suitable for engineering evaluation, but it is not yet a
-production component. The default application and NSIS installer must continue to exclude the OCR
-models and ONNX Runtime, and both production recognition gates must remain closed.
+The fixed Windows x64 CPU runtime is approved for the review-first local question-number anchor
+path. The NSIS installer includes the exact Microsoft ONNX Runtime 1.20.1 CPU libraries and their
+notices. PP-OCRv6 model files remain an explicit optional install and are never part of the
+encrypted library, sync payload, or backup.
+
+This approval does not cover semantic question understanding, OCR text persistence, automatic
+answer judgment, solving, or silent formal-library insertion. Those capabilities remain closed.
 
 The proposed Windows x64 baseline is the official Microsoft CPU package
 `Microsoft.ML.OnnxRuntime 1.20.1`. This matches the ONNX Runtime 1.20 API targeted by
@@ -41,11 +45,10 @@ Its NuSpec identifies Microsoft as author and owner, version `1.20.1`, repositor
 | `LICENSE` | 1,094 | `C250D6278F0B47A6439FB7592B08B58A55EB9F535AA49A1DB63211C3F982B674` |
 | `ThirdPartyNotices.txt` | 345,046 | `FAC5BB85F568B38FD8F3A6AEA32737985841F23A1A43E9CE952F79474F883AA9` |
 
-The audit copy lives under the operating-system temporary directory and is not an application
-resource. A future optional-component installer must download from a compile-time HTTPS source,
-verify the complete package hash before expansion, allow only the four fixed x64 files above,
-verify each extracted hash and length, and atomically promote the complete directory. It must ship
-both Microsoft license files next to the runtime and surface them in third-party notices.
+The two DLLs, Microsoft license, and complete third-party notices are application resources and
+are mapped into the Windows x64 bundle by `tauri.conf.json`. Rust verifies both DLL lengths and
+hashes again before dynamic loading. The original NuGet package is audit evidence only and is not
+distributed.
 
 ## Rust dependency review
 
@@ -59,18 +62,17 @@ both Microsoft license files next to the runtime and surface them in third-party
   XNNPACK even though the proposed product path is CPU-only. Those markers do not download provider
   binaries in the current graph, but they unnecessarily widen the compile-time API and review
   surface.
-- The published `ppocr-rs 0.7.3` crate archive declares Apache-2.0 but does not include a license
-  text file in its package. The repository comments attribute vendored OCR code to the Apache-2.0
-  upstream projects, but that is not a sufficient distribution artifact by itself.
-- The candidate feature remains optional and absent from the default Cargo dependency tree.
-
-Before production selection, use a reviewed minimal fork or an upstream release that:
-
-1. includes the full Apache-2.0 text and upstream attribution in the crate archive;
-2. exposes a CPU-only feature set without unrelated execution-provider markers;
-3. keeps model download code disabled;
-4. is pinned by exact version and source revision; and
-5. has its complete transitive license report incorporated into `THIRD_PARTY_NOTICES.md`.
+- The published `ppocr-rs 0.7.3` crate archive declares Apache-2.0 but omits the license text.
+  Distribution compensates by installing the full Apache-2.0 text and recording ppocr-rs,
+  PaddleOCR model lineage, and RapidOCR conversion/distribution attribution in
+  `THIRD_PARTY_NOTICES.md`.
+- The adapter is exact-version pinned, has default features disabled, and contains no model
+  downloader. Model installation is an application-owned command with fixed versioned HTTPS
+  sources, byte lengths, SHA-256 values, staging, and atomic promotion.
+- `ppocr-rs` still exposes unnecessary execution-provider feature markers transitively. The
+  shipped runtime contains only Microsoft CPU provider files; replacing the adapter with a
+  reviewed CPU-only fork remains a hardening item, not a blocker for the bounded local anchor
+  feature.
 
 ## Model and runtime integrity
 
@@ -92,14 +94,20 @@ region counts were `10, 4, 1, 3, 4, 12`: all 33 manually reviewed questions on t
 pages were separated, while the severely degraded four-question page safely remained one
 low-confidence full-page region. A second ignored integration test ran the 12-question
 double-column page through the encrypted capture worker, atomic crop application, restart
-recovery, and revert path. Both tests passed. This is useful engineering evidence, but six
-development images cannot satisfy the 60/300-image accuracy, crop-safety, or performance gates.
+recovery, and revert path.
 
-## Remaining release blockers
+A third ignored end-to-end test used a rendered 2025 mathematics exam page and its answer page.
+The worker produced eight question crops and four answer crops, persisted four same-number pair
+suggestions, and atomically created four ready capture drafts; the four questions without answers
+remained unassigned. It created no formal Problem or sync outbox entry. All three tests passed.
+This is useful engineering evidence, but the small development corpus cannot satisfy the
+60/300-image accuracy, crop-safety, or performance gates.
 
-- Resolve the `ppocr-rs` packaging and CPU-only dependency issues.
-- Add an offline optional-component manifest and installer only after the runtime source and
-  licenses are reviewed.
+## Remaining expansion blockers
+
+- Replace or upstream a CPU-only ppocr-rs feature surface when a reviewed option is available.
 - Collect the authorized 60-image development and 300-image blind evidence sets.
 - Pass the documented recall, crop, split-error, warm p95, network-silence, Windows 150% DPI,
   Narrator, and 150-image responsiveness gates.
+- Keep semantic OCR, automatic answer judgment, and silent formal-library insertion unavailable
+  until separately specified, threat-modeled, and evidenced.

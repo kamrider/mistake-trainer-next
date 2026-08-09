@@ -24,6 +24,7 @@ use crate::{
 const MAX_INPUT_BYTES: u64 = 50 * 1024 * 1024;
 const MAX_INPUT_PIXELS: u64 = 80_000_000;
 const MAX_REGIONS: usize = 150;
+const CROP_SAFETY_MARGIN_PX: usize = 8;
 
 pub struct VisualSplitRecognitionEngine;
 
@@ -101,6 +102,8 @@ fn analyze_gray(
         for (run_index, (start, end)) in runs.iter().copied().enumerate() {
             let top = start.saturating_sub(pad_y);
             let bottom = height.min(end.saturating_add(pad_y));
+            let (left, right) = expand_with_safety_margin(x_start, x_end, width);
+            let (top, bottom) = expand_with_safety_margin(top, bottom, height);
             if bottom <= top {
                 continue;
             }
@@ -122,9 +125,9 @@ fn analyze_gray(
             };
             regions.push(CaptureRecognitionRegionProposal {
                 rect: NormalizedCropRect {
-                    x: x_start as f64 / width as f64,
+                    x: left as f64 / width as f64,
                     y: top as f64 / height as f64,
-                    width: column_width as f64 / width as f64,
+                    width: (right - left) as f64 / width as f64,
                     height: (bottom - top) as f64 / height as f64,
                 },
                 role: staged_role,
@@ -351,6 +354,13 @@ fn padded_extent(start: usize, end: usize, width: usize) -> (usize, usize) {
     (start.saturating_sub(padding), width.min(end + padding))
 }
 
+fn expand_with_safety_margin(start: usize, end: usize, limit: usize) -> (usize, usize) {
+    (
+        start.saturating_sub(CROP_SAFETY_MARGIN_PX),
+        limit.min(end.saturating_add(CROP_SAFETY_MARGIN_PX)),
+    )
+}
+
 fn boolean_runs(values: &[bool]) -> Vec<(usize, usize)> {
     let mut runs = Vec::new();
     let mut start = None;
@@ -461,6 +471,12 @@ mod tests {
     }
 
     #[test]
+    fn expands_detected_bounds_by_eight_pixels_and_clamps_to_the_page() {
+        assert_eq!(expand_with_safety_margin(20, 40, 100), (12, 48));
+        assert_eq!(expand_with_safety_margin(3, 95, 100), (0, 100));
+    }
+
+    #[test]
     fn splits_vertical_blocks_in_reading_order_and_inherits_answer_role() {
         let mut page = white_page(700, 1_000);
         draw_question(&mut page, 55, 640, 80, 230);
@@ -470,6 +486,11 @@ mod tests {
         let result = analyze_gray(&page, CaptureRecognitionRole::Answer).unwrap();
 
         assert_eq!(result.regions.len(), 3);
+        let first_rect = &result.regions[0].rect;
+        assert_eq!(first_rect.x, 40.0 / 700.0);
+        assert_eq!(first_rect.y, 62.0 / 1_000.0);
+        assert_eq!(first_rect.width, 615.0 / 700.0);
+        assert_eq!(first_rect.height, 186.0 / 1_000.0);
         assert!(
             result
                 .regions
@@ -564,7 +585,15 @@ mod tests {
                 result
                     .regions
                     .iter()
-                    .map(|region| region.confidence_basis_points)
+                    .map(|region| (
+                        (
+                            (region.rect.x * 10_000.0).round() as u16,
+                            (region.rect.y * 10_000.0).round() as u16,
+                            (region.rect.width * 10_000.0).round() as u16,
+                            (region.rect.height * 10_000.0).round() as u16,
+                        ),
+                        region.confidence_basis_points
+                    ))
                     .collect::<Vec<_>>()
             );
         }

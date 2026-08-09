@@ -313,52 +313,64 @@ conflict. Deletes create tombstones retained for 30 days.
 
 ## Smart image modes
 
-- `智能切图` is the currently shipped mode. It is a deterministic, fully local visual-layout
-  helper implemented with the existing Rust image stack. It does not run OCR, inspect question
-  text, match question numbers, download a model, or make a network request.
-- `全自动识题` is a separate future mode for OCR, subject and question/answer understanding,
-  matching, card creation, and export. The UI marks it as unavailable and exposes neither an
-  execution control nor small/medium model downloads. Hardware-aware model tiers will be
-  redesigned when that mode has distributable runtime and real-image evidence.
-- The former PP-OCRv6 small/medium adapter, installer catalog, and hardware preflight remain
-  development evidence only. They are not selected by the product worker and do not imply that
-  automatic recognition is released.
+- `本地智能识图` is the shipped, review-first mode. On Windows x64 it prefers a separately
+  installed and hash-verified PP-OCRv6 small component to locate question-number anchors; if the
+  model is absent or unusable, it falls back to the deterministic Rust visual-layout splitter.
+  Neither path performs inference over the network.
+- OCR strings and question numbers are transient worker data. They are used only to assemble crop
+  boundaries and same-number question/answer groups, then discarded. They never enter SQLite,
+  logs, Tauri events, generated bindings, or Vue state.
+- A source item still has an explicit user-controlled `question` or `answer` role. Matching means
+  equal recognized number plus deterministic reading order inside the same recognition operation;
+  it is not semantic answer understanding.
+- `语义识题` remains a future mode for subject inference, question/answer meaning, full text
+  transcription, automatic judgment, solving, and export. The UI marks that capability as
+  unavailable. PP-OCRv6 medium is not selected for crop splitting.
 
 ## Local smart-image splitting boundary
 
-- Schema v14 adds account/profile/batch-scoped recognition jobs, item snapshots,
-  review suggestions, and a reversible-operation ledger. These rows remain local and
-  never enter the sync outbox.
+- Schema v14 adds account/profile/batch-scoped recognition jobs, item snapshots, review
+  suggestions, and a reversible-operation ledger. Schema v15 raises derivation positions to the
+  150-item batch limit. Schema v16 adds persistent recognition pairs and their role-specific item
+  links. These rows remain local and never enter the sync outbox.
 - The capture workbench treats splitting as a suggestion layer over unassigned, active items in
   an `organizing` batch. Existing drafts and manually assigned items remain canonical. A source
   marked as a question produces question materials; an answer source produces answer materials.
-- The production worker always selects `VisualSplitRecognitionEngine`. It uses foreground
-  density, conservative column detection, and major whitespace boundaries to form reading-order
-  regions. Weak or blank layouts fall back to a low-confidence whole-page proposal instead of
-  guessing.
+- The production worker selects `ProductRecognitionEngine`. A lazily initialized, verified small
+  OCR component produces numbered anchor regions when available. Weak anchors, a detector box
+  crossing one proposed boundary, or any runtime failure remain reviewable through a conservative
+  whole-page/visual fallback. Multi-row watermark overlays are excluded without weakening the
+  single-boundary content-cut guard.
 - A single managed worker decrypts one scoped asset at a time into an application-owned
   private temporary directory, runs no more than one engine call concurrently, emits
   only job/batch IDs and bounded progress, and removes plaintext on success, per-item failure,
-  cancellation, batch discard, and app shutdown. No OCR text or model path exists in the current
-  pipeline. Startup deletes interrupted suggestions and replays the abandoned job; a corrupt
-  encrypted source still fails only that item.
+  cancellation, batch discard, and app shutdown. Startup deletes interrupted suggestions and
+  replays the abandoned job; a corrupt encrypted source still fails only that item.
 - Review separates high-confidence, needs-review, insufficient, and stale results.
   Low-confidence and stale results cannot be accepted, and proposal crop editing does
   not create assets.
 - Applying suggestions is a separate atomic boundary. All derived blobs are prepared under
   `.staging`, then encrypted assets, ordinary crop derivations, unassigned `capture_items`,
-  source supersession, and the operation ledger commit in one compensated transaction. It
-  creates no draft, draft-item link, Problem, or sync outbox row. The source is retained.
+  source supersession, complete question/answer pair rows, and the operation ledger commit in one
+  compensated transaction. It creates no draft, Problem, or sync outbox row. The source is
+  retained; unmatched question or answer regions remain ordinary unassigned materials.
+- The material deck renders complete pairs as grouped question and answer previews. Applying one
+  or many pairs creates capture drafts and draft-item links in one SQLite transaction. Any stale,
+  moved, role-changed, already-assigned, or missing item aborts the whole request. Formal Problems
+  and sync outbox operations are still created only by the existing explicit ready-draft commit.
 - The operation ledger supports a persistent, revision-scoped undo. Undo succeeds only
   while every generated item still matches the applied state and no generated asset is
   referenced by a formal problem or later derivation. Any later edit returns a conflict without
   deleting user work.
-- The full automatic-recognition gate remains closed until a distributable inference adapter,
-  model-compatible preprocessing, offline Windows packaging, license review, hardware-tier
-  policy, and real-image quality/performance evidence pass.
-- Backups at schema v14 require all four recognition tables and reject recognition jobs
-  that do not belong to the backup account/profile/batch. Model caches and decrypted
-  temporary files remain outside backup scope.
+- The Windows x64 installer bundles only the pinned Microsoft ONNX Runtime 1.20.1 CPU libraries
+  and notices. The small model is an explicit optional install with fixed HTTPS sources, lengths,
+  and hashes. Startup does not load it; first recognition lazily initializes it with at most four
+  CPU threads while leaving one logical processor free when possible.
+- Backups at schema v17 require the recognition and pair tables, run SQLite foreign-key
+  validation, and reject cross-account, cross-profile, cross-batch, or inconsistent pair-state
+  references. Schema v16 backups remain readable and migrate forward on restore. Optional model
+  caches, runtime caches, OCR strings, decrypted images, and absolute paths remain outside backup
+  scope.
 
 ## Performance budgets
 

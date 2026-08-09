@@ -78,6 +78,7 @@ export const commands = {
 	captureItemMove: (input: CaptureItemMoveInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_item_move", { input }),
 	captureItemStageRole: (input: CaptureItemStageRoleInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_item_stage_role", { input }),
 	captureCardMerge: (input: CaptureCardMergeInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_card_merge", { input }),
+	capturePairSuggestionsApply: (input: CapturePairSuggestionsApplyInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_pair_suggestions_apply", { input }),
 	captureDraftDelete: (batchId: string, expectedRevision: number, draftId: string) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_draft_delete", { batchId, expectedRevision, draftId }),
 	captureDraftUpdate: (input: CaptureDraftUpdateInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_draft_update", { input }),
 	captureCommitReady: (batchId: string, expectedRevision: number) => __TAURI_INVOKE<AppResult<CaptureCommitReport>>("capture_commit_ready", { batchId, expectedRevision }),
@@ -160,6 +161,7 @@ export type CaptureBatchDetail = {
 	items: CaptureItemSummary[],
 	drafts: CaptureDraftSummary[],
 	unassignedItemIds: string[],
+	pairSuggestions: CapturePairSuggestionSummary[],
 };
 
 export type CaptureBatchState = "collecting" | "organizing" | "completed";
@@ -346,6 +348,19 @@ export type CaptureLayoutInput = {
 
 export type CaptureLayoutMode = "alternating" | "split" | "questions_only" | "manual";
 
+export type CapturePairSuggestionSummary = {
+	id: string,
+	questionItemIds: string[],
+	answerItemIds: string[],
+	confidenceBasisPoints: number,
+};
+
+export type CapturePairSuggestionsApplyInput = {
+	batchId: string,
+	expectedRevision: number,
+	pairIds: string[],
+};
+
 export type CaptureRecognitionApplyInput = {
 	batchId: string,
 	jobId: string,
@@ -358,6 +373,7 @@ export type CaptureRecognitionApplyReport = {
 	appliedSuggestionCount: number,
 	createdDraftCount: number,
 	createdItemCount: number,
+	pairSuggestionCount: number,
 	unmatchedAnswerCount: number,
 	staleSuggestionCount: number,
 	detail: CaptureBatchDetail,

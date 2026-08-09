@@ -20,9 +20,15 @@ const emit = defineEmits<{
 
 const root = ref<HTMLElement>()
 const trigger = ref<HTMLButtonElement>()
+const closeButton = ref<HTMLButtonElement>()
 const nameInput = ref<HTMLInputElement>()
 const open = ref(false)
 const mode = ref<'list' | 'create' | 'rename' | 'delete'>('list')
+type ProfileAction = 'create' | 'rename' | 'delete'
+type ModeLauncher = { action: ProfileAction; profileId?: string }
+const modeLauncher = ref<ModeLauncher>()
+const pendingLauncherFocus = ref<ModeLauncher>()
+const pendingNameInputFocus = ref<'focus' | 'select'>()
 const editingProfileId = ref('')
 const draftName = ref('')
 const localError = ref('')
@@ -38,44 +44,84 @@ const deletionConfirmed = computed(() =>
 )
 const currentName = computed(() => activeProfile.value?.name ?? props.profiles[0]?.name ?? '学习档案')
 
-function toggle() {
+async function toggle() {
   if (props.busy) return
   open.value = !open.value
-  if (!open.value) resetForm()
+  if (!open.value) {
+    resetForm()
+    return
+  }
+  await nextTick()
+  closeButton.value?.focus()
 }
 
-function resetForm() {
+function resetForm({ restoreLauncherFocus = false } = {}) {
+  const launcher = restoreLauncherFocus ? modeLauncher.value : undefined
   mode.value = 'list'
   editingProfileId.value = ''
   draftName.value = ''
   localError.value = ''
+  modeLauncher.value = undefined
+  pendingNameInputFocus.value = undefined
+  if (launcher) {
+    pendingLauncherFocus.value = launcher
+    nextTick(restorePendingModeFocus)
+  } else {
+    pendingLauncherFocus.value = undefined
+  }
+}
+
+function restorePendingModeFocus() {
+  const launcher = pendingLauncherFocus.value
+  if (launcher) {
+    const buttons = root.value?.querySelectorAll<HTMLButtonElement>('[data-profile-action]') ?? []
+    const button = Array.from(buttons).find(candidate =>
+      candidate.dataset.profileAction === launcher.action
+      && candidate.dataset.profileId === (launcher.profileId ?? ''),
+    )
+    if (button) {
+      button.focus()
+      pendingLauncherFocus.value = undefined
+    }
+  }
+
+  const inputFocus = pendingNameInputFocus.value
+  if (!inputFocus || !nameInput.value) return
+  nameInput.value.focus()
+  if (inputFocus === 'select') nameInput.value.select()
+  pendingNameInputFocus.value = undefined
 }
 
 async function beginCreate() {
+  modeLauncher.value = { action: 'create' }
   mode.value = 'create'
   draftName.value = ''
   localError.value = ''
+  pendingNameInputFocus.value = 'focus'
   await nextTick()
-  nameInput.value?.focus()
+  restorePendingModeFocus()
 }
 
 async function beginRename(profile: ProfileSummary) {
+  modeLauncher.value = { action: 'rename', profileId: profile.id }
   mode.value = 'rename'
   editingProfileId.value = profile.id
   draftName.value = profile.name
   localError.value = ''
+  pendingNameInputFocus.value = 'select'
   await nextTick()
-  nameInput.value?.focus()
-  nameInput.value?.select()
+  restorePendingModeFocus()
 }
 
 async function beginDelete(profile: ProfileSummary) {
+  modeLauncher.value = { action: 'delete', profileId: profile.id }
   mode.value = 'delete'
   editingProfileId.value = profile.id
   draftName.value = ''
   localError.value = ''
+  pendingNameInputFocus.value = 'focus'
   await nextTick()
-  nameInput.value?.focus()
+  restorePendingModeFocus()
 }
 
 function submitName() {
@@ -107,6 +153,7 @@ function selectProfile(profileId: string) {
 }
 
 function close({ restoreFocus = false } = {}) {
+  if (props.busy) return
   open.value = false
   resetForm()
   if (restoreFocus) nextTick(() => trigger.value?.focus())
@@ -150,6 +197,7 @@ onBeforeUnmount(() => {
       class="profile-trigger"
       type="button"
       aria-controls="profile-switcher-panel"
+      aria-haspopup="dialog"
       :aria-expanded="open"
       :aria-label="`当前学习档案：${currentName}。打开档案菜单`"
       :disabled="busy"
@@ -175,6 +223,7 @@ onBeforeUnmount(() => {
         class="profile-panel"
         role="dialog"
         aria-label="切换学习档案"
+        :aria-busy="busy"
       >
         <header>
           <div>
@@ -182,9 +231,11 @@ onBeforeUnmount(() => {
             <small>题库、训练与统计彼此独立</small>
           </div>
           <button
+            ref="closeButton"
             class="icon-button"
             type="button"
             aria-label="关闭档案菜单"
+            :disabled="busy"
             @click="close({ restoreFocus: true })"
           >
             <X :size="16" />
@@ -194,6 +245,7 @@ onBeforeUnmount(() => {
         <Transition
           name="profile-mode"
           mode="out-in"
+          @after-enter="restorePendingModeFocus"
         >
           <div
             v-if="mode === 'list'"
@@ -225,6 +277,8 @@ onBeforeUnmount(() => {
               <button
                 class="rename-button"
                 type="button"
+                data-profile-action="rename"
+                :data-profile-id="profile.id"
                 :aria-label="`重命名档案：${profile.name}`"
                 :disabled="busy"
                 @click="beginRename(profile)"
@@ -235,6 +289,8 @@ onBeforeUnmount(() => {
                 v-if="profiles.length > 1"
                 class="delete-button"
                 type="button"
+                data-profile-action="delete"
+                :data-profile-id="profile.id"
                 :aria-label="`删除档案：${profile.name}`"
                 :disabled="busy"
                 @click="beginDelete(profile)"
@@ -245,6 +301,8 @@ onBeforeUnmount(() => {
             <button
               class="create-button"
               type="button"
+              data-profile-action="create"
+              data-profile-id=""
               :disabled="busy"
               @click="beginCreate"
             >
@@ -278,7 +336,7 @@ onBeforeUnmount(() => {
               <button
                 type="button"
                 :disabled="busy"
-                @click="resetForm"
+                @click="resetForm({ restoreLauncherFocus: true })"
               >
                 取消
               </button>
@@ -328,7 +386,7 @@ onBeforeUnmount(() => {
               <button
                 type="button"
                 :disabled="busy"
-                @click="resetForm"
+                @click="resetForm({ restoreLauncherFocus: true })"
               >
                 保留档案
               </button>
@@ -342,6 +400,15 @@ onBeforeUnmount(() => {
             </div>
           </form>
         </Transition>
+
+        <p
+          v-if="mode === 'list' && busy"
+          class="profile-progress"
+          role="status"
+          aria-live="polite"
+        >
+          正在处理学习档案，请稍候…
+        </p>
 
         <p
           v-if="mode === 'list' && errorMessage"
@@ -373,21 +440,22 @@ onBeforeUnmount(() => {
 .profile-copy { min-width: 0; flex: 1; }
 .profile-copy strong, .profile-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .profile-copy strong { font-size: 13px; }
-.profile-copy small { margin-top: 3px; color: var(--ink-muted); font-size: 10px; }
+.profile-copy small { margin-top: 3px; color: var(--ink-muted); font-size: 12px; }
 .chevron { flex: 0 0 auto; color: var(--ink-muted); transition: transform var(--motion-standard) var(--ease-standard); }
 .chevron.rotated { transform: rotate(180deg); }
-.profile-panel { position: absolute; z-index: 40; bottom: calc(100% + 10px); left: 0; width: 300px; overflow: hidden; border: 1px solid rgba(65,73,65,.18); border-radius: 16px; background: rgba(255,253,247,.98); box-shadow: 0 18px 55px rgba(41,45,38,.18); transform-origin: left bottom; backdrop-filter: blur(20px); }
+.profile-panel { position: absolute; z-index: 40; bottom: calc(100% + 10px); left: 0; width: min(300px, calc(100vw - 24px)); overflow: hidden; border: 1px solid rgba(65,73,65,.18); border-radius: 16px; background: rgba(255,253,247,.98); box-shadow: 0 18px 55px rgba(41,45,38,.18); transform-origin: left bottom; backdrop-filter: blur(20px); }
 .profile-panel header { display: flex; align-items: flex-start; justify-content: space-between; padding: 16px 16px 12px; border-bottom: 1px solid var(--line); }
 .profile-panel header strong, .profile-panel header small { display: block; }
 .profile-panel header strong { font-family: Georgia, 'Songti SC', serif; font-size: 16px; }
-.profile-panel header small { margin-top: 4px; color: var(--ink-muted); font-size: 11px; }
+.profile-panel header small { margin-top: 4px; color: var(--ink-muted); font-size: 12px; }
 .icon-button, .rename-button, .delete-button { display: grid; place-items: center; color: var(--ink-muted); border: 0; border-radius: 8px; background: transparent; cursor: pointer; }
-.icon-button { width: 28px; height: 28px; }
+.icon-button { width: 44px; height: 44px; margin: -8px; }
 .icon-button:hover, .rename-button:hover { color: var(--ink); background: var(--sand-soft); }
 .delete-button:hover { color: var(--cinnabar); background: rgba(185,88,63,.1); }
+.icon-button:disabled { cursor: wait; opacity: .55; }
 .profile-list { display: grid; gap: 6px; max-height: 310px; padding: 10px; overflow-y: auto; }
-.profile-row { display: grid; grid-template-columns: minmax(0,1fr) 32px; align-items: center; border: 1px solid transparent; border-radius: 12px; transition: border-color var(--motion-feedback) var(--ease-standard), background var(--motion-feedback) var(--ease-standard); }
-.profile-row.deletable { grid-template-columns: minmax(0,1fr) 32px 32px; }
+.profile-row { display: grid; grid-template-columns: minmax(0,1fr) 44px; align-items: center; border: 1px solid transparent; border-radius: 12px; transition: border-color var(--motion-feedback) var(--ease-standard), background var(--motion-feedback) var(--ease-standard); }
+.profile-row.deletable { grid-template-columns: minmax(0,1fr) 44px 44px; }
 .profile-row:hover { background: rgba(232,221,199,.38); }
 .profile-row.selected { border-color: rgba(33,51,45,.16); background: var(--green-soft); }
 .select-profile { display: grid; grid-template-columns: 34px minmax(0,1fr) 18px; gap: 9px; align-items: center; min-width: 0; padding: 9px; color: var(--ink); border: 0; background: transparent; cursor: pointer; text-align: left; }
@@ -395,26 +463,27 @@ onBeforeUnmount(() => {
 .profile-avatar { display: grid; width: 34px; height: 34px; place-items: center; color: var(--green-deep); border-radius: 10px; background: rgba(255,253,247,.78); font-family: Georgia, 'Songti SC', serif; font-weight: 700; }
 .select-profile strong, .select-profile small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .select-profile strong { font-size: 13px; }
-.select-profile small { margin-top: 3px; color: var(--ink-muted); font-size: 10px; }
-.rename-button, .delete-button { width: 30px; height: 30px; }
-.create-button { display: flex; gap: 8px; align-items: center; justify-content: center; min-height: 40px; margin-top: 3px; color: var(--green-deep); border: 1px dashed rgba(33,51,45,.28); border-radius: 11px; background: transparent; cursor: pointer; font-weight: 700; }
+.select-profile small { margin-top: 3px; color: var(--ink-muted); font-size: 12px; }
+.rename-button, .delete-button { width: 44px; height: 44px; }
+.create-button { display: flex; gap: 8px; align-items: center; justify-content: center; min-height: 44px; margin-top: 3px; color: var(--green-deep); border: 1px dashed rgba(33,51,45,.28); border-radius: 11px; background: transparent; cursor: pointer; font-weight: 700; }
 .create-button:hover { background: var(--green-soft); }
 .profile-form { display: grid; gap: 9px; padding: 16px; }
 .profile-form label { font-size: 12px; font-weight: 700; }
-.profile-form input { width: 100%; min-height: 41px; padding: 0 11px; color: var(--ink); border: 1px solid var(--line-strong); border-radius: 10px; outline: none; background: var(--paper-light); }
+.profile-form input { width: 100%; min-height: 44px; padding: 0 11px; color: var(--ink); border: 1px solid var(--line-strong); border-radius: 10px; outline: none; background: var(--paper-light); }
 .profile-form input:focus { border-color: var(--green-deep); box-shadow: 0 0 0 3px rgba(33,51,45,.1); }
 .delete-form input:focus { border-color: var(--cinnabar); box-shadow: 0 0 0 3px rgba(185,88,63,.1); }
 .danger-heading { display: grid; grid-template-columns: 34px minmax(0,1fr); gap: 10px; align-items: start; padding: 11px; border: 1px solid rgba(185,88,63,.2); border-radius: 11px; background: rgba(185,88,63,.07); }
 .danger-heading > span { display: grid; width: 34px; height: 34px; place-items: center; color: var(--cinnabar); border-radius: 9px; background: rgba(255,253,247,.8); }
 .danger-heading strong, .danger-heading small { display: block; }
 .danger-heading strong { font-size: 13px; }
-.danger-heading small { margin-top: 4px; color: var(--ink-muted); font-size: 10px; line-height: 1.55; }
+.danger-heading small { margin-top: 4px; color: var(--ink-muted); font-size: 12px; line-height: 1.55; }
 .confirmation-chip { justify-self: start; max-width: 100%; overflow: hidden; padding: 5px 8px; color: var(--cinnabar); border-radius: 7px; background: rgba(185,88,63,.08); font-family: inherit; font-size: 12px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
-.profile-error { margin: 0; color: var(--cinnabar); font-size: 11px; line-height: 1.55; }
+.profile-error { margin: 0; color: var(--cinnabar); font-size: 12px; line-height: 1.55; }
+.profile-progress { margin: 0; padding: 0 16px 14px; color: var(--green-deep); font-size: 12px; font-weight: 700; }
 .panel-error { padding: 0 16px 14px; }
-.retry-button { min-height: 34px; margin: 0 16px 14px; padding: 0 12px; color: var(--green-deep); border: 1px solid rgba(33,51,45,.24); border-radius: 9px; background: var(--green-soft); cursor: pointer; font-weight: 700; }
+.retry-button { min-height: 44px; margin: 0 16px 14px; padding: 0 12px; color: var(--green-deep); border: 1px solid rgba(33,51,45,.24); border-radius: 9px; background: var(--green-soft); cursor: pointer; font-weight: 700; }
 .form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 3px; }
-.form-actions button { min-height: 34px; padding: 0 13px; color: var(--ink); border: 1px solid var(--line); border-radius: 9px; background: transparent; cursor: pointer; }
+.form-actions button { min-height: 44px; padding: 0 13px; color: var(--ink); border: 1px solid var(--line); border-radius: 9px; background: transparent; cursor: pointer; }
 .form-actions .confirm-button { color: white; border-color: var(--green-deep); background: var(--green-deep); }
 .form-actions .danger-button { color: white; border-color: var(--cinnabar); background: var(--cinnabar); }
 .form-actions .danger-button:disabled { cursor: not-allowed; opacity: .42; }

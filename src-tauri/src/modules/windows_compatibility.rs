@@ -60,7 +60,7 @@ pub fn assess_windows_compatibility(
     };
     let summary = match support_level {
         WindowsSupportLevel::Supported => {
-            "Windows 11 x64 正式支持；当前系统满足付费版运行基线。".to_owned()
+            "Windows 11 x64 正式支持；当前系统满足正式版运行基线。".to_owned()
         }
         WindowsSupportLevel::Extended if native_architecture == "arm64" => {
             if process_architecture == "arm64" {

@@ -21,7 +21,7 @@ describe('ExportSnapshotHistory', () => {
     const view = render(ExportSnapshotHistory, {
       props: {
         snapshots, deletedSnapshots: [], snapshotsLoaded: true, trashLoaded: true,
-        generatingId: '', deletingId: '', restoringId: '',
+        generatingId: '', deletingId: '', restoringId: '', operationBusy: false,
       },
     })
 
@@ -38,7 +38,7 @@ describe('ExportSnapshotHistory', () => {
     render(ExportSnapshotHistory, {
       props: {
         snapshots, deletedSnapshots: [], snapshotsLoaded: true, trashLoaded: true,
-        generatingId: 'snapshot-1', deletingId: '', restoringId: '',
+        generatingId: 'snapshot-1', deletingId: '', restoringId: '', operationBusy: true,
       },
     })
 
@@ -52,7 +52,7 @@ describe('ExportSnapshotHistory', () => {
     const view = render(ExportSnapshotHistory, {
       props: {
         snapshots: [], deletedSnapshots: deleted, snapshotsLoaded: true, trashLoaded: true,
-        generatingId: '', deletingId: '', restoringId: '',
+        generatingId: '', deletingId: '', restoringId: '', operationBusy: false,
       },
     })
 
@@ -65,16 +65,34 @@ describe('ExportSnapshotHistory', () => {
     const view = render(ExportSnapshotHistory, {
       props: {
         snapshots: [], deletedSnapshots: [], snapshotsLoaded: false, trashLoaded: false,
-        generatingId: '', deletingId: '', restoringId: '',
+        generatingId: '', deletingId: '', restoringId: '', operationBusy: false,
       },
     })
     expect(screen.getByText('正在读取导出快照…')).toBeVisible()
 
     await view.rerender({
       snapshots: [], deletedSnapshots: [], snapshotsLoaded: true, trashLoaded: true,
-      generatingId: '', deletingId: '', restoringId: '',
+      generatingId: '', deletingId: '', restoringId: '', operationBusy: false,
     })
     expect(screen.getByText('还没有保存过导出快照。')).toBeVisible()
     expect(screen.getByText('回收区为空。')).toBeVisible()
+  })
+
+  it('locks every conflicting mutation while identifying the active row', async () => {
+    const view = render(ExportSnapshotHistory, {
+      props: {
+        snapshots, deletedSnapshots: deleted, snapshotsLoaded: true, trashLoaded: true,
+        generatingId: '', deletingId: 'snapshot-1', restoringId: '', operationBusy: true,
+      },
+    })
+
+    expect(screen.getByRole('button', { name: '正在删除导出快照：本周复盘' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '删除导出快照：期中题册' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '恢复导出快照：旧题册' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '生成导出文件：期中题册' })).toBeDisabled()
+
+    await view.rerender({ deletingId: '', restoringId: 'deleted-1', operationBusy: true })
+    expect(screen.getByRole('button', { name: '正在恢复导出快照：旧题册' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '删除导出快照：本周复盘' })).toBeDisabled()
   })
 })

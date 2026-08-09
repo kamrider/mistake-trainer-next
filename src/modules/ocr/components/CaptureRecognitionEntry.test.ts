@@ -91,12 +91,12 @@ describe('CaptureRecognitionEntry', () => {
       },
     })
 
-    expect(screen.getByText('智能切图 · 已开放')).toBeVisible()
-    expect(screen.getByText('只看版面和留白，不读取文字；原图和现有题卡不会改变。')).toBeVisible()
+    expect(screen.getByText('智能切图 · 基础预切')).toBeVisible()
+    expect(screen.getByText('按版面给出预切建议；原图和现有题卡不会改变。')).toBeVisible()
     await user.click(screen.getByRole('button', { name: '智能切分 12 张素材' }))
     expect(screen.getByText('将切分 12 张未分配素材')).toBeVisible()
     expect(screen.getByText('只在这台电脑运行')).toBeVisible()
-    expect(screen.getByText('不使用 OCR，不下载模型')).toBeVisible()
+    expect(screen.getByText('基础预切不使用 OCR，也不发起下载')).toBeVisible()
     expect(screen.getByText('不会新建或改动题卡')).toBeVisible()
     expect(screen.getByText('原图始终保留')).toBeVisible()
     expect(screen.getByText('切图继承原素材的题图 / 答案角色')).toBeVisible()
@@ -121,7 +121,7 @@ describe('CaptureRecognitionEntry', () => {
     })
 
     expect(screen.getByRole('status')).toHaveTextContent('已分析 12 / 50')
-    expect(screen.getByText('只分析版面和留白；你可以继续整理题卡，切图结果不会自动应用。')).toBeVisible()
+    expect(screen.getByText('正在分析版面；你可以继续整理题卡，切图结果不会自动应用。')).toBeVisible()
     expect(screen.getByRole('progressbar', { name: '智能切图进度 12 / 50' })).toHaveValue(12)
     await view.rerender({ job: job('running', 13) })
     expect(screen.getAllByRole('status')).toHaveLength(1)

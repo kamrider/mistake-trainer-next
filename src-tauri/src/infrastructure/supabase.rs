@@ -8,8 +8,12 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use futures_util::StreamExt;
 use reqwest::{StatusCode, Url, redirect::Policy};
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 use uuid::Uuid;
+
+pub use crate::application::ports::sync::{
+    CloudError, CloudPullTransport, CloudPushTransport, DownloadedRemoteAsset, ObjectUploadResult,
+    PushAcknowledgement, RemoteObjectMetadata, RemotePullChange,
+};
 
 const MAX_AUTH_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_PULL_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
@@ -224,103 +228,6 @@ pub trait AuthTransport: Sync {
         &'a self,
         access_token: &'a str,
     ) -> impl Future<Output = Result<(), CloudError>> + Send + 'a;
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RemoteObjectMetadata {
-    pub byte_length: i64,
-    pub media_type: String,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ObjectUploadResult {
-    Created,
-    AlreadyExists,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PushAcknowledgement {
-    #[serde(alias = "operation_id")]
-    pub operation_id: String,
-    #[serde(alias = "entity_type")]
-    pub entity_type: String,
-    #[serde(alias = "entity_id")]
-    pub entity_id: String,
-    #[serde(alias = "change_seq")]
-    pub change_seq: i64,
-}
-
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RemotePullChange {
-    #[serde(alias = "change_seq")]
-    pub change_seq: i64,
-    #[serde(alias = "entity_type")]
-    pub entity_type: String,
-    #[serde(alias = "entity_id")]
-    pub entity_id: String,
-    pub operation: String,
-    pub payload: serde_json::Value,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DownloadedRemoteAsset {
-    pub bytes: Vec<u8>,
-    pub media_type: String,
-}
-
-pub trait CloudPushTransport: Sync {
-    fn object_metadata<'a>(
-        &'a self,
-        access_token: &'a str,
-        storage_object: &'a str,
-    ) -> impl Future<Output = Result<Option<RemoteObjectMetadata>, CloudError>> + Send + 'a;
-    fn upload_small_object<'a>(
-        &'a self,
-        access_token: &'a str,
-        storage_object: &'a str,
-        media_type: &'a str,
-        bytes: &'a [u8],
-    ) -> impl Future<Output = Result<ObjectUploadResult, CloudError>> + Send + 'a;
-    fn create_resumable_upload<'a>(
-        &'a self,
-        access_token: &'a str,
-        storage_object: &'a str,
-        media_type: &'a str,
-        byte_length: i64,
-    ) -> impl Future<Output = Result<String, CloudError>> + Send + 'a;
-    fn resumable_offset<'a>(
-        &'a self,
-        access_token: &'a str,
-        upload_url: &'a str,
-    ) -> impl Future<Output = Result<Option<i64>, CloudError>> + Send + 'a;
-    fn upload_resumable_chunk<'a>(
-        &'a self,
-        access_token: &'a str,
-        upload_url: &'a str,
-        offset: i64,
-        bytes: &'a [u8],
-    ) -> impl Future<Output = Result<Option<i64>, CloudError>> + Send + 'a;
-    fn push_operations<'a>(
-        &'a self,
-        access_token: &'a str,
-        operations: &'a serde_json::Value,
-    ) -> impl Future<Output = Result<Vec<PushAcknowledgement>, CloudError>> + Send + 'a;
-}
-
-pub trait CloudPullTransport: Sync {
-    fn pull_changes<'a>(
-        &'a self,
-        access_token: &'a str,
-        after: i64,
-        limit: usize,
-    ) -> impl Future<Output = Result<Vec<RemotePullChange>, CloudError>> + Send + 'a;
-    fn download_object<'a>(
-        &'a self,
-        access_token: &'a str,
-        storage_object: &'a str,
-    ) -> impl Future<Output = Result<DownloadedRemoteAsset, CloudError>> + Send + 'a;
 }
 
 impl AuthTransport for SupabaseClient {
@@ -989,43 +896,4 @@ pub(crate) fn redact_email(email: &str) -> String {
     let first = characters.next().unwrap_or('*');
     let last = characters.last().unwrap_or(first);
     format!("{first}***{last}@{domain}")
-}
-
-#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
-pub enum CloudError {
-    #[error("cloud configuration is invalid")]
-    InvalidConfiguration,
-    #[error("cloud transport could not be configured")]
-    TransportConfiguration,
-    #[error("email or password input is invalid")]
-    InvalidCredentialsInput,
-    #[error("the account credentials were rejected")]
-    AuthenticationRejected,
-    #[error("email verification is required")]
-    EmailVerificationRequired,
-    #[error("the cloud response was invalid")]
-    InvalidResponse,
-    #[error("the cloud response exceeded its size limit")]
-    ResponseTooLarge,
-    #[error("the cloud request timed out")]
-    Timeout,
-    #[error("the cloud service could not be reached")]
-    Network,
-    #[error("the cloud service rate limit was reached")]
-    RateLimited,
-    #[error("the cloud service is temporarily unavailable")]
-    ServiceUnavailable,
-    #[error("secure credential storage failed")]
-    SecretStore,
-    #[error("this library is already bound to another account")]
-    LibraryBoundToAnotherAccount,
-}
-
-impl CloudError {
-    pub const fn retryable(self) -> bool {
-        matches!(
-            self,
-            Self::Timeout | Self::Network | Self::RateLimited | Self::ServiceUnavailable
-        )
-    }
 }

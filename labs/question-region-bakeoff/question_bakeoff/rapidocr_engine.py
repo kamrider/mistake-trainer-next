@@ -22,7 +22,10 @@ ENGINE_NAME = "ppocrv6-small-anchor"
 ENGINE_VERSION = (
     "rapidocr-3.9.2+ppocrv6-small+onnxruntime-1.27.0+anchor-1.1.0"
 )
-MIN_ANCHOR_CONFIDENCE = 0.75
+# RapidOCR reports the conservative minimum of detector and recognizer
+# confidence. Readable low-resolution exam anchors commonly land around
+# 0.62–0.70, so keep the lab aligned with the production Rust adapter.
+MIN_ANCHOR_CONFIDENCE = 0.60
 QUESTION_ANCHOR = re.compile(
     r"^\s*(?:"
     r"[（(]\d{1,3}[）)]"
@@ -34,6 +37,7 @@ QUESTION_ANCHOR = re.compile(
 )
 OPTION_ONLY = re.compile(r"^\s*[A-HＡ-Ｈ][.、．)]\s*", re.IGNORECASE)
 RELAXED_QUESTION_ANCHOR = re.compile(r"^\s*(\d{1,3})(?:\s+|$)")
+AMBIGUOUS_PUNCTUATED_ANCHOR = re.compile(r"^\s*(\d{1,3})[.、．)]")
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,25 +158,25 @@ def _select_question_run(
             continue
         deduplicated.append(candidate)
 
-    # Exam instructions often form a numbered 1..N list before the actual
-    # questions restart at 1. Anything before the last such reset is metadata.
-    reset_start = 0
-    for index in range(1, len(deduplicated)):
-        if deduplicated[index][1] <= deduplicated[index - 1][1]:
-            reset_start = index
-    tail = deduplicated[reset_start:]
-
+    # Formula fragments can look like aligned bare question numbers. Build the
+    # longest consecutive subsequence while allowing those noisy candidates to
+    # be skipped. When an instruction list and the real questions have the
+    # same length, prefer the later sequence on the page.
+    best_ending_at: dict[int, list[tuple[OcrBox, int]]] = {}
     runs: list[list[tuple[OcrBox, int]]] = []
-    for candidate in tail:
-        if runs and candidate[1] == runs[-1][-1][1] + 1:
-            runs[-1].append(candidate)
-        else:
-            runs.append([candidate])
+    for candidate in deduplicated:
+        previous = best_ending_at.get(candidate[1] - 1, [])
+        run = [*previous, candidate]
+        current = best_ending_at.get(candidate[1])
+        if current is None or (len(run), run[0][0].top) >= (
+            len(current),
+            current[0][0].top,
+        ):
+            best_ending_at[candidate[1]] = run
+        runs.append(run)
     if not runs:
         return ()
-    # Prefer a coherent sequence over an isolated footer/page number. For
-    # equal-length runs, the later run is normally the real question section.
-    selected = max(runs, key=lambda run: (len(run), run[-1][0].top))
+    selected = max(runs, key=lambda run: (len(run), run[0][0].top))
     return tuple(selected)
 
 
@@ -195,6 +199,15 @@ def _candidate_anchors(
         if question_anchor_number(entry.text) is not None:
             continue
         number = question_anchor_number(entry.text, allow_relaxed=True)
+        if number is None and strong_lefts:
+            # Answer explanations can begin with a number immediately after the
+            # question marker, for example ``1.2, 8, 14...``. The strict parser
+            # correctly treats that shape as a possible decimal. It becomes a
+            # question anchor only when it aligns with other unambiguous
+            # anchors; the later consecutive-run selection must still confirm
+            # the sequence.
+            ambiguous = AMBIGUOUS_PUNCTUATED_ANCHOR.match(entry.text)
+            number = int(ambiguous.group(1)) if ambiguous else None
         if number is None:
             continue
         aligned = entry.left <= width * 0.15 or any(

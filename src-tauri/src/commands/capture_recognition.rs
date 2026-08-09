@@ -89,6 +89,7 @@ pub fn capture_recognition_start(
             }
             let profile = runtime.active_profile();
             let account_id = runtime.account_id().to_owned();
+            let (engine, engine_version) = manager.engine_identity();
             let job = {
                 let mut connection = match runtime.connection.lock() {
                     Ok(connection) => connection,
@@ -101,8 +102,8 @@ pub fn capture_recognition_start(
                         profile_id: profile.id.clone(),
                         batch_id: input.batch_id.clone(),
                         item_ids: input.item_ids,
-                        engine: "local-visual-whitespace".to_owned(),
-                        engine_version: "1.0.0".to_owned(),
+                        engine: engine.to_owned(),
+                        engine_version: engine_version.to_owned(),
                         now_utc_ms: current_utc_millis(),
                     },
                 ) {

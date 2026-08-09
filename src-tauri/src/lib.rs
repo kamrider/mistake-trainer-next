@@ -47,6 +47,7 @@ pub fn run() -> tauri::Result<()> {
         .invoke_handler(specta.invoke_handler())
         .setup(move |app| {
             let control_root = app.path().app_data_dir()?;
+            let resource_root = app.path().resource_dir()?;
             let private_recognition_temp = control_root.join("recognition-private-temp");
             if private_recognition_temp.exists()
                 && std::fs::remove_dir_all(&private_recognition_temp).is_err()
@@ -101,6 +102,7 @@ pub fn run() -> tauri::Result<()> {
             let recognition_manager =
                 infrastructure::capture_recognition_worker::CaptureRecognitionManager::for_product(
                     &control_root,
+                    &resource_root,
                     &private_recognition_temp,
                 );
             app.manage(commands::storage::ApplicationControlRoot(control_root));

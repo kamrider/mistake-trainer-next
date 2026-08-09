@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { ArchiveRestore, Clock3, FolderSearch, History, ShieldCheck, TriangleAlert } from '@lucide/vue'
+import { ArchiveRestore, Clock3, FolderSearch, History, RotateCcw, ShieldCheck, TriangleAlert } from '@lucide/vue'
 import { computed, inject, nextTick, onMounted, ref } from 'vue'
 import { syncControllerKey } from '../../../app/sync-controller'
 import {
@@ -12,6 +12,7 @@ import {
   type LegacyRollbackReceipt,
 } from '../../../shared/api/bindings'
 import { normalizeAppResult } from '../../../shared/api/normalize-result'
+import { useLegacyImportHistory } from '../composables/useLegacyImportHistory'
 import LegacyImportDialog from './LegacyImportDialog.vue'
 import LegacyImportResult from './LegacyImportResult.vue'
 
@@ -29,11 +30,9 @@ const syncController = inject(syncControllerKey, undefined)
 const candidate = ref<LegacyImportCandidate>()
 const receipt = ref<LegacyImportReceipt>()
 const rollbackReceipt = ref<LegacyRollbackReceipt>()
-const imports = ref<LegacyImportSummary[]>([])
 const scanning = ref(false)
 const importing = ref(false)
 const rollingBack = ref(false)
-const historyLoading = ref(false)
 const errorMessage = ref('')
 const dialogMode = ref<'import' | 'rollback'>()
 const rollbackTarget = ref<LegacyImportSummary>()
@@ -42,6 +41,17 @@ const scanButton = ref<HTMLButtonElement>()
 const confirmButton = ref<HTMLButtonElement>()
 const rollbackButton = ref<HTMLButtonElement>()
 let unlistenProgress: UnlistenFn | undefined
+const importHistory = useLegacyImportHistory({
+  listImports: async () => normalizeAppResult(await commands.legacyImportList()),
+})
+const {
+  imports,
+  loading: historyLoading,
+  loaded: historyLoaded,
+  errorMessage: historyError,
+  stale: historyStale,
+  reload: loadImports,
+} = importHistory
 
 const canImport = computed(() => Boolean(candidate.value && !candidate.value.report.truncated && candidate.value.problemCount > 0 && candidate.value.report.members > 0))
 const progressPercent = computed(() => {
@@ -84,20 +94,6 @@ function issueLabel(code: string) {
 function formatTime(timestamp: number | null) {
   if (timestamp === null) return '时间未知'
   return new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(timestamp))
-}
-
-async function loadImports() {
-  historyLoading.value = true
-  try {
-    const result = normalizeAppResult(await commands.legacyImportList())
-    if (result.ok) imports.value = result.data
-  }
-  catch {
-    // History is secondary; scanning and importing remain available.
-  }
-  finally {
-    historyLoading.value = false
-  }
 }
 
 async function scanLegacy() {
@@ -157,7 +153,7 @@ async function beginImport() {
       candidate.value = undefined
       syncController?.scheduleMutation()
       emit('changed')
-      await loadImports()
+      void loadImports()
     }
     else {
       errorMessage.value = result.error.userMessage
@@ -194,7 +190,7 @@ async function beginRollback() {
       receipt.value = undefined
       syncController?.scheduleMutation()
       emit('changed')
-      await loadImports()
+      void loadImports()
     }
     else errorMessage.value = result.error.userMessage
   }
@@ -339,6 +335,7 @@ onMounted(loadImports)
     <section
       class="import-history"
       aria-labelledby="legacy-history-title"
+      :aria-busy="historyLoading"
     >
       <header>
         <div>
@@ -347,19 +344,40 @@ onMounted(loadImports)
           </h3>
         </div><History :size="19" />
       </header>
+      <div
+        v-if="historyError"
+        class="history-error"
+        role="alert"
+      >
+        <span>{{ historyError }}</span>
+        <button
+          type="button"
+          :disabled="historyLoading"
+          @click="loadImports"
+        >
+          <RotateCcw :size="15" />重新读取迁移记录
+        </button>
+      </div>
       <p
-        v-if="historyLoading && !imports.length"
+        v-if="historyStale"
+        class="history-stale"
+        role="status"
+      >
+        当前仍显示上一次成功读取的迁移记录。
+      </p>
+      <p
+        v-if="historyLoading && !historyLoaded"
         class="history-empty"
       >
         正在读取迁移记录…
       </p>
       <p
-        v-else-if="!imports.length"
+        v-else-if="historyLoaded && !imports.length"
         class="history-empty"
       >
         还没有完成过旧版迁移。
       </p>
-      <ol v-else>
+      <ol v-else-if="imports.length">
         <li
           v-for="item in imports"
           :key="item.importId"
@@ -403,5 +421,6 @@ onMounted(loadImports)
 </template>
 
 <style scoped>
-.legacy-panel{margin-top:16px;padding:26px;border:1px solid var(--line);border-radius:17px;background:rgba(255,253,247,.78);box-shadow:0 16px 48px rgba(34,48,43,.05)}.legacy-header{display:flex;gap:24px;align-items:flex-start;justify-content:space-between;margin-bottom:20px}.legacy-header p,.import-history header p{margin:0 0 8px;color:var(--cinnabar);font-size:12px;font-weight:850;letter-spacing:.14em}.legacy-header h2,.import-history h3{margin:0;color:var(--green-deep);font-family:Georgia,'Microsoft YaHei',serif;font-size:21px}.legacy-header span{display:block;max-width:680px;margin-top:9px;color:var(--ink-muted)}button{display:inline-flex;min-height:44px;gap:7px;align-items:center;justify-content:center;padding:10px 14px;border:1px solid var(--line);border-radius:10px;background:var(--paper-raised);cursor:pointer}button:disabled{opacity:.5;cursor:default}.legacy-error,.candidate-warning{display:flex;gap:8px;align-items:center;padding:12px 14px;color:#843d2c;border-radius:10px;background:rgba(185,88,63,.08)}.candidate-banner{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;padding:15px;color:#557263;border:1px solid rgba(33,51,45,.14);border-radius:12px;background:rgba(33,51,45,.055)}.candidate-banner>svg{align-self:start}.candidate-banner div{display:grid;gap:4px}.candidate-banner strong{color:var(--green-deep)}.candidate-banner span,.candidate-banner small{color:var(--ink-muted);font-size:11px;line-height:1.6}.candidate-banner small{display:flex;gap:5px;align-items:center}.migration-stats{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin:14px 0 0}.migration-stats div{padding:15px;border-radius:12px;background:rgba(232,221,199,.34)}.migration-stats dt{color:var(--ink-muted);font-size:11px}.migration-stats dd{margin:6px 0 0;color:var(--green-deep);font-family:Georgia,serif;font-size:25px;font-weight:700}.issue-list{display:grid;gap:8px;max-height:330px;margin:14px 0 0;padding:0;overflow:auto;list-style:none}.issue-list li{display:grid;grid-template-columns:108px minmax(120px,.6fr) 1fr;gap:12px;align-items:start;padding:12px 14px;border-radius:10px;background:rgba(185,88,63,.06)}.issue-list strong{color:#843d2c;font-size:12px}.issue-list span,.issue-list small,.issue-overflow{color:var(--ink-muted);font-size:11px;overflow-wrap:anywhere}.candidate-actions{display:flex;gap:18px;align-items:center;justify-content:flex-end;margin-top:16px}.candidate-actions>span{margin-right:auto;color:var(--ink-muted);font-size:12px}.candidate-actions button{color:#fffdf7;border-color:var(--green-deep);background:var(--green-deep)}.progress-card{display:grid;gap:10px;margin-top:16px;padding:16px;border-radius:12px;background:rgba(33,51,45,.06)}.progress-card>div:first-child{display:flex;justify-content:space-between;color:var(--green-deep);font-size:12px}.progress-track{height:8px;overflow:hidden;border-radius:999px;background:rgba(33,51,45,.12)}.progress-fill{display:block;width:100%;height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--green-deep),#6f8e7f);transform:scaleX(var(--progress));transform-origin:left;transition:transform var(--motion-standard) var(--ease-standard)}.progress-card small{color:var(--ink-muted)}.import-history{margin-top:22px;padding-top:20px;border-top:1px solid var(--line)}.import-history>header{display:flex;align-items:center;justify-content:space-between;margin:0}.import-history header p{font-size:10px}.import-history h3{font-size:17px}.history-empty{margin:13px 0 0;color:var(--ink-muted);font-size:12px}.import-history ol{display:grid;gap:8px;margin:13px 0 0;padding:0;list-style:none}.import-history li{display:grid;grid-template-columns:1fr auto auto;gap:12px;align-items:center;padding:13px 14px;border-radius:11px;background:rgba(232,221,199,.27)}.import-history li>div{display:grid;gap:3px}.import-history li strong{color:var(--green-deep);font-size:12px}.import-history li span,.import-history li small{color:var(--ink-muted);font-size:10px}.history-status{padding:5px 8px;border-radius:999px;background:rgba(33,51,45,.08)}.history-status.rolled_back{color:#843d2c;background:rgba(185,88,63,.08)}.import-history button{color:#843d2c;border-color:rgba(185,88,63,.22);background:transparent}@media(max-width:980px){.migration-stats{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:760px){.legacy-panel{padding:20px 16px}.legacy-header{flex-direction:column}.legacy-header button{width:100%}.candidate-banner{grid-template-columns:auto 1fr}.candidate-banner small{grid-column:2}.migration-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.issue-list li{grid-template-columns:1fr;gap:4px}.candidate-actions{align-items:stretch;flex-direction:column}.candidate-actions button{width:100%}.import-history li{grid-template-columns:1fr auto}.import-history button{grid-column:1/-1;width:100%}}@media(prefers-reduced-motion:reduce){.progress-fill{transition:none}}
+.legacy-panel{margin-top:16px;padding:26px;border:1px solid var(--line);border-radius:17px;background:rgba(255,253,247,.78);box-shadow:0 16px 48px rgba(34,48,43,.05)}.legacy-header{display:flex;gap:24px;align-items:flex-start;justify-content:space-between;margin-bottom:20px}.legacy-header p,.import-history header p{margin:0 0 8px;color:var(--cinnabar);font-size:12px;font-weight:850;letter-spacing:.14em}.legacy-header h2,.import-history h3{margin:0;color:var(--green-deep);font-family:Georgia,'Microsoft YaHei',serif;font-size:21px}.legacy-header span{display:block;max-width:680px;margin-top:9px;color:var(--ink-muted)}button{display:inline-flex;min-height:44px;gap:7px;align-items:center;justify-content:center;padding:10px 14px;border:1px solid var(--line);border-radius:10px;background:var(--paper-raised);cursor:pointer}button:disabled{opacity:.5;cursor:default}.legacy-error,.candidate-warning{display:flex;gap:8px;align-items:center;padding:12px 14px;color:#843d2c;border-radius:10px;background:rgba(185,88,63,.08)}.candidate-banner{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;padding:15px;color:#557263;border:1px solid rgba(33,51,45,.14);border-radius:12px;background:rgba(33,51,45,.055)}.candidate-banner>svg{align-self:start}.candidate-banner div{display:grid;gap:4px}.candidate-banner strong{color:var(--green-deep)}.candidate-banner span,.candidate-banner small{color:var(--ink-muted);font-size:12px;line-height:1.6}.candidate-banner small{display:flex;gap:5px;align-items:center}.migration-stats{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin:14px 0 0}.migration-stats div{padding:15px;border-radius:12px;background:rgba(232,221,199,.34)}.migration-stats dt{color:var(--ink-muted);font-size:12px}.migration-stats dd{margin:6px 0 0;color:var(--green-deep);font-family:Georgia,serif;font-size:25px;font-weight:700}.issue-list{display:grid;gap:8px;max-height:330px;margin:14px 0 0;padding:0;overflow:auto;list-style:none}.issue-list li{display:grid;grid-template-columns:108px minmax(120px,.6fr) 1fr;gap:12px;align-items:start;padding:12px 14px;border-radius:10px;background:rgba(185,88,63,.06)}.issue-list strong{color:#843d2c;font-size:12px}.issue-list span,.issue-list small,.issue-overflow{color:var(--ink-muted);font-size:12px;overflow-wrap:anywhere}.candidate-actions{display:flex;gap:18px;align-items:center;justify-content:flex-end;margin-top:16px}.candidate-actions>span{margin-right:auto;color:var(--ink-muted);font-size:12px}.candidate-actions button{color:#fffdf7;border-color:var(--green-deep);background:var(--green-deep)}.progress-card{display:grid;gap:10px;margin-top:16px;padding:16px;border-radius:12px;background:rgba(33,51,45,.06)}.progress-card>div:first-child{display:flex;justify-content:space-between;color:var(--green-deep);font-size:12px}.progress-track{height:8px;overflow:hidden;border-radius:999px;background:rgba(33,51,45,.12)}.progress-fill{display:block;width:100%;height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--green-deep),#6f8e7f);transform:scaleX(var(--progress));transform-origin:left;transition:transform var(--motion-standard) var(--ease-standard)}.progress-card small{color:var(--ink-muted)}.import-history{margin-top:22px;padding-top:20px;border-top:1px solid var(--line)}.import-history>header{display:flex;align-items:center;justify-content:space-between;margin:0}.import-history header p{font-size:12px}.import-history h3{font-size:17px}.history-empty{margin:13px 0 0;color:var(--ink-muted);font-size:12px}.import-history ol{display:grid;gap:8px;margin:13px 0 0;padding:0;list-style:none}.import-history li{display:grid;grid-template-columns:1fr auto auto;gap:12px;align-items:center;padding:13px 14px;border-radius:11px;background:rgba(232,221,199,.27)}.import-history li>div{display:grid;gap:3px}.import-history li strong{color:var(--green-deep);font-size:12px}.import-history li span,.import-history li small{color:var(--ink-muted);font-size:12px}.history-status{padding:5px 8px;border-radius:999px;background:rgba(33,51,45,.08)}.history-status.rolled_back{color:#843d2c;background:rgba(185,88,63,.08)}.import-history button{color:#843d2c;border-color:rgba(185,88,63,.22);background:transparent}@media(max-width:980px){.migration-stats{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:760px){.legacy-panel{padding:20px 16px}.legacy-header{flex-direction:column}.legacy-header button{width:100%}.candidate-banner{grid-template-columns:auto 1fr}.candidate-banner small{grid-column:2}.migration-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.issue-list li{grid-template-columns:1fr;gap:4px}.candidate-actions{align-items:stretch;flex-direction:column}.candidate-actions button{width:100%}.import-history li{grid-template-columns:1fr auto}.import-history button{grid-column:1/-1;width:100%}}@media(prefers-reduced-motion:reduce){.progress-fill{transition:none}}
+.history-error{display:flex;gap:12px;align-items:center;justify-content:space-between;margin-top:13px;padding:11px 13px;color:#843d2c;border:1px solid rgba(185,88,63,.22);border-radius:10px;background:rgba(185,88,63,.07);font-size:12px}.history-error button{flex:0 0 auto;min-height:44px}.history-stale{margin:9px 0 0;color:var(--ink-muted);font-size:12px}@media(max-width:760px){.history-error{align-items:stretch;flex-direction:column}.history-error button{width:100%}}
 </style>

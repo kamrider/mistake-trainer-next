@@ -1,6 +1,6 @@
 [package]
 name = "mistake-trainer-next"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 description = "Offline-first mistake training desktop app"
 authors = ["Mistake Trainer Next contributors"]
 edition = "2024"
@@ -52,6 +52,7 @@ windows = { version = "=0.62.2", features = [
   "Win32_System_SystemInformation",
   "Win32_System_Threading",
   "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
 ] }
 
 [build-dependencies]
@@ -64,6 +65,6 @@ tower = { version = "=0.5.3", features = ["util"] }
 zip = "=0.6.6"
 
 [features]
-default = ["custom-protocol"]
+default = ["custom-protocol", "local-ocr-runtime"]
 custom-protocol = ["tauri/custom-protocol"]
 local-ocr-runtime = ["dep:ort", "dep:ppocr-rs"]

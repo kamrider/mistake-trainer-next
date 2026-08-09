@@ -1,30 +1,41 @@
 <script setup lang="ts">
 import { isTauri } from '@tauri-apps/api/core'
 import { CheckCircle2, ShieldAlert, X } from '@lucide/vue'
-import { computed, onErrorCaptured, onMounted, onUnmounted, provide, ref, watch } from 'vue'
+import { computed, nextTick, onErrorCaptured, onMounted, onUnmounted, provide, ref, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import { failure, type AppResult } from '../shared/api/app-result'
-import { commands, type BackupRestoreReceipt, type ProfileOverview, type ProfileSummary, type SyncNowReport, type SystemStatus, type WindowsCompatibilityStatus } from '../shared/api/bindings'
+import { commands, type BackupRestoreReceipt, type ProfileSummary, type SyncNowReport, type SystemStatus, type WindowsCompatibilityStatus } from '../shared/api/bindings'
 import { normalizeAppResult } from '../shared/api/normalize-result'
 import { loadSystemStatus } from '../shared/api/system-status'
 import AppShell, { type AppPage } from './AppShell.vue'
+import { useLibraryAccessLifecycle } from './composables/useLibraryAccessLifecycle'
+import { useProfileManagement } from './composables/useProfileManagement'
 import LibraryAccessScreen from './LibraryAccessScreen.vue'
 import { libraryAccessControllerKey } from './library-access-controller'
 import { createSyncController, syncControllerKey, syncStatusCopy, type SyncPhase, type SyncTrigger } from './sync-controller'
+import { createWorkspaceTransitionGuard, workspaceTransitionGuardKey } from './workspace-transition-guard'
 
 const route = useRoute()
 const router = useRouter()
 const desktopRuntime = isTauri()
-type LibraryAccessPhase = 'checking' | 'unlocked' | 'locked' | 'error' | 'unlocking' | 'restarting'
-type LibraryAccessErrorReason = 'credentials' | 'storage'
-const libraryAccessPhase = ref<LibraryAccessPhase>(desktopRuntime ? 'checking' : 'unlocked')
-const libraryAccessError = ref('')
-const libraryAccessErrorReason = ref<LibraryAccessErrorReason>('credentials')
-let workspaceInitialized = false
+const workspaceTransitionGuard = createWorkspaceTransitionGuard()
+provide(workspaceTransitionGuardKey, workspaceTransitionGuard)
+const {
+  phase: libraryAccessPhase,
+  errorMessage: libraryAccessError,
+  errorReason: libraryAccessErrorReason,
+  workspaceInitialized,
+  checkLibraryAccess: loadLibraryAccess,
+  unlockLibrary,
+  enterRestarting,
+} = useLibraryAccessLifecycle({
+  desktopRuntime,
+  checkAccess: async () => normalizeAppResult(await commands.libraryAccessStatus()),
+  unlock: async () => normalizeAppResult(await commands.libraryUnlock()),
+  initializeWorkspace,
+})
 provide(libraryAccessControllerKey, {
-  enterRestarting: () => {
-    libraryAccessPhase.value = 'restarting'
-  },
+  enterRestarting,
 })
 const activePage = computed(() => (route.meta.shellPage ?? route.name ?? 'dashboard') as AppPage)
 type PageDirection = 'forward' | 'backward'
@@ -42,6 +53,7 @@ const systemStatus = ref<AppResult<SystemStatus>>()
 const syncPhase = ref<SyncPhase>('local_only')
 const automaticSyncCooldownMs = 15_000
 let lastSuccessfulSyncAtUtcMs = 0
+let cloudRestoreTask: Promise<void> | undefined
 const shellSyncStatus = computed(() => {
   if (systemStatus.value === undefined) {
     return { label: '正在检查资料库', tone: 'neutral' as const }
@@ -54,16 +66,17 @@ const shellSyncStatus = computed(() => {
   }
   return syncStatusCopy(syncPhase.value)
 })
-const profiles = ref<ProfileSummary[]>([])
-const activeProfileId = ref('')
-const profileBusy = ref(false)
-const profileError = ref('')
 const profileEpoch = ref(0)
 const restoreNotice = ref<BackupRestoreReceipt>()
 const windowsCompatibility = ref<WindowsCompatibilityStatus>()
 const compatibilityNoticeDismissed = ref(false)
 const routeError = ref('')
 const routeErrorDetail = ref('')
+const routeRenderEpoch = ref(0)
+const routePage = ref<HTMLElement>()
+const routePageKey = computed(() => `${route.fullPath}:${profileEpoch.value}:${routeRenderEpoch.value}`)
+type RouteFocusRequest = { routePageKey: string; previousActive: Element | null }
+const pendingRouteFocus = ref<RouteFocusRequest>()
 const mutationSyncPhases = new Set<SyncPhase>([
   'idle',
   'syncing',
@@ -75,6 +88,23 @@ const syncController = createSyncController(performSync, {
   canScheduleMutation: () => mutationSyncPhases.has(syncPhase.value),
 })
 provide(syncControllerKey, syncController)
+const profileManagement = useProfileManagement({
+  enabled: desktopRuntime,
+  listProfiles: async () => normalizeAppResult(await commands.profileList()),
+  scheduleSync: () => syncController.scheduleMutation(),
+  refreshWorkspace: async () => {
+    profileEpoch.value += 1
+    await router.push({ name: 'dashboard' })
+  },
+})
+const {
+  profiles,
+  activeProfileId,
+  busy: profileBusy,
+  errorMessage: profileError,
+  loadProfiles,
+  mutateProfile,
+} = profileManagement
 const previewProfile: ProfileSummary = {
   id: 'preview-profile',
   name: '本机学习档案',
@@ -83,7 +113,7 @@ const previewProfile: ProfileSummary = {
   revision: 1,
 }
 const shellProfiles = computed(() =>
-  profiles.value.length || desktopRuntime ? profiles.value : [previewProfile],
+  profiles.value.length || desktopRuntime ? [...profiles.value] : [previewProfile],
 )
 const shellActiveProfileId = computed(() =>
   activeProfileId.value || (desktopRuntime ? '' : previewProfile.id),
@@ -94,6 +124,12 @@ watch(() => route.fullPath, () => {
   routeErrorDetail.value = ''
 })
 
+watch(routePageKey, requestRouteFocus)
+
+watch(routeError, (error) => {
+  if (error) requestRouteFocus()
+})
+
 watch(activePage, (next, previous) => {
   if (next === previous) return
   pageDirection.value = (pageOrder[next] ?? 0) >= (pageOrder[previous] ?? 0)
@@ -101,11 +137,56 @@ watch(activePage, (next, previous) => {
     : 'backward'
 })
 
-onErrorCaptured((error, _instance, info) => {
+function requestRouteFocus() {
+  pendingRouteFocus.value = {
+    routePageKey: routePageKey.value,
+    previousActive: document.activeElement,
+  }
+  void nextTick(resolveRouteFocus)
+}
+
+function resolveRouteFocus({ allowPageFallback = false }: { allowPageFallback?: boolean } = {}) {
+  const request = pendingRouteFocus.value
+  const page = routePage.value
+  if (!request || !page || page.dataset.routePageKey !== request.routePageKey) return
+
+  const active = document.activeElement
+  if (
+    active !== request.previousActive
+    && active !== document.body
+    && active !== document.documentElement
+  ) {
+    pendingRouteFocus.value = undefined
+    return
+  }
+
+  const heading = page.querySelector<HTMLElement>('h1')
+  if (!heading && !allowPageFallback) return
+  const target = heading ?? page
+  if (heading && !heading.hasAttribute('tabindex')) heading.setAttribute('tabindex', '-1')
+  target.focus({ preventScroll: true })
+  pendingRouteFocus.value = undefined
+}
+
+function handleRoutePageEntered() {
+  resolveRouteFocus()
+}
+
+function handleRouteContentResolved() {
+  resolveRouteFocus({ allowPageFallback: true })
+}
+
+function retryCurrentRoute() {
+  routeError.value = ''
+  routeErrorDetail.value = ''
+  routeRenderEpoch.value += 1
+}
+
+onErrorCaptured((error) => {
   routeError.value = '这个页面暂时打不开'
   routeErrorDetail.value = desktopRuntime
-    ? '本地资料库没有被修改。返回训练台后可以重新打开这个页面。'
-    : `浏览器预览遇到异常（${info}），请重新打开页面。`
+    ? '已保存的本地资料没有被修改。重试会重新打开此页面，未保存的页面输入可能需要重新填写。'
+    : '浏览器预览遇到异常。重试会重新打开此页面，未保存的页面输入可能需要重新填写。'
   if (import.meta.env.DEV) console.error('route render error', error)
   return false
 })
@@ -124,7 +205,6 @@ onUnmounted(() => {
 })
 
 async function initializeWorkspace() {
-  if (workspaceInitialized) return
   try {
     systemStatus.value = await loadSystemStatus()
   } catch {
@@ -136,12 +216,11 @@ async function initializeWorkspace() {
     )
   }
   await Promise.all([loadProfiles(), loadRestoreReceipt()])
-  workspaceInitialized = true
   void restoreCloudAndSync('startup')
 }
 
 function handleOnline() {
-  if (libraryAccessPhase.value !== 'unlocked' || !workspaceInitialized) return
+  if (libraryAccessPhase.value !== 'unlocked' || !workspaceInitialized.value) return
   void restoreCloudAndSync('online')
 }
 
@@ -149,7 +228,7 @@ function handleVisibilityChange() {
   if (
     document.visibilityState !== 'visible'
     || libraryAccessPhase.value !== 'unlocked'
-    || !workspaceInitialized
+    || !workspaceInitialized.value
   ) return
   void restoreCloudAndSync('visible')
 }
@@ -164,23 +243,33 @@ function isNetworkFailure(code: string): boolean {
   ].includes(code)
 }
 
-async function restoreCloudAndSync(reason: SyncTrigger) {
+function restoreCloudAndSync(reason: SyncTrigger): Promise<void> {
+  if (cloudRestoreTask) return cloudRestoreTask
   if (!desktopRuntime) {
     syncPhase.value = 'local_only'
-    return
+    return Promise.resolve()
   }
   if (
     reason === 'visible'
     && lastSuccessfulSyncAtUtcMs > 0
     && Date.now() - lastSuccessfulSyncAtUtcMs < automaticSyncCooldownMs
   ) {
-    return
+    return Promise.resolve()
   }
   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
     syncPhase.value = 'offline'
-    return
+    return Promise.resolve()
   }
 
+  const job = runCloudRestoreAndSync(reason)
+  const tracked = job.finally(() => {
+    if (cloudRestoreTask === tracked) cloudRestoreTask = undefined
+  })
+  cloudRestoreTask = tracked
+  return tracked
+}
+
+async function runCloudRestoreAndSync(reason: SyncTrigger) {
   try {
     const invocation = await commands.authRestore()
     if (invocation.status === 'error') {
@@ -265,56 +354,6 @@ async function performSync(reason: SyncTrigger): Promise<AppResult<SyncNowReport
   }
 }
 
-async function loadLibraryAccess() {
-  if (!desktopRuntime) {
-    libraryAccessPhase.value = 'unlocked'
-    await initializeWorkspace()
-    return
-  }
-
-  libraryAccessPhase.value = 'checking'
-  libraryAccessError.value = ''
-  libraryAccessErrorReason.value = 'credentials'
-  try {
-    const result = normalizeAppResult(await commands.libraryAccessStatus())
-    if (!result.ok) {
-      libraryAccessPhase.value = 'error'
-      libraryAccessError.value = result.error.userMessage
-      libraryAccessErrorReason.value = result.error.code === 'LIBRARY_STORAGE_UNAVAILABLE'
-        ? 'storage'
-        : 'credentials'
-      return
-    }
-    if (result.data.locked) {
-      libraryAccessPhase.value = 'locked'
-      return
-    }
-    libraryAccessPhase.value = 'unlocked'
-    await initializeWorkspace()
-  } catch {
-    libraryAccessPhase.value = 'error'
-    libraryAccessError.value = 'Windows 凭据管理器没有响应，请重新检查或使用当前账户解锁。'
-  }
-}
-
-async function unlockLibrary() {
-  if (!desktopRuntime || libraryAccessPhase.value === 'unlocking' || libraryAccessPhase.value === 'restarting') return
-  libraryAccessPhase.value = 'unlocking'
-  libraryAccessError.value = ''
-  try {
-    const result = normalizeAppResult(await commands.libraryUnlock())
-    if (!result.ok) {
-      libraryAccessPhase.value = 'error'
-      libraryAccessError.value = result.error.userMessage
-      return
-    }
-    libraryAccessPhase.value = 'restarting'
-  } catch {
-    libraryAccessPhase.value = 'error'
-    libraryAccessError.value = '当前 Windows 账户未能完成解锁，请稍后再试。'
-  }
-}
-
 const restoreNoticeCopy = computed(() => {
   const receipt = restoreNotice.value
   if (!receipt) return undefined
@@ -366,71 +405,37 @@ async function loadRestoreReceipt() {
   }
 }
 
-async function loadProfiles() {
-  if (!desktopRuntime) return
-  profileBusy.value = true
-  profileError.value = ''
-  try {
-    const result = normalizeAppResult(await commands.profileList())
-    if (!result.ok) {
-      profileError.value = result.error.userMessage
-      return
-    }
-    applyOverview(result.data)
-  } catch {
-    profileError.value = '学习档案没有读取成功，请重新打开应用后重试。'
-  } finally {
-    profileBusy.value = false
-  }
-}
-
-function applyOverview(overview: ProfileOverview) {
-  profiles.value = overview.profiles
-  activeProfileId.value = overview.activeProfileId
-}
-
-async function mutateProfile(
-  invoke: () => ReturnType<typeof commands.profileList>,
-  refreshWorkspace: boolean,
-  scheduleSync: boolean,
-) {
-  if (!desktopRuntime || profileBusy.value) return
-  profileBusy.value = true
-  profileError.value = ''
-  try {
-    const result = normalizeAppResult(await invoke())
-    if (!result.ok) {
-      profileError.value = result.error.userMessage
-      return
-    }
-    applyOverview(result.data)
-    if (scheduleSync) syncController.scheduleMutation()
-    if (refreshWorkspace) {
-      profileEpoch.value += 1
-      await router.push({ name: 'dashboard' })
-    }
-  } catch {
-    profileError.value = '学习档案没有完成这次操作，请稍后重试。'
-  } finally {
-    profileBusy.value = false
-  }
-}
-
-function createProfile(name: string) {
-  return mutateProfile(() => commands.profileCreate({ name }), true, true)
+async function createProfile(name: string): Promise<boolean> {
+  if (!await workspaceTransitionGuard.attempt()) return false
+  return mutateProfile(
+    async () => normalizeAppResult(await commands.profileCreate({ name })),
+    { refreshWorkspace: true, scheduleSync: true },
+  )
 }
 
 function renameProfile(profileId: string, name: string) {
-  return mutateProfile(() => commands.profileRename({ profileId, name }), false, true)
+  return mutateProfile(
+    async () => normalizeAppResult(await commands.profileRename({ profileId, name })),
+    { refreshWorkspace: false, scheduleSync: true },
+  )
 }
 
-function deleteProfile(profileId: string, confirmationName: string) {
-  return mutateProfile(() => commands.profileDelete({ profileId, confirmationName }), true, true)
+async function deleteProfile(profileId: string, confirmationName: string): Promise<boolean> {
+  const deletesActiveProfile = profileId === activeProfileId.value
+  if (deletesActiveProfile && !await workspaceTransitionGuard.attempt()) return false
+  return mutateProfile(
+    async () => normalizeAppResult(await commands.profileDelete({ profileId, confirmationName })),
+    { refreshWorkspace: deletesActiveProfile, scheduleSync: true },
+  )
 }
 
-function selectProfile(profileId: string) {
-  if (profileId === activeProfileId.value) return
-  return mutateProfile(() => commands.profileSelect(profileId), true, false)
+async function selectProfile(profileId: string): Promise<boolean> {
+  if (profileId === activeProfileId.value) return false
+  if (!await workspaceTransitionGuard.attempt()) return false
+  return mutateProfile(
+    async () => normalizeAppResult(await commands.profileSelect(profileId)),
+    { refreshWorkspace: true, scheduleSync: false },
+  )
 }
 </script>
 
@@ -458,54 +463,62 @@ function selectProfile(profileId: string) {
     @profile-delete="deleteProfile"
     @profile-retry="loadProfiles"
   >
-    <Transition name="restore-notice">
-      <aside
-        v-if="restoreNoticeCopy"
-        :class="['restore-notice', restoreNoticeCopy.kind]"
-        :role="restoreNoticeCopy.kind === 'success' ? 'status' : 'alert'"
-        :aria-live="restoreNoticeCopy.kind === 'success' ? 'polite' : 'assertive'"
-      >
-        <component
-          :is="restoreNoticeCopy.kind === 'success' ? CheckCircle2 : ShieldAlert"
-          :size="21"
-        />
-        <span><strong>{{ restoreNoticeCopy.title }}</strong><small>{{ restoreNoticeCopy.detail }}</small></span>
-        <button
-          type="button"
-          aria-label="关闭恢复结果通知"
-          @click="restoreNotice = undefined"
+    <div class="global-notice-stack">
+      <Transition name="restore-notice">
+        <aside
+          v-if="restoreNoticeCopy"
+          :class="['restore-notice', restoreNoticeCopy.kind]"
+          :role="restoreNoticeCopy.kind === 'success' ? 'status' : 'alert'"
+          :aria-live="restoreNoticeCopy.kind === 'success' ? 'polite' : 'assertive'"
         >
-          <X :size="16" />
-        </button>
-      </aside>
-    </Transition>
-    <Transition name="restore-notice">
-      <aside
-        v-if="compatibilityNoticeCopy"
-        class="restore-notice compatibility-notice warning"
-        role="alert"
-        aria-live="polite"
-      >
-        <ShieldAlert :size="21" />
-        <span><strong>{{ compatibilityNoticeCopy.title }}</strong><small>{{ compatibilityNoticeCopy.detail }}</small></span>
-        <button
-          type="button"
-          aria-label="关闭 Windows 兼容性通知"
-          @click="compatibilityNoticeDismissed = true"
+          <component
+            :is="restoreNoticeCopy.kind === 'success' ? CheckCircle2 : ShieldAlert"
+            :size="21"
+          />
+          <span><strong>{{ restoreNoticeCopy.title }}</strong><small>{{ restoreNoticeCopy.detail }}</small></span>
+          <button
+            type="button"
+            aria-label="关闭恢复结果通知"
+            @click="restoreNotice = undefined"
+          >
+            <X :size="16" />
+          </button>
+        </aside>
+      </Transition>
+      <Transition name="restore-notice">
+        <aside
+          v-if="compatibilityNoticeCopy"
+          class="restore-notice compatibility-notice warning"
+          role="alert"
+          aria-live="polite"
         >
-          <X :size="16" />
-        </button>
-      </aside>
-    </Transition>
+          <ShieldAlert :size="21" />
+          <span><strong>{{ compatibilityNoticeCopy.title }}</strong><small>{{ compatibilityNoticeCopy.detail }}</small></span>
+          <button
+            type="button"
+            aria-label="关闭 Windows 兼容性通知"
+            @click="compatibilityNoticeDismissed = true"
+          >
+            <X :size="16" />
+          </button>
+        </aside>
+      </Transition>
+    </div>
     <RouterView v-slot="{ Component }">
       <Transition
         :name="pageTransitionName"
         mode="out-in"
+        @after-enter="handleRoutePageEntered"
       >
         <div
-          :key="`${route.fullPath}:${profileEpoch}`"
+          :key="routePageKey"
+          ref="routePage"
           class="route-page"
           :data-direction="pageDirection"
+          :data-route-page-key="routePageKey"
+          role="region"
+          aria-label="页面内容"
+          tabindex="-1"
         >
           <section
             v-if="routeError"
@@ -515,16 +528,26 @@ function selectProfile(profileId: string) {
             <ShieldAlert :size="28" />
             <h1>{{ routeError }}</h1>
             <p>{{ routeErrorDetail }}</p>
-            <button
-              type="button"
-              @click="router.push({ name: 'dashboard' })"
-            >
-              回到训练台
-            </button>
+            <div class="route-error-actions">
+              <button
+                type="button"
+                @click="retryCurrentRoute"
+              >
+                重试当前页面
+              </button>
+              <button
+                class="secondary"
+                type="button"
+                @click="router.push({ name: 'dashboard' })"
+              >
+                回到训练台
+              </button>
+            </div>
           </section>
           <Suspense
             v-else
             timeout="0"
+            @resolve="handleRouteContentResolved"
           >
             <template v-if="Component">
               <component :is="Component" />
@@ -572,13 +595,14 @@ function selectProfile(profileId: string) {
   .page-forward-enter-active, .page-forward-leave-active, .page-backward-enter-active, .page-backward-leave-active { transition: none; }
   .page-forward-enter-from, .page-forward-leave-to, .page-backward-enter-from, .page-backward-leave-to { opacity: 1; transform: none; }
 }
-.restore-notice { position: fixed; z-index: 60; top: 20px; right: 24px; display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 11px; align-items: center; width: min(440px,calc(100vw - 48px)); padding: 14px 15px; color: #fffdf7; border: 1px solid rgba(255,255,255,.28); border-radius: 15px; background: #365446; box-shadow: 0 18px 46px rgba(26,38,33,.24); }
-.restore-notice.warning { background: #874a38; }.restore-notice span { display: grid; gap: 3px; }.restore-notice strong { font-size: 13px; }.restore-notice small { color: rgba(255,253,247,.82); font-size: 11px; line-height: 1.5; }.restore-notice button { display: grid; width: 30px; height: 30px; padding: 0; place-items: center; color: inherit; border: 0; border-radius: 50%; background: rgba(255,255,255,.1); cursor: pointer; }
-.compatibility-notice { top: 20px; left: 24px; right: auto; }
+.global-notice-stack { position: fixed; z-index: 60; top: 20px; right: 24px; display: grid; gap: 10px; width: min(440px,calc(100vw - 48px)); max-height: calc(100vh - 40px); overflow: auto; overscroll-behavior: contain; }
+.restore-notice { position: relative; display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 11px; align-items: center; padding: 14px 15px; color: #fffdf7; border: 1px solid rgba(255,255,255,.28); border-radius: 15px; background: #365446; box-shadow: 0 18px 46px rgba(26,38,33,.24); }
+.restore-notice.warning { background: #874a38; }.restore-notice span { display: grid; gap: 3px; }.restore-notice strong { font-size: 13px; }.restore-notice small { color: rgba(255,253,247,.82); font-size: 12px; line-height: 1.5; }.restore-notice button { display: grid; width: 44px; height: 44px; padding: 0; place-items: center; color: inherit; border: 0; border-radius: 50%; background: rgba(255,255,255,.1); cursor: pointer; }
 .restore-notice-enter-active,.restore-notice-leave-active { transition: opacity var(--motion-standard) var(--ease-standard), transform var(--motion-page) var(--ease-standard); }.restore-notice-enter-from,.restore-notice-leave-to { opacity: 0; transform: translateY(-10px) scale(.98); }
-@media (max-width: 760px) { .restore-notice { top: 12px; right: 12px; width: calc(100vw - 24px); } .compatibility-notice { left: 12px; right: auto; } }
+@media (max-width: 760px) { .global-notice-stack { top: 12px; right: 12px; width: calc(100vw - 24px); max-height: calc(100vh - 24px); } }
 @media (prefers-reduced-motion: reduce) { .restore-notice-enter-active,.restore-notice-leave-active { transition: none; } }
+.route-page:focus,.route-page h1[tabindex="-1"]:focus { outline: none; }
 .route-loading { display: grid; min-height: 50vh; place-items: center; color: var(--ink-muted); font-size: 14px; }
-.route-error { display: grid; min-height: 50vh; padding: 52px 24px; place-items: center; align-content: center; gap: 10px; color: var(--ink-muted); text-align: center; }.route-error svg { color: var(--cinnabar); }.route-error h1 { margin: 0; color: var(--ink); font-family: var(--font-serif); font-size: 28px; }.route-error p { max-width: 420px; margin: 0; line-height: 1.7; }.route-error button { min-height: 42px; margin-top: 8px; padding: 0 18px; color: var(--paper); border: 0; border-radius: 999px; background: var(--green-deep); cursor: pointer; }
+.route-error { display: grid; min-height: 50vh; padding: 52px 24px; place-items: center; align-content: center; gap: 10px; color: var(--ink-muted); text-align: center; }.route-error svg { color: var(--cinnabar); }.route-error h1 { margin: 0; color: var(--ink); font-family: var(--font-serif); font-size: 28px; }.route-error p { max-width: 460px; margin: 0; line-height: 1.7; }.route-error button { min-height: 44px; padding: 0 18px; color: var(--paper); border: 0; border-radius: 999px; background: var(--green-deep); font-weight: 740; cursor: pointer; }.route-error>button,.route-error-actions { margin-top: 8px; }.route-error-actions { display: flex; gap: 9px; flex-wrap: wrap; justify-content: center; }.route-error-actions .secondary { color: var(--green-deep); border: 1px solid rgba(33,51,45,.22); background: var(--paper); }
 @media (prefers-reduced-motion: reduce) { .route-error button { transition: none; } }
 </style>

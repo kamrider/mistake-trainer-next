@@ -1,6 +1,6 @@
 # Windows 支持与兼容策略
 
-本策略用于正式付费版本，不把“能启动”误称为“受支持”。Mistake Trainer Next
+本策略用于正式发布版本，不把“能启动”误称为“受支持”。Mistake Trainer Next
 采用 x64、当前用户安装和本机加密资料库；安装器携带 Microsoft Evergreen
 WebView2 离线安装程序，因此首次安装不依赖外网。
 
@@ -17,7 +17,7 @@ WebView2 离线安装程序，因此首次安装不依赖外网。
 最低技术基线为 Windows 10 1809（内部版本 17763）x64；ARM64 原生包要求 Windows
 11（内部版本 22000 或更高）。普通 Windows 10
 Home/Pro 已在 2025-10-14 结束常规支持；继续使用时必须由用户或组织确保仍能获得
-Microsoft 安全更新。Windows 7/8 即使能运行某些旧 WebView2 组合，也不进入付费版
+Microsoft 安全更新。Windows 7/8 即使能运行某些旧 WebView2 组合，也不进入正式版
 支持范围。
 
 ## 安装与运行时

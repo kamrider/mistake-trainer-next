@@ -37,6 +37,8 @@ fn initial_migration_creates_the_offline_first_core_schema() {
         "capture_recognition_job_items",
         "capture_recognition_suggestions",
         "capture_recognition_operations",
+        "capture_recognition_pairs",
+        "capture_recognition_pair_items",
     ];
     for table in expected {
         let found: i64 = connection
@@ -52,7 +54,7 @@ fn initial_migration_creates_the_offline_first_core_schema() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        15
+        17
     );
 }
 
@@ -99,7 +101,7 @@ fn version_nine_library_adds_reversible_legacy_import_ledger_without_changing_ro
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        15
+        17
     );
     let import_columns = connection
         .prepare("SELECT name FROM pragma_table_info('legacy_imports') ORDER BY cid")
@@ -183,7 +185,7 @@ fn version_two_library_upgrades_without_changing_existing_problem_data() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        15
+        17
     );
 
     let staged_role: String = connection
@@ -246,7 +248,7 @@ fn version_five_library_adds_active_profile_preferences_without_changing_existin
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        15
+        17
     );
 }
 
@@ -317,7 +319,7 @@ fn version_six_library_adds_exam_state_without_changing_existing_session_progres
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        15
+        17
     );
 
     let invalid_phase = connection.execute(
@@ -444,7 +446,7 @@ fn version_seven_library_adds_focus_state_without_changing_existing_preferences_
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        15
+        17
     );
 
     assert!(connection.execute(
@@ -570,7 +572,7 @@ fn version_eight_library_adds_review_history_index_without_changing_existing_row
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        15
+        17
     );
 }
 
@@ -690,7 +692,7 @@ fn version_ten_library_adds_cloud_sync_state_without_changing_existing_data() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        15
+        17
     );
     assert_eq!(
         connection.query_row(
@@ -781,7 +783,7 @@ fn version_eleven_library_adds_non_destructive_crop_ledger_without_changing_capt
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        15
+        17
     );
 }
 
@@ -827,7 +829,7 @@ fn version_twelve_library_adds_sync_merge_state_without_changing_open_conflicts(
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        15
+        17
     );
     assert_eq!(
         connection
@@ -1022,7 +1024,7 @@ fn version_thirteen_library_adds_recognition_jobs_without_changing_capture_rows(
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        15
+        17
     );
     for table in [
         "capture_recognition_jobs",
@@ -1096,13 +1098,13 @@ fn version_fourteen_library_preserves_derivations_and_expands_the_position_budge
         )
         .unwrap();
 
-    run_migrations(&mut connection).expect("upgrade schema v14 to v15");
+    run_migrations(&mut connection).expect("upgrade schema v14 to current");
 
     assert_eq!(
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        15
+        17
     );
     assert_eq!(
         connection
@@ -1144,5 +1146,187 @@ fn version_fourteen_library_preserves_derivations_and_expands_the_position_budge
             )
             .is_err(),
         "position 150 must remain outside the batch capacity"
+    );
+}
+
+#[test]
+fn version_fifteen_library_adds_empty_pair_suggestions_without_changing_existing_rows() {
+    let directory = tempdir().expect("temp directory");
+    let path = directory.path().join("library.db");
+    let mut connection =
+        open_encrypted_database(&path, "recognition-pair-upgrade-key").expect("open database");
+    for migration in [
+        include_str!("../migrations/0001_initial.sql"),
+        include_str!("../migrations/0002_review_sessions.sql"),
+        include_str!("../migrations/0003_capture_inbox.sql"),
+        include_str!("../migrations/0004_capture_staged_roles.sql"),
+        include_str!("../migrations/0005_profile_preferences.sql"),
+        include_str!("../migrations/0006_account_preferences.sql"),
+        include_str!("../migrations/0007_review_exam.sql"),
+        include_str!("../migrations/0008_review_focus.sql"),
+        include_str!("../migrations/0009_review_history_index.sql"),
+        include_str!("../migrations/0010_legacy_import_ledger.sql"),
+        include_str!("../migrations/0011_cloud_sync_state.sql"),
+        include_str!("../migrations/0012_asset_derivations.sql"),
+        include_str!("../migrations/0013_sync_merge_state.sql"),
+        include_str!("../migrations/0014_capture_recognition_jobs.sql"),
+        include_str!("../migrations/0015_expand_asset_derivation_positions.sql"),
+    ] {
+        connection.execute_batch(migration).unwrap();
+    }
+    connection.pragma_update(None, "user_version", 15).unwrap();
+    connection
+        .execute_batch(
+            "INSERT INTO learner_profiles(
+                 id, account_id, name, created_at_utc_ms, updated_at_utc_ms, revision
+             ) VALUES('profile', 'account', 'existing', 1, 2, 3);
+             INSERT INTO assets(
+                 id, account_id, plaintext_sha256, encrypted_path, byte_length, media_type,
+                 created_at_utc_ms
+             ) VALUES('asset', 'account', 'hash', 'blobs/asset.mtb', 10, 'image/png', 4);
+             INSERT INTO capture_batches(
+                 id, account_id, profile_id, subject, state, created_at_utc_ms,
+                 updated_at_utc_ms, revision
+             ) VALUES('batch', 'account', 'profile', '数学', 'organizing', 5, 6, 7);
+             INSERT INTO capture_items(
+                 id, batch_id, asset_id, client_upload_id, source_name, source_sequence,
+                 width, height, created_at_utc_ms, staged_role
+             ) VALUES(
+                 'item', 'batch', 'asset', 'upload', 'question.png', 0, 1200, 900, 8,
+                 'question'
+             );",
+        )
+        .unwrap();
+
+    run_migrations(&mut connection).expect("upgrade schema v15 to v17");
+
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .unwrap(),
+        17
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT b.subject, b.revision, i.source_name, i.staged_role
+                 FROM capture_batches b
+                 JOIN capture_items i ON i.batch_id = b.id
+                 WHERE b.id = 'batch'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .unwrap(),
+        (
+            "数学".to_owned(),
+            7,
+            "question.png".to_owned(),
+            "question".to_owned(),
+        )
+    );
+    for table in [
+        "capture_recognition_pairs",
+        "capture_recognition_pair_items",
+    ] {
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    [table],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1,
+            "missing table {table}"
+        );
+    }
+}
+
+#[test]
+fn version_sixteen_library_adds_durable_pair_state_without_changing_existing_pairs() {
+    let directory = tempdir().expect("temp directory");
+    let path = directory.path().join("library.db");
+    let mut connection =
+        open_encrypted_database(&path, "pair-state-upgrade-key").expect("open database");
+
+    for migration in [
+        include_str!("../migrations/0001_initial.sql"),
+        include_str!("../migrations/0002_review_sessions.sql"),
+        include_str!("../migrations/0003_capture_inbox.sql"),
+        include_str!("../migrations/0004_capture_staged_roles.sql"),
+        include_str!("../migrations/0005_profile_preferences.sql"),
+        include_str!("../migrations/0006_account_preferences.sql"),
+        include_str!("../migrations/0007_review_exam.sql"),
+        include_str!("../migrations/0008_review_focus.sql"),
+        include_str!("../migrations/0009_review_history_index.sql"),
+        include_str!("../migrations/0010_legacy_import_ledger.sql"),
+        include_str!("../migrations/0011_cloud_sync_state.sql"),
+        include_str!("../migrations/0012_asset_derivations.sql"),
+        include_str!("../migrations/0013_sync_merge_state.sql"),
+        include_str!("../migrations/0014_capture_recognition_jobs.sql"),
+        include_str!("../migrations/0015_expand_asset_derivation_positions.sql"),
+        include_str!("../migrations/0016_capture_recognition_pairs.sql"),
+    ] {
+        connection.execute_batch(migration).unwrap();
+    }
+    connection.pragma_update(None, "user_version", 16).unwrap();
+    connection
+        .execute_batch(
+            "INSERT INTO learner_profiles(
+               id, account_id, name, created_at_utc_ms, updated_at_utc_ms
+             ) VALUES('profile', 'account', 'existing', 1, 1);
+             INSERT INTO capture_batches(
+               id, account_id, profile_id, subject, state,
+               created_at_utc_ms, updated_at_utc_ms, revision
+             ) VALUES('batch', 'account', 'profile', '', 'organizing', 1, 1, 1);
+             INSERT INTO capture_recognition_jobs(
+               id, account_id, profile_id, batch_id, state, engine, engine_version,
+               model_component_id, total_items, processed_items,
+               created_at_utc_ms, updated_at_utc_ms
+             ) VALUES(
+               'job', 'account', 'profile', 'batch', 'applied',
+               'fixture', '1', 'ppocrv6_small', 1, 1, 1, 1
+             );
+             INSERT INTO capture_recognition_operations(
+               id, job_id, batch_id, before_revision, after_revision,
+               created_entity_ids_json, created_at_utc_ms
+             ) VALUES('operation', 'job', 'batch', 1, 2, '{}', 2);
+             INSERT INTO capture_recognition_pairs(
+               id, operation_id, pair_slot, confidence_basis_points, created_at_utc_ms
+             ) VALUES('pair', 'operation', 0, 9000, 3);",
+        )
+        .unwrap();
+
+    run_migrations(&mut connection).expect("upgrade schema v16 to v17");
+
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .unwrap(),
+        17
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT state, resolved_at_utc_ms, created_at_utc_ms
+                 FROM capture_recognition_pairs WHERE id = 'pair'",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<i64>>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .unwrap(),
+        ("active".to_owned(), None, 3)
     );
 }

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ChevronLeft, ChevronRight, X } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { acquireDialogDocumentBoundary } from '../../../app/dialog-document-boundary'
+import { trapDialogFocus } from '../../../app/dialog-focus'
 
 const props = defineProps<{
   images: string[]
@@ -13,7 +15,7 @@ const dialog = ref<HTMLElement>()
 const closeButton = ref<HTMLButtonElement>()
 const index = ref(clampIndex(props.initialIndex))
 let returnFocus: HTMLElement | null = null
-let previousOverflow = ''
+let releaseDialogBoundary: (() => void) | undefined
 
 const currentImage = computed(() => props.images[index.value] ?? '')
 const hasPrevious = computed(() => index.value > 0)
@@ -35,12 +37,6 @@ function next() {
     index.value += 1
 }
 
-function focusableElements() {
-  return Array.from(dialog.value?.querySelectorAll<HTMLElement>(
-    'button:not(:disabled), [href], [tabindex]:not([tabindex="-1"])',
-  ) ?? [])
-}
-
 function handleKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') {
     event.preventDefault()
@@ -57,25 +53,7 @@ function handleKeydown(event: KeyboardEvent) {
     next()
     return
   }
-  if (event.key !== 'Tab')
-    return
-
-  const focusable = focusableElements()
-  if (focusable.length === 0) {
-    event.preventDefault()
-    dialog.value?.focus()
-    return
-  }
-  const first = focusable[0]!
-  const last = focusable.at(-1)!
-  if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault()
-    last.focus()
-  }
-  else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault()
-    first.focus()
-  }
+  trapDialogFocus(event, dialog.value)
 }
 
 watch(() => props.initialIndex, value => {
@@ -87,15 +65,14 @@ watch(() => props.images.length, () => {
 
 onMounted(() => {
   returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
-  previousOverflow = document.body.style.overflow
-  document.body.style.overflow = 'hidden'
+  if (dialog.value) releaseDialogBoundary = acquireDialogDocumentBoundary(dialog.value)
   document.addEventListener('keydown', handleKeydown)
   closeButton.value?.focus()
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', handleKeydown)
-  document.body.style.overflow = previousOverflow
+  releaseDialogBoundary?.()
   returnFocus?.focus()
 })
 </script>
@@ -210,8 +187,8 @@ onBeforeUnmount(() => {
 
 .lightbox-close {
   display: grid;
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   place-items: center;
   color: var(--ink);
   border: 1px solid var(--line);
@@ -245,7 +222,7 @@ onBeforeUnmount(() => {
   display: inline-flex;
   gap: 7px;
   align-items: center;
-  min-height: 40px;
+  min-height: 44px;
   padding: 0 14px;
   color: var(--paper);
   border: 0;

@@ -38,6 +38,40 @@ describe('ExportCandidatePicker', () => {
     expect(view.emitted('source')).toEqual([['latest_review_session']])
   })
 
+  it('uses one tab stop and follows standard radio-group navigation keys', async () => {
+    const user = userEvent.setup()
+    const view = render(ExportCandidatePicker, {
+      props: { candidates, source: 'due', selectedIds: [], loading: false },
+    })
+    const due = screen.getByRole('radio', { name: /到期队列/ })
+    const latest = screen.getByRole('radio', { name: /最近训练批次/ })
+    const all = screen.getByRole('radio', { name: /全部活动题/ })
+
+    expect(due).toHaveAttribute('tabindex', '0')
+    expect(latest).toHaveAttribute('tabindex', '-1')
+    expect(all).toHaveAttribute('tabindex', '-1')
+
+    due.focus()
+    await user.keyboard('{ArrowRight}')
+    expect(latest).toHaveFocus()
+    expect(view.emitted('source')).toEqual([['latest_review_session']])
+
+    await user.keyboard('{End}')
+    expect(all).toHaveFocus()
+    expect(view.emitted('source')?.at(-1)).toEqual(['all_active'])
+
+    await user.keyboard('{ArrowRight}')
+    expect(due).toHaveFocus()
+    await user.keyboard('{ArrowLeft}')
+    expect(all).toHaveFocus()
+    await user.keyboard('{Home}')
+    expect(due).toHaveFocus()
+    await user.keyboard('{ArrowDown}')
+    expect(latest).toHaveFocus()
+    await user.keyboard('{ArrowUp}')
+    expect(due).toHaveFocus()
+  })
+
   it('filters locally and selects only visible results', async () => {
     const user = userEvent.setup()
     const view = render(ExportCandidatePicker, {
@@ -75,5 +109,23 @@ describe('ExportCandidatePicker', () => {
 
     await view.rerender({ candidates: [], source: 'latest_review_session', selectedIds: [], loading: false })
     expect(screen.getByText('还没有可用的最近训练批次。')).toBeVisible()
+  })
+
+  it('locks every selection control without pretending to reload candidates', async () => {
+    const view = render(ExportCandidatePicker, {
+      props: { candidates, source: 'due', selectedIds: ['math-1'], loading: false, disabled: true },
+    })
+
+    expect(screen.queryByText('正在读取可导出的题目…')).not.toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: /到期队列/ })).toBeDisabled()
+    expect(screen.getAllByRole('radio').map(radio => radio.getAttribute('tabindex')))
+      .toEqual(['-1', '-1', '-1'])
+    expect(screen.getByRole('searchbox', { name: '搜索候选题' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '全选当前结果' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '清空选择' })).toBeDisabled()
+    expect(screen.getByRole('checkbox', { name: /选择数学：圆锥曲线/ })).toBeDisabled()
+
+    await userEvent.click(screen.getByRole('checkbox', { name: /选择数学：圆锥曲线/ }))
+    expect(view.emitted('toggle')).toBeUndefined()
   })
 })

@@ -8,10 +8,11 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    infrastructure::{
-        assets::{decrypt_asset, plaintext_sha256},
-        supabase::{CloudError, CloudPushTransport, ObjectUploadResult, RemoteObjectMetadata},
+    application::ports::sync::{
+        CloudError, CloudPushTransport, ObjectUploadResult, PushAcknowledgement,
+        RemoteObjectMetadata,
     },
+    infrastructure::assets::{decrypt_asset, plaintext_sha256},
     modules::sync_store::{
         LeasedPushBatch, PendingAssetTransfer, SyncStoreError, acknowledge_push_batch,
         fail_push_batch, lease_push_batch,
@@ -432,7 +433,7 @@ fn require_matching_metadata(
 
 fn validate_acknowledgements(
     batch: &LeasedPushBatch,
-    acknowledgements: &[crate::infrastructure::supabase::PushAcknowledgement],
+    acknowledgements: &[PushAcknowledgement],
 ) -> Result<(), SyncPushError> {
     if acknowledgements.len() != batch.operations.len() {
         return Err(SyncPushError::InvalidAcknowledgement);

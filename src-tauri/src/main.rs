@@ -1,6 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    if let Some(exit_code) = run_windows_product_check_if_requested() {
+        std::process::exit(exit_code);
+    }
+
     if let Some(exit_code) = run_windows_self_check_if_requested() {
         std::process::exit(exit_code);
     }
@@ -47,6 +51,29 @@ fn main() {
             .show();
         std::process::exit(1);
     }
+}
+
+fn run_windows_product_check_if_requested() -> Option<i32> {
+    let request =
+        match mistake_trainer_next_lib::modules::product_check::parse_windows_product_check_request(
+            std::env::args_os().skip(1),
+        ) {
+            Ok(Some(request)) => request,
+            Ok(None) => return None,
+            Err(_) => return Some(11),
+        };
+    Some(
+        match mistake_trainer_next_lib::modules::product_check::write_windows_product_check(
+            &request.output_path,
+            &request.scratch_root,
+            env!("CARGO_PKG_VERSION"),
+            current_utc_millis(),
+        ) {
+            Ok(true) => 0,
+            Ok(false) => 12,
+            Err(_) => 11,
+        },
+    )
 }
 
 fn run_windows_self_check_if_requested() -> Option<i32> {

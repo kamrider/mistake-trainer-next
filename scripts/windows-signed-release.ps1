@@ -35,8 +35,8 @@ foreach ($name in $requiredEnvironment) {
 }
 
 Assert-Release (-not [string]::IsNullOrWhiteSpace($ReleaseTag)) 'release tag is missing.'
-$releaseVersion = $ReleaseTag.TrimStart('v')
-Assert-Release ($releaseVersion -match '^\d+\.\d+\.\d+([+-][0-9A-Za-z.-]+)?$') "tag '$ReleaseTag' is not a supported semantic version."
+Assert-Release ($ReleaseTag -match '^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:(?:0|[1-9]\d*)|(?:\d*[A-Za-z-][0-9A-Za-z-]*))(?:\.(?:(?:0|[1-9]\d*)|(?:\d*[A-Za-z-][0-9A-Za-z-]*)))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$') "tag '$ReleaseTag' must use exact vX.Y.Z semantic-version syntax."
+$releaseVersion = $ReleaseTag.Substring(1)
 $targetTriple = if ($Architecture -eq 'arm64') { 'aarch64-pc-windows-msvc' } else { 'x86_64-pc-windows-msvc' }
 $selfCheckArchitecture = if ($Architecture -eq 'arm64') { 'arm64' } else { 'x86_64' }
 

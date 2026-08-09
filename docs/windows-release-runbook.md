@@ -16,6 +16,9 @@ unsigned executable is a development artifact, not a product release.
   the HTTPS manifest endpoint and updater public key only through the protected release environment.
 - Never publish directly from CI. The workflow creates a draft GitHub Release for a human to
   review and promote.
+- Build only an annotated `vX.Y.Z` tag that resolves to the current `origin/main` commit after a
+  successful completed CI `push` run for that exact SHA. The signed workflow verifies all four
+  facts before either architecture receives signing credentials.
 - Keep a previous signed installer available for rollback. Downgrades are blocked by the
   installer, so rollback requires an explicit uninstall/reinstall procedure and a verified
   encrypted backup.
@@ -57,8 +60,9 @@ available, and rotate credentials only through a separate audited migration proc
    The smoke must report runtime readiness, create a real WebView2 window, keep it alive for
    10 seconds, prove a second launch hands off to the first instance, and close without producing
    `startup-failure.json`.
-3. Merge only reviewed changes to `main`.
-4. Create and push an annotated `vX.Y.Z` tag from the reviewed commit.
+3. Merge only reviewed changes to `main` and wait for the CI `push` run on that exact commit to
+   complete successfully.
+4. Create and push an annotated `vX.Y.Z` tag from that current `main` commit.
 5. Wait for **Signed Windows Release**. Missing secrets, certificate mismatch, non-HTTPS
    timestamping/update URLs, version drift, incomplete architecture artifacts, invalid
    Authenticode/updater signatures, or install/self-check/uninstall failure all block the job.

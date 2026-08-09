@@ -105,6 +105,60 @@ describe('CaptureCropEditor', () => {
     expect(recipes.map(recipe => recipe.rect.x)).toEqual([0.06, 0.096, 0.078])
   })
 
+  it('locks every crop mutation while an atomic save is in progress', async () => {
+    const user = userEvent.setup()
+    const view = render(CaptureCropEditor, {
+      props: {
+        dataUrl: 'data:image/png;base64,iVBORw0KGgo=',
+        itemName: '保存中的练习.png',
+        busy: false,
+      },
+    })
+
+    await user.click(screen.getByRole('button', { name: '再框一道题' }))
+    await view.rerender({ busy: true })
+
+    expect(screen.getByRole('dialog', { name: '裁出真正需要的题目范围' })).toHaveAttribute('aria-busy', 'true')
+    expect(screen.getByRole('button', { name: '删除区域 1' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '下移区域 1' })).toBeDisabled()
+    expect([...view.container.querySelectorAll<HTMLButtonElement>('.resize-handle')].every(handle => handle.disabled)).toBe(true)
+
+    const firstRegion = screen.getByRole('group', { name: '裁剪区域 1' })
+    firstRegion.focus()
+    await user.keyboard('{ArrowRight}')
+    await user.keyboard('{Control>}z{/Control}')
+    await user.keyboard('{Escape}')
+    await user.click(view.container.querySelector<HTMLElement>('.crop-backdrop')!)
+
+    expect(screen.getByRole('status')).toHaveTextContent('2 个区域')
+    expect(view.emitted('close')).toBeUndefined()
+
+    await view.rerender({ busy: false })
+    await user.click(screen.getByRole('button', { name: '生成 2 张裁剪图' }))
+    const recipes = (view.emitted('apply') as unknown[][])[0]![0] as CaptureCropRecipe[]
+    expect(recipes).toHaveLength(2)
+    expect(recipes[0]!.rect.x).toBe(0.06)
+  })
+
+  it('moves focus to the selected adjacent region after deleting a row', async () => {
+    const user = userEvent.setup()
+    render(CaptureCropEditor, {
+      props: {
+        dataUrl: 'data:image/png;base64,iVBORw0KGgo=',
+        itemName: '三道题.png',
+        busy: false,
+      },
+    })
+
+    await user.click(screen.getByRole('button', { name: '再框一道题' }))
+    await user.click(screen.getByRole('button', { name: '再框一道题' }))
+    await user.click(screen.getByRole('button', { name: '删除区域 2' }))
+
+    expect(screen.getByRole('button', { name: '选择区域 1' })).toHaveFocus()
+    expect(screen.getByRole('button', { name: '选择区域 1' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('status')).toHaveTextContent('2 个区域')
+  })
+
   it('edits proposed regions without creating crop assets', async () => {
     const user = userEvent.setup()
     const view = render(CaptureCropEditor, {

@@ -326,6 +326,103 @@ fn mismatched_download_is_rejected_and_does_not_leave_a_blob() {
 }
 
 #[test]
+fn failed_pull_does_not_delete_a_preexisting_unowned_blob() {
+    let (transport, _) = fixture();
+    let mut connection = database();
+    let root = tempfile::tempdir().unwrap();
+    let final_blob = root
+        .path()
+        .join("blobs/01/0191365e-2f2f-7b89-b3b0-444444444444.mtb");
+    std::fs::create_dir_all(final_blob.parent().unwrap()).unwrap();
+    let sentinel = b"preexisting-encrypted-blob";
+    std::fs::write(&final_blob, sentinel).unwrap();
+
+    let error = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(pull_until_current(
+            &mut connection,
+            &transport,
+            ACCOUNT_ID,
+            REMOTE_USER_ID,
+            "access-token",
+            root.path(),
+            &ASSET_KEY,
+            10_000,
+        ))
+        .unwrap_err();
+
+    assert_eq!(error.stable_code(), "cloud_asset_mismatch");
+    assert_eq!(std::fs::read(&final_blob).unwrap(), sentinel);
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM assets", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    let cursor = connection
+        .query_row(
+            "SELECT pull_cursor FROM cloud_sync_state WHERE account_id = ?1",
+            [ACCOUNT_ID],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .unwrap();
+    assert_eq!(cursor, None);
+}
+
+#[test]
+fn later_download_failure_cleans_assets_staged_earlier_in_the_page() {
+    const SECOND_ASSET_ID: &str = "0191365e-2f2f-7b89-b3b0-777777777777";
+    let (transport, _) = fixture();
+    let mut changes = transport.changes.lock().unwrap().clone();
+    changes[2].change_seq = 4;
+    changes[3].change_seq = 5;
+    let mut second_asset = changes[1].payload.clone();
+    second_asset["id"] = json!(SECOND_ASSET_ID);
+    second_asset["plaintextSha256"] = json!("b".repeat(64));
+    second_asset["storageObject"] = json!(format!("{REMOTE_USER_ID}/{}", "b".repeat(64)));
+    second_asset["byteLength"] = json!(1);
+    changes.insert(2, change(3, "asset", SECOND_ASSET_ID, second_asset));
+    let transport = MockPull {
+        changes: Arc::new(Mutex::new(changes)),
+        ..transport
+    };
+    let mut connection = database();
+    let root = tempfile::tempdir().unwrap();
+
+    let error = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(pull_until_current(
+            &mut connection,
+            &transport,
+            ACCOUNT_ID,
+            REMOTE_USER_ID,
+            "access-token",
+            root.path(),
+            &ASSET_KEY,
+            10_000,
+        ))
+        .unwrap_err();
+
+    assert_eq!(error.stable_code(), "cloud_request_rejected");
+    assert!(!root.path().join(".sync-pull/5-0").exists());
+    assert!(
+        !root
+            .path()
+            .join("blobs/01/0191365e-2f2f-7b89-b3b0-444444444444.mtb")
+            .exists()
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM assets", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
 fn profile_and_orphan_asset_tombstones_delete_locally_and_select_a_replacement() {
     const REPLACEMENT_PROFILE_ID: &str = "0191365e-2f2f-7b89-b3b0-777777777777";
     const PROFILE_TOMBSTONE_ID: &str = "0191365e-2f2f-7b89-b3b0-888888888888";

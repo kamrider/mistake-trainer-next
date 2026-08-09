@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { CheckCircle2, Cloud, GitCompareArrows, Laptop, RefreshCw, TriangleAlert } from '@lucide/vue'
-import { computed, inject, nextTick, onMounted, ref, shallowRef } from 'vue'
+import { computed, inject, nextTick, onMounted, ref } from 'vue'
 import { syncControllerKey } from '../../../app/sync-controller'
 import {
   commands,
@@ -9,6 +9,8 @@ import {
   type SyncConflictSummary,
 } from '../../../shared/api/bindings'
 import { normalizeAppResult } from '../../../shared/api/normalize-result'
+import { useSyncConflictOperations } from '../composables/useSyncConflictOperations'
+import SyncConflictBulkDialog from './SyncConflictBulkDialog.vue'
 
 interface ConflictGroup {
   key: string
@@ -16,6 +18,11 @@ interface ConflictGroup {
   entityId: string
   entityLabel: string
   conflicts: SyncConflictSummary[]
+}
+
+interface PendingGroupResolution {
+  group: ConflictGroup
+  choice: SyncConflictChoice
 }
 
 type NativeJsonValue =
@@ -26,11 +33,20 @@ const emit = defineEmits<{
 }>()
 const syncController = inject(syncControllerKey, undefined)
 
-const conflicts = shallowRef<SyncConflictSummary[]>([])
-const loading = ref(true)
-const busyKey = ref('')
-const errorMessage = ref('')
-const statusMessage = ref('')
+const {
+  conflicts,
+  loading,
+  busyKey,
+  errorMessage,
+  statusMessage,
+  reload,
+  resolve,
+} = useSyncConflictOperations({
+  listConflicts: async () => normalizeAppResult(await commands.syncConflictList()),
+  scheduleSync: () => syncController?.scheduleMutation(),
+  onChanged: () => emit('changed'),
+})
+const pendingGroupResolution = ref<PendingGroupResolution>()
 const centerElement = ref<HTMLElement>()
 const statusElement = ref<HTMLElement>()
 
@@ -158,93 +174,82 @@ function objectRows(source: JsonValue) {
     }))
 }
 
-async function reload() {
-  if (loading.value && conflicts.value.length) return
-  loading.value = true
-  errorMessage.value = ''
+async function restoreFocus(preferredGroupKey: string) {
   try {
-    const result = normalizeAppResult(await commands.syncConflictList())
-    if (result.ok) {
-      conflicts.value = result.data
-      statusMessage.value = ''
-    }
-    else errorMessage.value = result.error.userMessage
+    await nextTick()
+    const preferred = centerElement.value?.querySelector<HTMLElement>(
+      `[data-conflict-group="${CSS.escape(preferredGroupKey)}"] button:not(:disabled)`,
+    )
+    const first = centerElement.value?.querySelector<HTMLElement>('.conflict-card button:not(:disabled)')
+    ;(preferred ?? first ?? statusElement.value)?.focus()
   }
   catch {
-    errorMessage.value = '同步冲突暂时无法读取；本机与云端内容都没有被修改。'
-  }
-  finally {
-    loading.value = false
+    // Focus recovery is best effort and must not change the durable resolution result.
   }
 }
 
-async function restoreFocus(preferredGroupKey: string) {
-  await nextTick()
-  const preferred = centerElement.value?.querySelector<HTMLElement>(
-    `[data-conflict-group="${CSS.escape(preferredGroupKey)}"] button:not(:disabled)`,
-  )
-  const first = centerElement.value?.querySelector<HTMLElement>('.conflict-card button:not(:disabled)')
-  ;(preferred ?? first ?? statusElement.value)?.focus()
+async function focusGroupAction(groupKey: string, choice: SyncConflictChoice) {
+  try {
+    await nextTick()
+    centerElement.value?.querySelector<HTMLElement>(
+      `[data-conflict-group="${CSS.escape(groupKey)}"] [data-choice="${choice}"]`,
+    )?.focus()
+  }
+  catch {
+    // The operation result remains authoritative if the focus target disappeared.
+  }
+}
+
+function groupIncludesRemoteDeletion(group: ConflictGroup) {
+  return group.conflicts.some(conflict => conflict.fieldName === '__deleted__')
+}
+
+function requestGroupResolution(group: ConflictGroup, choice: SyncConflictChoice) {
+  if (loading.value || busyKey.value) return
+  pendingGroupResolution.value = { group, choice }
+}
+
+async function cancelGroupResolution() {
+  const pending = pendingGroupResolution.value
+  if (!pending) return
+  pendingGroupResolution.value = undefined
+  await focusGroupAction(pending.group.key, pending.choice)
+}
+
+async function confirmGroupResolution() {
+  const pending = pendingGroupResolution.value
+  if (!pending) return
+  pendingGroupResolution.value = undefined
+  await resolveGroup(pending.group, pending.choice)
 }
 
 async function resolveField(conflict: SyncConflictSummary, choice: SyncConflictChoice) {
   const operationKey = `field:${conflict.id}`
-  if (busyKey.value) return
-  busyKey.value = operationKey
-  errorMessage.value = ''
-  statusMessage.value = ''
   const groupKey = `${conflict.entityType}:${conflict.entityId}`
-  try {
-    const result = normalizeAppResult(await commands.syncConflictResolve({
+  const resolved = await resolve(
+    operationKey,
+    async () => normalizeAppResult(await commands.syncConflictResolve({
       conflictId: conflict.id,
       choice,
-    }))
-    if (result.ok) {
-      conflicts.value = result.data
-      statusMessage.value = `${fieldLabel(conflict.fieldName)}已采用${choice === 'local' ? '本机' : '云端'}版本。`
-      syncController?.scheduleMutation()
-      emit('changed')
-      busyKey.value = ''
-      await restoreFocus(groupKey)
-    }
-    else errorMessage.value = result.error.userMessage
-  }
-  catch {
-    errorMessage.value = '这次选择没有保存，本机与云端内容都保持不变。'
-  }
-  finally {
-    busyKey.value = ''
-  }
+    })),
+    `${fieldLabel(conflict.fieldName)}已采用${choice === 'local' ? '本机' : '云端'}版本。`,
+  )
+  if (resolved) await restoreFocus(groupKey)
 }
 
 async function resolveGroup(group: ConflictGroup, choice: SyncConflictChoice) {
   const operationKey = `group:${group.key}`
-  if (busyKey.value) return
-  busyKey.value = operationKey
-  errorMessage.value = ''
-  statusMessage.value = ''
-  try {
-    const result = normalizeAppResult(await commands.syncConflictResolveEntity({
+  const resolved = await resolve(
+    operationKey,
+    async () => normalizeAppResult(await commands.syncConflictResolveEntity({
       entityType: group.entityType,
       entityId: group.entityId,
       choice,
-    }))
-    if (result.ok) {
-      conflicts.value = result.data
-      statusMessage.value = `${group.entityLabel}已全部采用${choice === 'local' ? '本机' : '云端'}版本。`
-      syncController?.scheduleMutation()
-      emit('changed')
-      busyKey.value = ''
-      await restoreFocus(group.key)
-    }
-    else errorMessage.value = result.error.userMessage
-  }
-  catch {
-    errorMessage.value = '这次选择没有保存，本机与云端内容都保持不变。'
-  }
-  finally {
-    busyKey.value = ''
-  }
+    })),
+    `${group.entityLabel}已全部采用${choice === 'local' ? '本机' : '云端'}版本。`,
+  )
+  if (resolved) await restoreFocus(group.key)
+  else await focusGroupAction(group.key, choice)
 }
 
 defineExpose({ reload })
@@ -368,7 +373,7 @@ onMounted(reload)
                 </dl>
                 <button
                   type="button"
-                  :disabled="Boolean(busyKey)"
+                  :disabled="loading || Boolean(busyKey)"
                   :aria-label="`${fieldLabel(conflict.fieldName)}采用本机版本`"
                   @click="resolveField(conflict, 'local')"
                 >
@@ -408,7 +413,7 @@ onMounted(reload)
                 </dl>
                 <button
                   type="button"
-                  :disabled="Boolean(busyKey)"
+                  :disabled="loading || Boolean(busyKey)"
                   :aria-label="`${fieldLabel(conflict.fieldName)}采用云端版本`"
                   @click="resolveField(conflict, 'remote')"
                 >
@@ -423,18 +428,20 @@ onMounted(reload)
           <span>整条内容统一选择</span>
           <button
             type="button"
-            :disabled="Boolean(busyKey)"
+            data-choice="local"
+            :disabled="loading || Boolean(busyKey)"
             :aria-label="`${group.entityLabel}全部采用本机版本`"
-            @click="resolveGroup(group, 'local')"
+            @click="requestGroupResolution(group, 'local')"
           >
             全部保留本机
           </button>
           <button
             type="button"
             class="remote-all"
-            :disabled="Boolean(busyKey)"
+            data-choice="remote"
+            :disabled="loading || Boolean(busyKey)"
             :aria-label="`${group.entityLabel}全部采用云端版本`"
-            @click="resolveGroup(group, 'remote')"
+            @click="requestGroupResolution(group, 'remote')"
           >
             全部采用云端
           </button>
@@ -453,6 +460,16 @@ onMounted(reload)
         <small>本机可以继续离线编辑；下次同步仍会自动合并不同字段。</small>
       </span>
     </div>
+
+    <SyncConflictBulkDialog
+      v-if="pendingGroupResolution"
+      :entity-label="pendingGroupResolution.group.entityLabel"
+      :conflict-count="pendingGroupResolution.group.conflicts.length"
+      :choice="pendingGroupResolution.choice"
+      :includes-remote-deletion="groupIncludesRemoteDeletion(pendingGroupResolution.group)"
+      @cancel="cancelGroupResolution"
+      @confirm="confirmGroupResolution"
+    />
   </section>
 </template>
 
@@ -497,6 +514,7 @@ onMounted(reload)
 }
 button {
   display: inline-flex;
+  min-height: 44px;
   gap: 7px;
   align-items: center;
   justify-content: center;
@@ -535,6 +553,7 @@ button:disabled {
   background: rgba(85, 114, 99, .1);
 }
 .conflict-list {
+  position: relative;
   display: grid;
   gap: 14px;
 }
@@ -556,7 +575,7 @@ button:disabled {
 }
 .entity-type {
   color: var(--cinnabar);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 800;
   letter-spacing: .12em;
 }
@@ -568,7 +587,7 @@ button:disabled {
   display: block;
   margin-top: 4px;
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 .conflict-card-header > svg {
   color: var(--cinnabar);
@@ -612,7 +631,7 @@ button:disabled {
   gap: 7px;
   align-items: center;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 .version-panel.remote > header {
   color: #8d4635;
@@ -637,11 +656,11 @@ button:disabled {
   border-radius: 999px;
   background: rgba(33, 51, 45, .09);
   color: var(--green-deep);
-  font-size: 10px;
+  font-size: 12px;
 }
 .value-chips em {
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: 12px;
   font-style: normal;
 }
 .object-value {
@@ -657,7 +676,7 @@ button:disabled {
 .object-value dt,
 .object-value dd {
   margin: 0;
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
@@ -687,7 +706,7 @@ button:disabled {
 .group-actions span {
   margin-right: auto;
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 .group-actions .remote-all {
   color: #8d4635;
@@ -730,7 +749,7 @@ button:disabled {
 }
 .conflict-card-leave-active {
   position: absolute;
-  width: calc(100% - 52px);
+  width: 100%;
 }
 @media (max-width: 760px) {
   .conflict-center {

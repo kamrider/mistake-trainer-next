@@ -10,6 +10,7 @@ defineProps<{
   generatingId: string
   deletingId: string
   restoringId: string
+  operationBusy: boolean
 }>()
 
 const emit = defineEmits<{
@@ -67,7 +68,7 @@ function layoutLabel(value: ExportLayout) {
             type="button"
             class="generate-action"
             :aria-label="generatingId === snapshot.id ? `正在生成：${snapshot.title}` : `生成导出文件：${snapshot.title}`"
-            :disabled="Boolean(generatingId)"
+            :disabled="operationBusy"
             @click="emit('generate', snapshot)"
           >
             <FileDown :size="16" />{{ generatingId === snapshot.id ? '生成中…' : '生成文件' }}
@@ -75,8 +76,8 @@ function layoutLabel(value: ExportLayout) {
           <button
             type="button"
             class="delete-action"
-            :aria-label="`删除导出快照：${snapshot.title}`"
-            :disabled="deletingId === snapshot.id"
+            :aria-label="deletingId === snapshot.id ? `正在删除导出快照：${snapshot.title}` : `删除导出快照：${snapshot.title}`"
+            :disabled="operationBusy"
             @click="emit('delete', snapshot.id)"
           >
             <Trash2 :size="16" />
@@ -122,8 +123,8 @@ function layoutLabel(value: ExportLayout) {
           <button
             type="button"
             class="restore-action"
-            :aria-label="`恢复导出快照：${deleted.snapshot.title}`"
-            :disabled="restoringId === deleted.snapshot.id"
+            :aria-label="restoringId === deleted.snapshot.id ? `正在恢复导出快照：${deleted.snapshot.title}` : `恢复导出快照：${deleted.snapshot.title}`"
+            :disabled="operationBusy"
             @click="emit('restore', deleted)"
           >
             <RotateCcw :size="15" />{{ restoringId === deleted.snapshot.id ? '恢复中…' : '恢复' }}
@@ -151,13 +152,13 @@ function layoutLabel(value: ExportLayout) {
 .history-heading,
 .trash-panel > header { display: flex; gap: 18px; align-items: flex-start; justify-content: space-between; }
 .history-heading p,
-.trash-panel header p { margin: 0 0 5px; color: var(--cinnabar); font-size: 10px; font-weight: 780; letter-spacing: .12em; }
+.trash-panel header p { margin: 0 0 5px; color: var(--cinnabar); font-size: 12px; font-weight: 780; letter-spacing: .12em; }
 .history-heading h3,
 .trash-panel h4 { margin: 0; color: var(--green-deep); font-family: var(--font-serif); }
 .history-heading h3 { font-size: 19px; }
 .trash-panel h4 { font-size: 16px; }
 .history-heading span,
-.trash-panel header span { display: block; margin-top: 6px; color: var(--ink-muted); font-size: 10px; }
+.trash-panel header span { display: block; margin-top: 6px; color: var(--ink-muted); font-size: 12px; }
 .snapshot-list { display: grid; gap: 9px; margin: 14px 0 0; padding: 0; list-style: none; }
 .snapshot-card { position: relative; display: grid; min-height: 76px; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 12px 14px; border: 1px solid var(--line); border-radius: 4px 13px 13px; background: rgba(255, 253, 247, .82); box-shadow: 3px 3px 0 rgba(232, 221, 199, .52); transition: transform var(--motion-feedback) var(--ease-standard), box-shadow var(--motion-standard) var(--ease-standard); }
 .snapshot-card:hover { box-shadow: 5px 7px 0 rgba(232, 221, 199, .46); transform: translateY(-2px); }
@@ -167,19 +168,19 @@ function layoutLabel(value: ExportLayout) {
 .snapshot-copy small,
 .snapshot-copy time { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .snapshot-copy strong { color: var(--ink); font-size: 13px; }
-.snapshot-copy small { margin-top: 4px; color: var(--green-deep); font-size: 10px; }
-.snapshot-copy time { margin-top: 3px; color: var(--ink-muted); font-size: 9px; }
+.snapshot-copy small { margin-top: 4px; color: var(--green-deep); font-size: 12px; }
+.snapshot-copy time { margin-top: 3px; color: var(--ink-muted); font-size: 12px; }
 .snapshot-actions { display: flex; gap: 7px; align-items: center; }
-button { display: inline-flex; gap: 7px; align-items: center; justify-content: center; min-height: 36px; padding: 0 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper-raised); cursor: pointer; font-size: 11px; font-weight: 700; }
+button { display: inline-flex; gap: 7px; align-items: center; justify-content: center; min-height: 44px; padding: 0 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper-raised); cursor: pointer; font-size: 12px; font-weight: 700; }
 button:disabled { cursor: wait; opacity: .45; }
 .generate-action { color: var(--green-deep); }
-.delete-action { width: 36px; padding: 0; color: var(--cinnabar); }
+.delete-action { width: 44px; padding: 0; color: var(--cinnabar); }
 .trash-panel { margin-top: 20px; padding-top: 18px; border-top: 1px dashed var(--line); }
 .trash-panel > header { align-items: end; }
 .deleted-card { background: rgba(246, 241, 231, .5); box-shadow: none; }
 .deleted-card .snapshot-seal { color: var(--ink-muted); background: var(--sand); }
 .restore-action { color: var(--green-deep); }
-.history-state { display: grid; min-height: 90px; margin: 12px 0 0; place-items: center; color: var(--ink-muted); border: 1px dashed var(--line); border-radius: 12px; font-size: 11px; }
+.history-state { display: grid; min-height: 90px; margin: 12px 0 0; place-items: center; color: var(--ink-muted); border: 1px dashed var(--line); border-radius: 12px; font-size: 12px; }
 .history-state.compact { min-height: 58px; }
 .snapshot-row-enter-active,
 .snapshot-row-leave-active { transition: opacity var(--motion-standard) var(--ease-standard), transform var(--motion-standard) var(--ease-standard); }

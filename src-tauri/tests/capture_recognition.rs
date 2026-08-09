@@ -14,8 +14,10 @@ use mistake_trainer_next_lib::{
     },
     modules::{
         capture_inbox::{
-            CaptureBatchState, CreateCaptureBatch, IngestCaptureItem, create_capture_batch,
-            ingest_capture_item,
+            ApplyCapturePairSuggestions, CaptureBatchState, CreateCaptureBatch, IngestCaptureItem,
+            StageCaptureItemRole, apply_capture_pair_suggestions, create_capture_batch,
+            delete_capture_draft, get_capture_batch_detail, ingest_capture_item,
+            stage_capture_item_role,
         },
         capture_recognition::{
             ApplyCaptureRecognition, CaptureRecognitionDecision, CaptureRecognitionError,
@@ -779,10 +781,14 @@ fn accepted_regions_apply_atomically_to_the_material_library_and_can_revert() {
     assert_eq!(report.applied_suggestion_count, 1);
     assert_eq!(report.created_draft_count, 0);
     assert_eq!(report.created_item_count, 2);
+    assert_eq!(report.pair_suggestion_count, 1);
     assert_eq!(report.unmatched_answer_count, 0);
     assert_eq!(report.detail.batch.revision, before_revision + 1);
     assert!(report.detail.drafts.is_empty());
     assert_eq!(report.detail.unassigned_item_ids.len(), 2);
+    assert_eq!(report.detail.pair_suggestions.len(), 1);
+    assert_eq!(report.detail.pair_suggestions[0].question_item_ids.len(), 1);
+    assert_eq!(report.detail.pair_suggestions[0].answer_item_ids.len(), 1);
     assert!(
         report
             .detail
@@ -854,6 +860,17 @@ fn accepted_regions_apply_atomically_to_the_material_library_and_can_revert() {
     assert_eq!(
         connection
             .query_row(
+                "SELECT COUNT(*) FROM capture_recognition_pairs
+                 WHERE state = 'invalidated' AND resolved_at_utc_ms = 31",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .query_row(
                 "SELECT state FROM capture_recognition_jobs WHERE id = ?1",
                 [job_id],
                 |row| row.get::<_, String>(0),
@@ -877,6 +894,289 @@ fn accepted_regions_apply_atomically_to_the_material_library_and_can_revert() {
             .unwrap()
             .expect("reverted operation summary")
             .reverted
+    );
+}
+
+#[test]
+fn complete_pair_suggestions_become_ready_drafts_in_one_transaction() {
+    let library = TestLibrary::new();
+    let mut connection = library.open();
+    let batch_id = library.organizing_batch(&mut connection);
+    let item_id = library.ingest_image(&mut connection, &batch_id, "paired-image");
+    let (job_id, suggestion_id) = accepted_job(&library, &mut connection, &batch_id, &item_id);
+    let revision = connection
+        .query_row(
+            "SELECT revision FROM capture_batches WHERE id = ?1",
+            [&batch_id],
+            |row| row.get::<_, u32>(0),
+        )
+        .unwrap();
+    let report = apply_capture_recognition(
+        &mut connection,
+        ApplyCaptureRecognition {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch_id.clone(),
+            job_id,
+            expected_revision: revision,
+            accepted_suggestion_ids: vec![suggestion_id],
+            blob_root: library.directory.path().to_owned(),
+            asset_key: ASSET_KEY,
+            now_utc_ms: 30,
+            failure_point: None,
+        },
+    )
+    .expect("apply paired regions");
+    let pair_id = report.detail.pair_suggestions[0].id.clone();
+    let before_sync_count = connection
+        .query_row("SELECT COUNT(*) FROM sync_operations", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap();
+
+    let paired = apply_capture_pair_suggestions(
+        &mut connection,
+        ApplyCapturePairSuggestions {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch_id.clone(),
+            expected_revision: report.detail.batch.revision,
+            pair_ids: vec![pair_id.clone()],
+            now_utc_ms: 31,
+        },
+    )
+    .expect("create the suggested card");
+
+    assert_eq!(paired.batch.revision, report.detail.batch.revision + 1);
+    assert_eq!(paired.drafts.len(), 1);
+    assert!(paired.drafts[0].ready);
+    assert_eq!(paired.drafts[0].question_item_ids.len(), 1);
+    assert_eq!(paired.drafts[0].answer_item_ids.len(), 1);
+    assert!(paired.unassigned_item_ids.is_empty());
+    assert!(paired.pair_suggestions.is_empty());
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT state FROM capture_recognition_pairs WHERE id = ?1",
+                [&pair_id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "applied"
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM problems", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM sync_operations", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+        before_sync_count
+    );
+
+    let after_delete = delete_capture_draft(
+        &mut connection,
+        ACCOUNT,
+        &library.profile_id,
+        &batch_id,
+        &paired.drafts[0].id,
+        paired.batch.revision,
+        32,
+    )
+    .expect("delete generated draft");
+    assert!(after_delete.pair_suggestions.is_empty());
+}
+
+#[test]
+fn pair_suggestion_batch_rolls_back_when_any_selected_pair_is_stale() {
+    let library = TestLibrary::new();
+    let mut connection = library.open();
+    let batch_id = library.organizing_batch(&mut connection);
+    let item_id = library.ingest_image(&mut connection, &batch_id, "atomic-pair-image");
+    let (job_id, suggestion_id) = accepted_job(&library, &mut connection, &batch_id, &item_id);
+    let revision = connection
+        .query_row(
+            "SELECT revision FROM capture_batches WHERE id = ?1",
+            [&batch_id],
+            |row| row.get::<_, u32>(0),
+        )
+        .unwrap();
+    let report = apply_capture_recognition(
+        &mut connection,
+        ApplyCaptureRecognition {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch_id.clone(),
+            job_id,
+            expected_revision: revision,
+            accepted_suggestion_ids: vec![suggestion_id],
+            blob_root: library.directory.path().to_owned(),
+            asset_key: ASSET_KEY,
+            now_utc_ms: 30,
+            failure_point: None,
+        },
+    )
+    .expect("apply paired regions");
+    let pair_id = report.detail.pair_suggestions[0].id.clone();
+
+    let error = apply_capture_pair_suggestions(
+        &mut connection,
+        ApplyCapturePairSuggestions {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch_id.clone(),
+            expected_revision: report.detail.batch.revision,
+            pair_ids: vec![pair_id, "missing-pair".to_owned()],
+            now_utc_ms: 31,
+        },
+    )
+    .expect_err("a stale selection must roll the whole transaction back");
+    assert!(matches!(
+        error,
+        mistake_trainer_next_lib::modules::capture_inbox::CaptureInboxError::InvalidInput
+    ));
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM capture_drafts WHERE batch_id = ?1",
+                [&batch_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT revision FROM capture_batches WHERE id = ?1",
+                [&batch_id],
+                |row| row.get::<_, u32>(0),
+            )
+            .unwrap(),
+        report.detail.batch.revision
+    );
+}
+
+#[test]
+fn a_multi_image_pair_disappears_and_cannot_partially_apply_after_one_item_changes_role() {
+    let library = TestLibrary::new();
+    let mut connection = library.open();
+    let batch_id = library.organizing_batch(&mut connection);
+    let item_id = library.ingest_image(&mut connection, &batch_id, "paired-source");
+    let (job_id, suggestion_id) = accepted_job(&library, &mut connection, &batch_id, &item_id);
+    let revision = connection
+        .query_row(
+            "SELECT revision FROM capture_batches WHERE id = ?1",
+            [&batch_id],
+            |row| row.get::<_, u32>(0),
+        )
+        .unwrap();
+    let report = apply_capture_recognition(
+        &mut connection,
+        ApplyCaptureRecognition {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch_id.clone(),
+            job_id,
+            expected_revision: revision,
+            accepted_suggestion_ids: vec![suggestion_id],
+            blob_root: library.directory.path().to_owned(),
+            asset_key: ASSET_KEY,
+            now_utc_ms: 30,
+            failure_point: None,
+        },
+    )
+    .expect("apply paired regions");
+    let pair_id = report.detail.pair_suggestions[0].id.clone();
+    let additional_question =
+        library.ingest_image(&mut connection, &batch_id, "additional-question");
+    connection
+        .execute(
+            "INSERT INTO capture_recognition_pair_items(pair_id, item_id, role)
+             VALUES(?1, ?2, 'question')",
+            rusqlite::params![pair_id, additional_question],
+        )
+        .unwrap();
+
+    let before_change =
+        get_capture_batch_detail(&connection, ACCOUNT, &library.profile_id, &batch_id).unwrap();
+    assert_eq!(before_change.pair_suggestions.len(), 1);
+    assert_eq!(before_change.pair_suggestions[0].question_item_ids.len(), 2);
+
+    let after_change = stage_capture_item_role(
+        &mut connection,
+        StageCaptureItemRole {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch_id.clone(),
+            item_id: additional_question.clone(),
+            staged_role: "answer".to_owned(),
+            expected_revision: before_change.batch.revision,
+            now_utc_ms: 31,
+        },
+    )
+    .expect("change a paired item role");
+    assert!(after_change.pair_suggestions.is_empty());
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT state FROM capture_recognition_pairs WHERE id = ?1",
+                [&pair_id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "invalidated"
+    );
+
+    let after_reversal = stage_capture_item_role(
+        &mut connection,
+        StageCaptureItemRole {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch_id.clone(),
+            item_id: additional_question,
+            staged_role: "question".to_owned(),
+            expected_revision: after_change.batch.revision,
+            now_utc_ms: 32,
+        },
+    )
+    .expect("reverse the role");
+    assert!(
+        after_reversal.pair_suggestions.is_empty(),
+        "an invalidated suggestion must not resurrect"
+    );
+
+    let error = apply_capture_pair_suggestions(
+        &mut connection,
+        ApplyCapturePairSuggestions {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch_id.clone(),
+            expected_revision: after_reversal.batch.revision,
+            pair_ids: vec![pair_id],
+            now_utc_ms: 33,
+        },
+    )
+    .expect_err("a pair with one changed item must never apply partially");
+    assert!(matches!(
+        error,
+        mistake_trainer_next_lib::modules::capture_inbox::CaptureInboxError::InvalidInput
+    ));
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM capture_drafts WHERE batch_id = ?1",
+                [&batch_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
     );
 }
 
@@ -1067,6 +1367,174 @@ async fn real_double_column_page_becomes_twelve_recoverable_encrypted_drafts() {
     assert_eq!(reverted.detail.items.len(), 1);
     assert_eq!(reverted.detail.items[0].id, source_item_id);
     assert!(reverted.detail.drafts.is_empty());
+}
+
+#[cfg(feature = "local-ocr-runtime")]
+#[tokio::test]
+#[ignore = "requires rendered paired exam/answer pages and the hash-pinned OCR runtime"]
+async fn real_exam_and_answer_pages_produce_reviewable_pair_suggestions() {
+    let component_directory = std::path::PathBuf::from(
+        std::env::var_os("MISTAKE_TRAINER_OCR_COMPONENT_DIR")
+            .expect("MISTAKE_TRAINER_OCR_COMPONENT_DIR is required"),
+    );
+    let runtime_library_path = std::path::PathBuf::from(
+        std::env::var_os("MISTAKE_TRAINER_ORT_DLL").expect("MISTAKE_TRAINER_ORT_DLL is required"),
+    );
+    let corpus_directory = std::path::PathBuf::from(
+        std::env::var_os("MISTAKE_TRAINER_OCR_PAIRED_IMAGE_DIR")
+            .expect("MISTAKE_TRAINER_OCR_PAIRED_IMAGE_DIR is required"),
+    );
+    let question_bytes =
+        std::fs::read(corpus_directory.join("math-exam-1.png")).expect("read exam page");
+    let answer_bytes =
+        std::fs::read(corpus_directory.join("math-answer-01.png")).expect("read answer page");
+
+    let library = TestLibrary::new();
+    let mut connection = library.open();
+    let batch_id = library.organizing_batch(&mut connection);
+    let question_item_id = ingest_capture_item(
+        &mut connection,
+        library.directory.path(),
+        &ASSET_KEY,
+        IngestCaptureItem {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch_id.clone(),
+            client_upload_id: "real-math-exam".to_owned(),
+            source_name: "math-exam-1.png".to_owned(),
+            source_sequence: Some(0),
+            bytes: question_bytes,
+            now_utc_ms: 5,
+        },
+    )
+    .expect("ingest exam page")
+    .id;
+    let answer_item_id = ingest_capture_item(
+        &mut connection,
+        library.directory.path(),
+        &ASSET_KEY,
+        IngestCaptureItem {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch_id.clone(),
+            client_upload_id: "real-math-answer".to_owned(),
+            source_name: "math-answer-01.png".to_owned(),
+            source_sequence: Some(1),
+            bytes: answer_bytes,
+            now_utc_ms: 6,
+        },
+    )
+    .expect("ingest answer page")
+    .id;
+    connection
+        .execute(
+            "UPDATE capture_items SET staged_role = 'answer' WHERE id = ?1",
+            [&answer_item_id],
+        )
+        .unwrap();
+    let job = create_or_resume_recognition_job(
+        &mut connection,
+        start_input(&library, &batch_id, &[&question_item_id, &answer_item_id]),
+    )
+    .expect("create paired recognition job");
+    let context = worker_context(&library, connection, &batch_id, &job.id);
+    let runtime_temp = library.directory.path().join("ocr-pair-runtime-temp");
+    let runtime = PpOcrLocalRuntime::from_verified_small_component(
+        &component_directory,
+        &runtime_library_path,
+        &runtime_temp,
+        2,
+    )
+    .expect("initialize verified OCR runtime");
+    let manager =
+        CaptureRecognitionManager::with_engine(Arc::new(AnchorRecognitionEngine::new(runtime)));
+    let (_, sink) = collecting_event_sink();
+
+    let reviewed = manager
+        .run_job(context.clone(), sink)
+        .await
+        .expect("run paired real pages")
+        .expect("paired job remains available");
+    assert_eq!(reviewed.state, CaptureRecognitionJobState::Review);
+    assert_eq!(reviewed.suggestions.len(), 2);
+    assert_eq!(reviewed.suggestions[0].regions.len(), 8);
+    assert_eq!(reviewed.suggestions[1].regions.len(), 4);
+    assert!(
+        reviewed.suggestions[1]
+            .reason_codes
+            .contains(&CaptureRecognitionReasonCode::MatchedQuestionAnswerAnchor)
+    );
+
+    let suggestion_ids = reviewed
+        .suggestions
+        .iter()
+        .map(|suggestion| suggestion.id.clone())
+        .collect::<Vec<_>>();
+    let mut connection = context.connection.lock().expect("connection");
+    for suggestion_id in &suggestion_ids {
+        review_recognition_suggestion(
+            &mut connection,
+            ReviewCaptureRecognitionSuggestion {
+                account_id: ACCOUNT.to_owned(),
+                profile_id: library.profile_id.clone(),
+                job_id: job.id.clone(),
+                suggestion_id: suggestion_id.clone(),
+                decision: CaptureRecognitionDecision::Accepted,
+                edited_regions: None,
+                now_utc_ms: 20,
+            },
+        )
+        .expect("accept real paired suggestion");
+    }
+    let revision = connection
+        .query_row(
+            "SELECT revision FROM capture_batches WHERE id = ?1",
+            [&batch_id],
+            |row| row.get::<_, u32>(0),
+        )
+        .unwrap();
+    let report = apply_capture_recognition(
+        &mut connection,
+        ApplyCaptureRecognition {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch_id.clone(),
+            job_id: job.id,
+            expected_revision: revision,
+            accepted_suggestion_ids: suggestion_ids,
+            blob_root: library.directory.path().to_owned(),
+            asset_key: ASSET_KEY,
+            now_utc_ms: 21,
+            failure_point: None,
+        },
+    )
+    .expect("apply paired real regions");
+    assert_eq!(report.created_item_count, 12);
+    assert_eq!(report.pair_suggestion_count, 4);
+    assert_eq!(report.unmatched_answer_count, 0);
+    assert_eq!(report.detail.pair_suggestions.len(), 4);
+
+    let paired = apply_capture_pair_suggestions(
+        &mut connection,
+        ApplyCapturePairSuggestions {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id,
+            expected_revision: report.detail.batch.revision,
+            pair_ids: report
+                .detail
+                .pair_suggestions
+                .iter()
+                .map(|pair| pair.id.clone())
+                .collect(),
+            now_utc_ms: 22,
+        },
+    )
+    .expect("create four reviewable cards");
+    assert_eq!(paired.drafts.len(), 4);
+    assert!(paired.drafts.iter().all(|draft| draft.ready));
+    assert_eq!(paired.unassigned_item_ids.len(), 4);
+    assert!(paired.pair_suggestions.is_empty());
 }
 
 #[test]
@@ -1264,6 +1732,65 @@ fn failures_before_staging_after_staging_and_inside_transaction_leave_no_partial
             "accepted"
         );
     }
+}
+
+#[test]
+fn transaction_begin_failure_cleans_staged_recognition_assets() {
+    let library = TestLibrary::new();
+    let mut connection = library.open();
+    let batch_id = library.organizing_batch(&mut connection);
+    let item_id = library.ingest_image(&mut connection, &batch_id, "begin-failure");
+    let (job_id, suggestion_id) = accepted_job(&library, &mut connection, &batch_id, &item_id);
+    let revision = connection
+        .query_row(
+            "SELECT revision FROM capture_batches WHERE id = ?1",
+            [&batch_id],
+            |row| row.get::<_, u32>(0),
+        )
+        .unwrap();
+    let before_blob_count = recursive_file_count(&library.directory.path().join("blobs"));
+    let before_asset_count = connection
+        .query_row("SELECT COUNT(*) FROM assets", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap();
+
+    connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let error = apply_capture_recognition(
+        &mut connection,
+        ApplyCaptureRecognition {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id,
+            job_id,
+            expected_revision: revision,
+            accepted_suggestion_ids: vec![suggestion_id],
+            blob_root: library.directory.path().to_owned(),
+            asset_key: ASSET_KEY,
+            now_utc_ms: 30,
+            failure_point: None,
+        },
+    )
+    .expect_err("nested transaction must fail");
+    connection.execute_batch("ROLLBACK").unwrap();
+
+    assert!(matches!(error, CaptureRecognitionError::Database(_)));
+    assert_eq!(
+        recursive_file_count(&library.directory.path().join(".staging")),
+        0
+    );
+    assert_eq!(
+        recursive_file_count(&library.directory.path().join("blobs")),
+        before_blob_count
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM assets", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+        before_asset_count
+    );
 }
 
 #[test]

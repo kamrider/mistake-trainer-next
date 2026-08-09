@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { Database, FolderCheck, RefreshCw, ShieldCheck, X } from '@lucide/vue'
-import { nextTick, onMounted, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { acquireDialogDocumentBoundary } from './dialog-document-boundary'
+import { trapDialogFocus } from './dialog-focus'
 
 const props = defineProps<{
   busy: boolean
@@ -14,10 +16,16 @@ const emit = defineEmits<{
 
 const panel = ref<HTMLElement>()
 const cancelButton = ref<HTMLButtonElement>()
+let releaseDialogBoundary: (() => void) | undefined
 
 onMounted(async () => {
+  if (panel.value) releaseDialogBoundary = acquireDialogDocumentBoundary(panel.value)
   await nextTick()
   cancelButton.value?.focus()
+})
+
+onBeforeUnmount(() => {
+  releaseDialogBoundary?.()
 })
 
 watch(() => props.busy, async (busy) => {
@@ -40,23 +48,7 @@ function handleKeydown(event: KeyboardEvent) {
     close()
     return
   }
-  if (event.key !== 'Tab') return
-  const focusable = [...(panel.value?.querySelectorAll<HTMLElement>('button:not(:disabled)') ?? [])]
-  if (!focusable.length) {
-    event.preventDefault()
-    panel.value?.focus()
-    return
-  }
-  const first = focusable[0]
-  const last = focusable.at(-1)
-  if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault()
-    last?.focus()
-  }
-  else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault()
-    first?.focus()
-  }
+  trapDialogFocus(event, panel.value)
 }
 </script>
 
@@ -201,8 +193,8 @@ function handleKeydown(event: KeyboardEvent) {
   top: 18px;
   right: 18px;
   display: grid;
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
   padding: 0;
   place-items: center;
   border: 0;
@@ -226,7 +218,7 @@ function handleKeydown(event: KeyboardEvent) {
 .eyebrow {
   margin: 0 0 7px;
   color: var(--cinnabar);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 800;
   letter-spacing: .15em;
 }
@@ -279,7 +271,7 @@ h2 {
 
 .migration-steps small {
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.55;
 }
 
@@ -290,7 +282,7 @@ h2 {
   border-left: 3px solid rgba(185, 88, 63, .5);
   border-radius: 4px 10px 10px 4px;
   background: rgba(247, 225, 216, .48);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.65;
 }
 
@@ -315,7 +307,7 @@ h2 {
   display: inline-flex;
   gap: 7px;
   align-items: center;
-  min-height: 42px;
+  min-height: 44px;
   padding: 10px 15px;
   border: 1px solid var(--line);
   border-radius: 11px;
@@ -333,6 +325,12 @@ h2 {
   color: var(--paper-raised);
   border-color: var(--green-deep);
   background: var(--green-deep);
+}
+
+.close-button:focus-visible,
+.dialog-actions button:focus-visible {
+  outline: 3px solid rgba(185, 88, 63, .32);
+  outline-offset: 3px;
 }
 
 .spinning {

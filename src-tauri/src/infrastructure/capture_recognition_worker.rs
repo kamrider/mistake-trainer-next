@@ -12,9 +12,13 @@ use serde::Serialize;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::infrastructure::recognition_visual_split::VisualSplitRecognitionEngine;
 use crate::{
-    infrastructure::assets::decrypt_asset,
+    infrastructure::{
+        assets::decrypt_asset,
+        recognition_product::{
+            PRODUCT_ENGINE_NAME, PRODUCT_ENGINE_VERSION, ProductRecognitionEngine,
+        },
+    },
     modules::{
         capture_inbox::read_encrypted_blob,
         capture_recognition::{
@@ -115,6 +119,8 @@ pub struct CaptureRecognitionManager {
     engine: Arc<dyn CaptureRecognitionEngine>,
     engine_execution: Arc<StdMutex<()>>,
     product_engine_configured: bool,
+    engine_name: &'static str,
+    engine_version: &'static str,
 }
 
 impl Default for CaptureRecognitionManager {
@@ -126,16 +132,24 @@ impl Default for CaptureRecognitionManager {
             engine: Arc::new(UnavailableRecognitionEngine),
             engine_execution: Arc::new(StdMutex::new(())),
             product_engine_configured: false,
+            engine_name: "unavailable",
+            engine_version: "0",
         }
     }
 }
 
 impl CaptureRecognitionManager {
-    /// Creates the product worker with the built-in, model-free visual
-    /// splitter. OCR runtimes remain optional future capabilities and are not
-    /// touched during application startup or image splitting.
-    pub fn for_product(control_root: &Path, private_temp_root: &Path) -> Self {
-        let Some(engine) = product_recognition_engine(control_root, private_temp_root) else {
+    /// Creates the product worker. The optional OCR runtime is initialized
+    /// only on the first recognition request; startup never loads a model or
+    /// DLL and missing components transparently retain safe visual review.
+    pub fn for_product(
+        control_root: &Path,
+        resource_root: &Path,
+        private_temp_root: &Path,
+    ) -> Self {
+        let Some(engine) =
+            product_recognition_engine(control_root, resource_root, private_temp_root)
+        else {
             return Self::default();
         };
         Self {
@@ -145,6 +159,8 @@ impl CaptureRecognitionManager {
             engine,
             engine_execution: Arc::new(StdMutex::new(())),
             product_engine_configured: true,
+            engine_name: PRODUCT_ENGINE_NAME,
+            engine_version: PRODUCT_ENGINE_VERSION,
         }
     }
 
@@ -156,11 +172,17 @@ impl CaptureRecognitionManager {
             engine,
             engine_execution: Arc::new(StdMutex::new(())),
             product_engine_configured: true,
+            engine_name: "test",
+            engine_version: "1",
         }
     }
 
     pub const fn product_engine_configured(&self) -> bool {
         self.product_engine_configured
+    }
+
+    pub const fn engine_identity(&self) -> (&'static str, &'static str) {
+        (self.engine_name, self.engine_version)
     }
 
     pub async fn lock_mutation(&self) -> tokio::sync::MutexGuard<'_, ()> {
@@ -238,10 +260,15 @@ impl CaptureRecognitionManager {
 }
 
 fn product_recognition_engine(
-    _control_root: &Path,
-    _private_temp_root: &Path,
+    control_root: &Path,
+    resource_root: &Path,
+    private_temp_root: &Path,
 ) -> Option<Arc<dyn CaptureRecognitionEngine>> {
-    Some(Arc::new(VisualSplitRecognitionEngine))
+    Some(Arc::new(ProductRecognitionEngine::new(
+        control_root,
+        resource_root,
+        private_temp_root,
+    )))
 }
 
 fn run_recognition_job_sync(
@@ -725,7 +752,12 @@ mod tests {
             .save(&image_path)
             .unwrap();
 
-        let manager = CaptureRecognitionManager::for_product(&control_root, &private_temp_root);
+        let resource_root = root.path().join("resources");
+        let manager = CaptureRecognitionManager::for_product(
+            &control_root,
+            &resource_root,
+            &private_temp_root,
+        );
 
         assert!(manager.product_engine_configured());
         assert!(!control_root.exists());

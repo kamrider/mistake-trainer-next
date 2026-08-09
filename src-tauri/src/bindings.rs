@@ -81,6 +81,7 @@ pub fn builder() -> Builder<tauri::Wry> {
         commands::capture_inbox::capture_item_move,
         commands::capture_inbox::capture_item_stage_role,
         commands::capture_inbox::capture_card_merge,
+        commands::capture_inbox::capture_pair_suggestions_apply,
         commands::capture_inbox::capture_draft_delete,
         commands::capture_inbox::capture_draft_update,
         commands::capture_inbox::capture_commit_ready,

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/vue'
+import { render, screen, waitFor } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import ProfileSwitcher from './ProfileSwitcher.vue'
@@ -77,16 +77,71 @@ describe('ProfileSwitcher', () => {
     expect(screen.queryByRole('button', { name: /删除档案/ })).not.toBeInTheDocument()
   })
 
-  it('closes on Escape and restores focus to the trigger', async () => {
+  it('announces and moves focus into the profile dialog before restoring the trigger', async () => {
     const user = userEvent.setup()
     render(ProfileSwitcher, {
       props: { profiles, activeProfileId: 'one', busy: false, errorMessage: '' },
     })
     const trigger = screen.getByRole('button', { name: /当前学习档案：日常学习/ })
+
+    expect(trigger).toHaveAttribute('aria-haspopup', 'dialog')
     await user.click(trigger)
+    expect(screen.getByRole('button', { name: '关闭档案菜单' })).toHaveFocus()
     await user.keyboard('{Escape}')
     expect(screen.queryByRole('dialog', { name: '切换学习档案' })).not.toBeInTheDocument()
     expect(trigger).toHaveFocus()
+  })
+
+  it('returns focus to each profile action after cancelling its subflow', async () => {
+    const user = userEvent.setup()
+    render(ProfileSwitcher, {
+      props: { profiles, activeProfileId: 'one', busy: false, errorMessage: '' },
+      global: { stubs: { transition: false } },
+    })
+
+    await user.click(screen.getByRole('button', { name: /当前学习档案：日常学习/ }))
+
+    await user.click(screen.getByRole('button', { name: '新建学习档案' }))
+    const createInput = await screen.findByRole('textbox', { name: '新档案名称' })
+    await waitFor(() => expect(createInput).toHaveFocus())
+    await user.click(screen.getByRole('button', { name: '取消' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: '新建学习档案' })).toHaveFocus())
+
+    await user.click(screen.getByRole('button', { name: '重命名档案：竞赛强化' }))
+    const renameInput = await screen.findByRole('textbox', { name: '重命名档案' })
+    await waitFor(() => expect(renameInput).toHaveFocus())
+    await user.click(screen.getByRole('button', { name: '取消' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: '重命名档案：竞赛强化' })).toHaveFocus())
+
+    await user.click(screen.getByRole('button', { name: '删除档案：竞赛强化' }))
+    const deleteInput = await screen.findByRole('textbox', { name: '输入“竞赛强化”确认删除' })
+    await waitFor(() => expect(deleteInput).toHaveFocus())
+    await user.click(screen.getByRole('button', { name: '保留档案' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: '删除档案：竞赛强化' })).toHaveFocus())
+  })
+
+  it('keeps progress visible and blocks dismissal while an operation is busy', async () => {
+    const user = userEvent.setup()
+    const view = render(ProfileSwitcher, {
+      props: { profiles, activeProfileId: 'one', busy: false, errorMessage: '' },
+    })
+    const trigger = screen.getByRole('button', { name: /当前学习档案：日常学习/ })
+
+    await user.click(trigger)
+    await user.click(screen.getByRole('button', { name: '切换到档案：竞赛强化' }))
+    await view.rerender({ busy: true })
+
+    expect(screen.getByRole('dialog', { name: '切换学习档案' })).toHaveAttribute('aria-busy', 'true')
+    expect(screen.getByRole('status')).toHaveTextContent('正在处理学习档案')
+    expect(screen.getByRole('button', { name: '关闭档案菜单' })).toBeDisabled()
+    await user.keyboard('{Escape}')
+    expect(screen.getByRole('dialog', { name: '切换学习档案' })).toBeVisible()
+    await user.click(document.body)
+    expect(screen.getByRole('dialog', { name: '切换学习档案' })).toBeVisible()
+
+    await view.rerender({ busy: false, errorMessage: '' })
+    expect(screen.queryByRole('dialog', { name: '切换学习档案' })).not.toBeInTheDocument()
+    await waitFor(() => expect(trigger).toHaveFocus())
   })
 
   it('offers an explicit retry after a loading failure', async () => {

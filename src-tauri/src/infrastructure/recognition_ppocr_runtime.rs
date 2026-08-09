@@ -190,6 +190,24 @@ mod runtime {
     }
 
     impl PpOcrLocalRuntime {
+        /// Cheaply checks that the exact component files used by an already
+        /// verified in-memory runtime are still installed. Full hashes are
+        /// verified when the runtime is constructed; this metadata check lets
+        /// component removal take effect before the next analysis without
+        /// hashing both models for every page.
+        pub(crate) fn small_component_files_present(component_directory: &Path) -> bool {
+            [
+                (component_directory.join(DET_NAME), DET_BYTES),
+                (component_directory.join(REC_NAME), REC_BYTES),
+            ]
+            .into_iter()
+            .all(|(path, expected_bytes)| {
+                fs::metadata(path)
+                    .map(|metadata| metadata.is_file() && metadata.len() == expected_bytes)
+                    .unwrap_or(false)
+            })
+        }
+
         /// Creates an offline CPU runtime from the already-installed small
         /// component. Both model files are verified again before ONNX Runtime
         /// sees them, and the matching vocabulary is extracted from the
@@ -276,39 +294,39 @@ mod runtime {
                 .map_err(|_| RecognitionEngineError::Failed)?;
             let mut boxes = Vec::with_capacity(result.text_blocks.len());
             for block in result.text_blocks {
-                let left = block
-                    .box_points
-                    .iter()
-                    .map(|point| point.x)
-                    .min()
-                    .ok_or(RecognitionEngineError::InvalidResult)?;
-                let top = block
-                    .box_points
-                    .iter()
-                    .map(|point| point.y)
-                    .min()
-                    .ok_or(RecognitionEngineError::InvalidResult)?;
-                let right = block
-                    .box_points
-                    .iter()
-                    .map(|point| point.x)
-                    .max()
-                    .ok_or(RecognitionEngineError::InvalidResult)?;
-                let bottom = block
-                    .box_points
-                    .iter()
-                    .map(|point| point.y)
-                    .max()
-                    .ok_or(RecognitionEngineError::InvalidResult)?;
+                let Some(raw_left) = block.box_points.iter().map(|point| point.x).min() else {
+                    continue;
+                };
+                let Some(raw_top) = block.box_points.iter().map(|point| point.y).min() else {
+                    continue;
+                };
+                let Some(raw_right) = block.box_points.iter().map(|point| point.x).max() else {
+                    continue;
+                };
+                let Some(raw_bottom) = block.box_points.iter().map(|point| point.y).max() else {
+                    continue;
+                };
                 if !block.box_score.is_finite() || !block.text_score.is_finite() {
-                    return Err(RecognitionEngineError::InvalidResult);
+                    continue;
+                }
+                // A trusted detector can return an empty polygon or extend a
+                // text box by a few pixels beyond an image edge. Discard a
+                // malformed individual block and clamp harmless edge
+                // overshoot; missing anchors later become a low-confidence
+                // full-page review suggestion.
+                let left = f64::from(raw_left).clamp(0.0, f64::from(width));
+                let top = f64::from(raw_top).clamp(0.0, f64::from(height));
+                let right = f64::from(raw_right).clamp(0.0, f64::from(width));
+                let bottom = f64::from(raw_bottom).clamp(0.0, f64::from(height));
+                if right <= left || bottom <= top {
+                    continue;
                 }
                 let confidence = f64::from(block.box_score.min(block.text_score));
                 boxes.push(LocalOcrBox {
-                    left: f64::from(left),
-                    top: f64::from(top),
-                    right: f64::from(right),
-                    bottom: f64::from(bottom),
+                    left,
+                    top,
+                    right,
+                    bottom,
                     is_text: !block.text.trim().is_empty(),
                     text: block.text,
                     confidence,

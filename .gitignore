@@ -23,3 +23,4 @@ __pycache__/
 labs/question-region-bakeoff/data/
 labs/question-region-bakeoff/output/
 labs/question-region-bakeoff/fixtures/images/
+/tmp/

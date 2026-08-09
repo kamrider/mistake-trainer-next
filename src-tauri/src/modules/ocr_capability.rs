@@ -15,13 +15,15 @@ const STAGING_DIRECTORY: &str = ".staging";
 const MANIFEST_FILE: &str = "component.json";
 const MANIFEST_VERSION: u32 = 1;
 pub const RECOGNITION_EVIDENCE_GATE_PASSED: bool = false;
-pub const RECOGNITION_RUNTIME_AVAILABLE: bool = false;
+pub const RECOGNITION_RUNTIME_AVAILABLE: bool = cfg!(all(windows, target_arch = "x86_64"));
 const DETAIL_GATE: &str = "智能分题仍在真实题图验证中；顺序模板和手工整理可继续使用。";
 const DETAIL_RUNTIME: &str = "本机识别运行时尚未随应用发布；顺序模板和手工整理可继续使用。";
 const DETAIL_MODEL: &str = "智能分题需要已校验的 PP‑OCRv6 small 本地模型。";
 const DETAIL_READY: &str = "智能分题可在本机运行；结果只会作为待确认建议。";
 const DETAIL_VISUAL_SPLIT_READY: &str =
-    "智能切图使用内置本地视觉分析，不读取文字、不需要下载模型；确认后结果只进入素材牌库。";
+    "基础版面预切可直接使用，不需要下载模型；安装题号定位增强后，多题试卷会优先按连续题号切分。";
+const DETAIL_ANCHOR_SPLIT_READY: &str =
+    "本地题号定位增强已就绪；题号文字只在内存中用于划分区域，不保存 OCR 文本，结果仍需确认。";
 
 const SMALL_FILES: &[OcrComponentFile] = &[
     OcrComponentFile {
@@ -193,8 +195,8 @@ struct OcrComponentDescriptor {
 const COMPONENTS: &[OcrComponentDescriptor] = &[
     OcrComponentDescriptor {
         id: OcrComponentId::Ppocrv6Small,
-        display_name: "PP‑OCRv6 small",
-        description: "约 31 MB，面向题号与文字框检测；安装后仍需等待真实图片验证才能启用自动识别。",
+        display_name: "本地题号定位增强",
+        description: "约 31 MB，专门定位连续题号，是多题试卷切分的推荐模型；不做内容理解。",
         version: "rapidocr-3.9.2-ppocrv6-small",
         source_label: "ModelScope · RapidAI/RapidOCR 3.9.2",
         license_label: "PaddleOCR · Apache-2.0",
@@ -203,8 +205,8 @@ const COMPONENTS: &[OcrComponentDescriptor] = &[
     },
     OcrComponentDescriptor {
         id: OcrComponentId::Ppocrv6Medium,
-        display_name: "PP‑OCRv6 medium",
-        description: "约 139 MB，面向按需文字化；只建议性能档电脑下载。",
+        display_name: "PP‑OCRv6 medium（实验）",
+        description: "约 139 MB，面向未来文字转写；真实切题样本上更慢且不比 small 稳，当前不用于切图。",
         version: "rapidocr-3.9.2-ppocrv6-medium",
         source_label: "ModelScope · RapidAI/RapidOCR 3.9.2",
         license_label: "PaddleOCR · Apache-2.0",
@@ -335,11 +337,24 @@ pub fn capability_status(control_root: &Path) -> Result<OcrCapabilityStatus, Ocr
         .iter()
         .map(|descriptor| component_status(control_root, descriptor, &assessment))
         .collect::<Result<Vec<_>, _>>()?;
+    let enhanced_ready = recognition_runtime_enabled()
+        && components.iter().any(|component| {
+            component.id == OcrComponentId::Ppocrv6Small
+                && component.state == OcrComponentState::Installed
+        });
     Ok(OcrCapabilityStatus {
         assessment,
         components,
-        recognition_feature: visual_split_feature_status(),
-        automatic_recognition_enabled: false,
+        recognition_feature: if enhanced_ready {
+            OcrRecognitionFeatureStatus {
+                state: OcrRecognitionFeatureState::Ready,
+                required_component_id: OcrComponentId::Ppocrv6Small,
+                detail: DETAIL_ANCHOR_SPLIT_READY.to_owned(),
+            }
+        } else {
+            visual_split_feature_status()
+        },
+        automatic_recognition_enabled: enhanced_ready,
     })
 }
 
@@ -486,7 +501,13 @@ fn component_status(
                     Ok(bytes) => (
                         OcrComponentState::Installed,
                         bytes,
-                        "模型文件已通过完整性校验，但自动识别尚未启用。".to_owned(),
+                        if descriptor.id == OcrComponentId::Ppocrv6Small
+                            && recognition_runtime_enabled()
+                        {
+                            "模型文件已通过完整性校验，题号定位增强可离线使用。".to_owned()
+                        } else {
+                            "模型文件已通过完整性校验；当前不会用于自动切图。".to_owned()
+                        },
                     ),
                     Err(_) => (
                         OcrComponentState::Corrupt,

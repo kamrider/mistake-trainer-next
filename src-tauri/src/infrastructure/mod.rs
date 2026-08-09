@@ -4,6 +4,7 @@ pub mod cloud_backend;
 pub mod database;
 pub mod recognition_anchor_layout;
 pub mod recognition_ppocr_runtime;
+pub mod recognition_product;
 pub mod recognition_visual_split;
 pub mod runtime;
 pub mod storage_location;

@@ -55,17 +55,24 @@ function Wait-ForMainWindow {
 }
 
 $resolvedInstallerDirectory = (Resolve-Path -LiteralPath $InstallerDirectory).Path
-$installers = @(Get-ChildItem -LiteralPath $resolvedInstallerDirectory -File -Filter '*-setup.exe')
-Assert-Smoke ($installers.Count -eq 1) "expected exactly one *-setup.exe in $resolvedInstallerDirectory; found $($installers.Count)."
+$tauriConfigurationPath = Join-Path $PSScriptRoot '..\src-tauri\tauri.conf.json'
+$tauriConfiguration = Get-Content -LiteralPath $tauriConfigurationPath -Raw | ConvertFrom-Json
+$installerArchitecture = if ($ExpectedArchitecture -eq 'arm64') { 'arm64' } else { 'x64' }
+$expectedInstallerName = "$($tauriConfiguration.productName)_$($tauriConfiguration.version)_$installerArchitecture-setup.exe"
+$installers = @(Get-ChildItem -LiteralPath $resolvedInstallerDirectory -File -Filter $expectedInstallerName)
+Assert-Smoke ($installers.Count -eq 1) "expected exactly one $expectedInstallerName in $resolvedInstallerDirectory; found $($installers.Count)."
 
 $runnerTemp = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
 $smokeRoot = Join-Path $runnerTemp "mistake-trainer-installer-smoke-$([guid]::NewGuid().ToString('N'))"
 $installRoot = Join-Path $smokeRoot 'installed'
 $selfCheckPath = Join-Path $smokeRoot 'windows-self-check.json'
+$productCheckPath = Join-Path $smokeRoot 'windows-product-check.json'
+$productCheckScratch = Join-Path $smokeRoot 'product-check-scratch'
 $isolatedAppData = Join-Path $smokeRoot 'appdata'
 $isolatedLocalAppData = Join-Path $smokeRoot 'localappdata'
 $startupFailurePath = Join-Path $isolatedAppData 'com.mistaketrainer.next\startup-failure.json'
 New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
+New-Item -ItemType Directory -Path $productCheckScratch -Force | Out-Null
 New-Item -ItemType Directory -Path $isolatedAppData -Force | Out-Null
 New-Item -ItemType Directory -Path $isolatedLocalAppData -Force | Out-Null
 
@@ -106,6 +113,25 @@ try {
   Assert-Smoke ($selfCheck.windows.buildNumber -ge 17763) "Windows build $($selfCheck.windows.buildNumber) is below 17763."
   Assert-Smoke (@('supported', 'extended') -contains $selfCheck.windows.supportLevel) "support level was $($selfCheck.windows.supportLevel)."
   Assert-Smoke (-not [string]::IsNullOrWhiteSpace($selfCheck.windows.webview2Version)) 'WebView2 runtime version was not detected.'
+
+  $productCheckProcess = Start-Process `
+    -FilePath $installedExecutable.FullName `
+    -ArgumentList @('--windows-product-check', $productCheckPath, $productCheckScratch) `
+    -Wait `
+    -PassThru
+  Assert-Smoke ($productCheckProcess.ExitCode -eq 0) "installed product check exited with code $($productCheckProcess.ExitCode)."
+  Assert-Smoke (Test-Path -LiteralPath $productCheckPath -PathType Leaf) 'product-check JSON was not created.'
+
+  $productCheck = Get-Content -LiteralPath $productCheckPath -Raw | ConvertFrom-Json
+  Assert-Smoke ($productCheck.schemaVersion -eq 1) 'unexpected product-check schema version.'
+  Assert-Smoke ($productCheck.ready -eq $true) 'installed product lifecycle did not report ready.'
+  Assert-Smoke (@($productCheck.failureCodes).Count -eq 0) "product check reported failures: $($productCheck.failureCodes -join ', ')."
+  Assert-Smoke ($productCheck.checks.encryptedLibrary -eq $true) 'encrypted library check did not pass.'
+  Assert-Smoke ($productCheck.checks.problemRoundTrip -eq $true) 'problem and encrypted image round trip did not pass.'
+  Assert-Smoke ($productCheck.checks.reviewRoundTrip -eq $true) 'review submission round trip did not pass.'
+  Assert-Smoke ($productCheck.checks.backupValidation -eq $true) 'encrypted backup validation did not pass.'
+  Assert-Smoke ($productCheck.checks.libraryReopen -eq $true) 'encrypted library reopen did not pass.'
+  Assert-Smoke (@(Get-ChildItem -LiteralPath $productCheckScratch -Force).Count -eq 0) 'product check left data in its scratch directory.'
 
   $env:APPDATA = $isolatedAppData
   $env:LOCALAPPDATA = $isolatedLocalAppData

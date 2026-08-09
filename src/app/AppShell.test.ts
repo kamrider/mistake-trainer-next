@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/vue'
+import { render, screen, within } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import AppShell from './AppShell.vue'
@@ -22,6 +22,9 @@ describe('AppShell', () => {
     expect(screen.getByRole('status')).toHaveTextContent('正在安全同步')
     expect(screen.getByRole('status')).toHaveAttribute('data-tone', 'active')
     const navigation = screen.getByRole('navigation', { name: '主导航' })
+    for (const label of ['训练台', '采集整理', '题库', '训练室', '学习报告', '设置']) {
+      expect(within(navigation).getByRole('button', { name: label })).toHaveAttribute('aria-label', label)
+    }
     expect(navigation).toHaveStyle('--active-index: 0')
     expect(view.container.querySelector('.nav-indicator')).toHaveAttribute('aria-hidden', 'true')
     await user.click(screen.getByRole('button', { name: '题库' }))

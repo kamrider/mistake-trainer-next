@@ -32,6 +32,7 @@ const action = computed(() => recognitionPrimaryAction({
   ...(props.job ? { activeJobState: props.job.state } : {}),
 }))
 const progress = computed(() => props.job && ['queued', 'running'].includes(props.job.state))
+const enhanced = computed(() => props.feature.requiredComponentId === 'ppocrv6_small')
 
 function start() {
   preflightOpen.value = false
@@ -62,7 +63,7 @@ defineExpose({ focusPrimaryAction })
           <h2 id="recognition-title">
             正在切图 {{ job.processedItems }} / {{ job.totalItems }}
           </h2>
-          <p>只分析版面和留白；你可以继续整理题卡，切图结果不会自动应用。</p>
+          <p>{{ enhanced ? '正在本机定位连续题号；OCR 文字不会保存，切图结果也不会自动应用。' : '正在分析版面；你可以继续整理题卡，切图结果不会自动应用。' }}</p>
         </div>
       </div>
       <progress
@@ -94,7 +95,7 @@ defineExpose({ focusPrimaryAction })
         <span class="recognition-icon"><CheckCircle2 :size="20" /></span>
         <div>
           <p class="eyebrow">
-            智能切图 · 已开放
+            {{ enhanced ? '智能切图 · 题号增强' : '智能切图 · 基础预切' }}
           </p>
           <h2 id="recognition-title">
             先确认，再放入素材牌库
@@ -174,12 +175,12 @@ defineExpose({ focusPrimaryAction })
         <span class="recognition-icon"><Sparkles :size="20" /></span>
         <div>
           <p class="eyebrow">
-            智能切图 · 已开放
+            {{ enhanced ? '智能切图 · 题号增强' : '智能切图 · 基础预切' }}
           </p>
           <h2 id="recognition-title">
             把一页多题拆成素材图片
           </h2>
-          <p>只看版面和留白，不读取文字；原图和现有题卡不会改变。</p>
+          <p>{{ enhanced ? '在本机读取题号锚点来切分，不保存 OCR 正文；原图和现有题卡不会改变。' : '按版面给出预切建议；原图和现有题卡不会改变。' }}</p>
         </div>
       </div>
       <button
@@ -198,7 +199,7 @@ defineExpose({ focusPrimaryAction })
         <strong>将切分 {{ unassignedCount }} 张未分配素材</strong>
         <ul>
           <li>只在这台电脑运行</li>
-          <li>不使用 OCR，不下载模型</li>
+          <li>{{ enhanced ? '只使用已安装的本地题号模型，不发起网络请求' : '基础预切不使用 OCR，也不发起下载' }}</li>
           <li>不会新建或改动题卡</li>
           <li>原图始终保留</li>
           <li>切图继承原素材的题图 / 答案角色</li>
@@ -264,7 +265,7 @@ defineExpose({ focusPrimaryAction })
 
 .eyebrow {
   color: #486b5d !important;
-  font-size: 10px !important;
+  font-size: 12px !important;
   font-weight: 850;
   letter-spacing: .1em;
   text-transform: uppercase;
@@ -284,13 +285,13 @@ h2 {
 p {
   margin-top: 4px;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .primary-action,
 .secondary-action,
 .text-action {
-  min-height: 42px;
+  min-height: 44px;
   padding: 0 16px;
   border-radius: 999px;
   font-weight: 760;
@@ -324,8 +325,11 @@ button:disabled {
 }
 
 .secondary-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
   color: #315f50;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 780;
   text-underline-offset: 3px;
 }
@@ -351,7 +355,7 @@ button:disabled {
   margin: 10px 0 14px;
   padding-left: 20px;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 progress {
