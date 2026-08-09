@@ -139,7 +139,11 @@ fn remove_v13_sync_merge_schema(database: &Connection) {
 fn remove_v14_recognition_schema(database: &Connection) {
     database
         .execute_batch(
-            "DROP INDEX capture_recognition_jobs_batch_idx;
+            "DROP INDEX capture_recognition_pair_items_pair_idx;
+             DROP TABLE capture_recognition_pair_items;
+             DROP INDEX capture_recognition_pairs_operation_idx;
+             DROP TABLE capture_recognition_pairs;
+             DROP INDEX capture_recognition_jobs_batch_idx;
              DROP TABLE capture_recognition_operations;
              DROP TABLE capture_recognition_suggestions;
              DROP TABLE capture_recognition_job_items;
@@ -223,7 +227,7 @@ fn schema_v11_backup_preserves_cloud_progress_and_requires_the_complete_shape() 
     let (_, package) = created_package(&fixture);
     let manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(package.join("manifest.json")).unwrap()).unwrap();
-    assert_eq!(manifest["schemaVersion"], 15);
+    assert_eq!(manifest["schemaVersion"], 17);
     validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID).unwrap();
     {
         let database =
@@ -286,7 +290,24 @@ fn current_schema_backup_requires_recognition_tables_and_owned_jobs() {
             .pragma_update(None, "journal_mode", "DELETE")
             .unwrap();
     }
-    refresh_database_manifest(&package, 15);
+    refresh_database_manifest(&package, 17);
+    assert!(matches!(
+        validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID),
+        Err(BackupError::Integrity)
+    ));
+
+    let missing_pair_table_fixture = fixture();
+    let (_, package) = created_package(&missing_pair_table_fixture);
+    {
+        let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        database
+            .execute("DROP TABLE capture_recognition_pair_items", [])
+            .unwrap();
+        database
+            .pragma_update(None, "journal_mode", "DELETE")
+            .unwrap();
+    }
+    refresh_database_manifest(&package, 17);
     assert!(matches!(
         validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID),
         Err(BackupError::Integrity)
@@ -334,6 +355,18 @@ fn current_schema_backup_requires_recognition_tables_and_owned_jobs() {
 #[test]
 fn encrypted_backup_round_trips_without_leaking_identity_or_plaintext() {
     let fixture = fixture();
+    fs::create_dir_all(fixture.root.path().join("optional-components")).unwrap();
+    fs::write(
+        fixture.root.path().join("optional-components/model.onnx"),
+        b"model cache must not enter backup",
+    )
+    .unwrap();
+    fs::create_dir_all(fixture.blob_root.join(".staging")).unwrap();
+    fs::write(
+        fixture.blob_root.join(".staging/plaintext.tmp"),
+        b"temporary plaintext must not enter backup",
+    )
+    .unwrap();
     {
         let connection = fixture.connection.lock().unwrap();
         connection
@@ -422,6 +455,8 @@ fn encrypted_backup_round_trips_without_leaking_identity_or_plaintext() {
     );
     assert!(!package.join("library.db-wal").exists());
     assert!(!package.join("library.db-shm").exists());
+    assert!(!package.join("optional-components").exists());
+    assert!(!package.join("assets/.staging").exists());
 }
 
 #[test]
@@ -608,6 +643,112 @@ fn validation_rejects_sqlite_sidecars_and_windows_alias_paths() {
         validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID),
         Err(BackupError::InvalidPackage)
     ));
+}
+
+#[test]
+fn schema_v17_backup_rejects_orphaned_pair_references() {
+    let fixture = fixture();
+    let (_, package) = created_package(&fixture);
+    {
+        let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        database.pragma_update(None, "foreign_keys", "OFF").unwrap();
+        database
+            .execute(
+                "INSERT INTO capture_recognition_pair_items(pair_id, item_id, role)
+                 VALUES('missing-pair', 'missing-item', 'question')",
+                [],
+            )
+            .unwrap();
+        database
+            .pragma_update(None, "journal_mode", "DELETE")
+            .unwrap();
+    }
+    refresh_database_manifest(&package, 17);
+
+    assert!(matches!(
+        validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID),
+        Err(BackupError::Integrity)
+    ));
+}
+
+#[test]
+fn schema_v17_backup_rejects_cross_batch_pair_items() {
+    let fixture = fixture();
+    let (_, package) = created_package(&fixture);
+    {
+        let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        database
+            .execute_batch(
+                "INSERT INTO capture_batches(
+                   id, account_id, profile_id, subject, state,
+                   created_at_utc_ms, updated_at_utc_ms, revision
+                 ) VALUES
+                   ('pair-batch', '0191365e-2f2f-7b89-b3b0-111111111111',
+                    '0191365e-2f2f-7b89-b3b0-222222222222', '', 'organizing', 1, 1, 1),
+                   ('item-batch', '0191365e-2f2f-7b89-b3b0-111111111111',
+                    '0191365e-2f2f-7b89-b3b0-222222222222', '', 'organizing', 1, 1, 1);
+                 INSERT INTO capture_items(
+                   id, batch_id, asset_id, client_upload_id, source_name,
+                   source_sequence, width, height, created_at_utc_ms, staged_role
+                 ) VALUES(
+                   'cross-batch-item', 'item-batch', 'asset-1', 'cross-batch-upload',
+                   'question.png', 0, 100, 100, 1, 'question'
+                 );
+                 INSERT INTO capture_recognition_jobs(
+                   id, account_id, profile_id, batch_id, state, engine, engine_version,
+                   model_component_id, total_items, processed_items,
+                   created_at_utc_ms, updated_at_utc_ms
+                 ) VALUES(
+                   'pair-job', '0191365e-2f2f-7b89-b3b0-111111111111',
+                   '0191365e-2f2f-7b89-b3b0-222222222222', 'pair-batch',
+                   'applied', 'fixture', '1', 'ppocrv6_small', 1, 1, 1, 1
+                 );
+                 INSERT INTO capture_recognition_operations(
+                   id, job_id, batch_id, before_revision, after_revision,
+                   created_entity_ids_json, created_at_utc_ms
+                 ) VALUES(
+                   'pair-operation', 'pair-job', 'pair-batch', 1, 2, '{}', 1
+                 );
+                 INSERT INTO capture_recognition_pairs(
+                   id, operation_id, pair_slot, confidence_basis_points, created_at_utc_ms
+                 ) VALUES('cross-batch-pair', 'pair-operation', 0, 9000, 1);
+                 INSERT INTO capture_recognition_pair_items(pair_id, item_id, role)
+                 VALUES('cross-batch-pair', 'cross-batch-item', 'question');",
+            )
+            .unwrap();
+        database
+            .pragma_update(None, "journal_mode", "DELETE")
+            .unwrap();
+    }
+    refresh_database_manifest(&package, 17);
+
+    assert!(matches!(
+        validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID),
+        Err(BackupError::Integrity)
+    ));
+}
+
+#[test]
+fn schema_v16_backup_remains_readable_before_pair_state_existed() {
+    let fixture = fixture();
+    let (_, package) = created_package(&fixture);
+    {
+        let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        database
+            .execute_batch(
+                "ALTER TABLE capture_recognition_pairs DROP COLUMN resolved_at_utc_ms;
+                 ALTER TABLE capture_recognition_pairs DROP COLUMN state;
+                 PRAGMA user_version = 16;",
+            )
+            .unwrap();
+        database
+            .pragma_update(None, "journal_mode", "DELETE")
+            .unwrap();
+    }
+    refresh_database_manifest(&package, 16);
+
+    validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID)
+        .expect("schema v16 backup remains supported");
 }
 
 #[test]

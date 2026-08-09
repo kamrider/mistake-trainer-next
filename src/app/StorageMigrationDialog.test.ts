@@ -1,9 +1,42 @@
-import { render, screen, waitFor } from '@testing-library/vue'
+import { fireEvent, render, screen, waitFor } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import StorageMigrationDialog from './StorageMigrationDialog.vue'
 
 describe('StorageMigrationDialog', () => {
+  it('owns and releases the modal document boundary while recovering escaped focus', async () => {
+    const launcher = document.createElement('button')
+    document.body.append(launcher)
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'auto'
+    const view = render(StorageMigrationDialog, {
+      props: { busy: false },
+    })
+
+    try {
+      const dialog = screen.getByRole('dialog')
+      const cancel = screen.getByRole('button', { name: '取消，保持原位置' })
+      const close = screen.getByRole('button', { name: '关闭存储迁移确认' })
+      await waitFor(() => expect(cancel).toHaveFocus())
+      expect(launcher).toHaveAttribute('inert')
+      expect(document.body.style.overflow).toBe('hidden')
+
+      launcher.focus()
+      await fireEvent.keyDown(dialog, { key: 'Tab' })
+      expect(close).toHaveFocus()
+      expect(dialog).toContainElement(document.activeElement as HTMLElement)
+
+      view.unmount()
+      expect(launcher).not.toHaveAttribute('inert')
+      expect(document.body.style.overflow).toBe('auto')
+    }
+    finally {
+      view.unmount()
+      document.body.style.overflow = previousOverflow
+      launcher.remove()
+    }
+  })
+
   it('starts on the safe action, explains the transaction, and confirms once', async () => {
     const user = userEvent.setup()
     const view = render(StorageMigrationDialog, {

@@ -76,4 +76,56 @@ describe('ReviewHistoryView resilience', () => {
     await fireEvent.click(view.container.querySelector<HTMLButtonElement>('.history-detail header button')!)
     await waitFor(() => expect(rows[1]).toHaveFocus())
   })
+
+  it('locks the old cursor and rows while a replacement filter is pending', async () => {
+    const user = userEvent.setup()
+    const replacement = deferred<{ ok: true; data: {
+      items: typeof secondRow[]
+      nextCursor: null
+      totalCount: number
+      availableSubjects: string[]
+    } }>()
+    api.reviewHistoryList
+      .mockResolvedValueOnce({
+        ok: true,
+        data: {
+          items: [row],
+          nextCursor: 'cursor-old',
+          totalCount: 2,
+          availableSubjects: ['Math', 'Physics'],
+        },
+      })
+      .mockReturnValueOnce(replacement.promise)
+    const view = await renderView()
+
+    await waitFor(() => expect(view.container.querySelector('.history-row')).toBeInTheDocument())
+    await user.selectOptions(screen.getByRole('combobox', { name: '科目' }), 'Physics')
+    await user.click(screen.getByRole('button', { name: '应用筛选' }))
+    await waitFor(() => expect(api.reviewHistoryList).toHaveBeenCalledTimes(2))
+
+    const oldRow = view.container.querySelector<HTMLButtonElement>('.history-row')!
+    const more = screen.getByRole('button', { name: '加载更多' })
+    expect(oldRow).toBeDisabled()
+    expect(more).toBeDisabled()
+    await user.click(oldRow)
+    await user.click(more)
+    expect(api.reviewHistoryDetail).not.toHaveBeenCalled()
+    expect(api.reviewHistoryList).toHaveBeenCalledTimes(2)
+
+    replacement.resolve({
+      ok: true,
+      data: {
+        items: [secondRow],
+        nextCursor: null,
+        totalCount: 1,
+        availableSubjects: ['Physics'],
+      },
+    })
+    expect(await screen.findByText('Second note')).toBeVisible()
+    expect(screen.queryByText('First note')).not.toBeInTheDocument()
+    expect(api.reviewHistoryList).toHaveBeenLastCalledWith(expect.objectContaining({
+      subject: 'Physics',
+      cursor: null,
+    }))
+  })
 })

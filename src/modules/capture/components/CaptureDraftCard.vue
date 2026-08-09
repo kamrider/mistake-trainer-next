@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ArrowRightLeft, Check, Crop, GripVertical, Image as ImageIcon, Maximize2, Plus, RotateCcw, RotateCw, X } from '@lucide/vue'
-import { computed, nextTick, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { acquireDialogDocumentBoundary } from '../../../app/dialog-document-boundary'
+import { trapDialogFocus } from '../../../app/dialog-focus'
 import type { CaptureDraftSummary, CaptureItemSummary } from '../../../shared/api/bindings'
 import CaptureThumbnail from './CaptureThumbnail.vue'
 
@@ -36,6 +38,10 @@ const emit = defineEmits<{
 const flipped = ref(false)
 const indexes = reactive<Record<CardRole, number>>({ question: 0, answer: 0 })
 const expanded = ref<{ item: CaptureItemSummary, role: CardRole }>()
+const expandedDialog = ref<HTMLElement>()
+const expandedCloseButton = ref<HTMLButtonElement>()
+let expandedFocusReturn: HTMLElement | null = null
+let releaseExpandedBoundary: (() => void) | undefined
 const itemById = computed(() => new Map(props.items.map(item => [item.id, item])))
 const questionItems = computed(() => mapItems(props.draft.questionItemIds))
 const answerItems = computed(() => mapItems(props.draft.answerItemIds))
@@ -88,7 +94,9 @@ function selectImage(role: CardRole, index: number) {
   const item = activeItem(role)
   if (!item) return
   emit('preview', item.id)
-  nextTick(() => document.querySelector<HTMLElement>(`[data-capture-item-id="${item.id}"]`)?.focus())
+  nextTick(() => document.querySelector<HTMLElement>(
+    `[data-capture-item-id="${item.id}"] .thumbnail-activate`,
+  )?.focus())
 }
 
 function flip() {
@@ -100,10 +108,44 @@ function flip() {
   flipped.value = !flipped.value
 }
 
-function openImage(role: CardRole) {
+async function openImage(role: CardRole) {
   const item = activeItem(role)
-  if (item && props.previews[item.id]) expanded.value = { item, role }
+  if (!item || !props.previews[item.id]) return
+  expandedFocusReturn = document.activeElement instanceof HTMLElement
+    ? document.activeElement
+    : null
+  releaseExpandedBoundary?.()
+  releaseExpandedBoundary = undefined
+  expanded.value = { item, role }
+  await nextTick()
+  if (expandedDialog.value) {
+    releaseExpandedBoundary = acquireDialogDocumentBoundary(expandedDialog.value)
+  }
+  expandedCloseButton.value?.focus()
 }
+
+async function closeExpandedImage() {
+  expanded.value = undefined
+  releaseExpandedBoundary?.()
+  releaseExpandedBoundary = undefined
+  const focusReturn = expandedFocusReturn
+  expandedFocusReturn = null
+  await nextTick()
+  if (focusReturn?.isConnected) focusReturn.focus()
+}
+
+function handleExpandedKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    void closeExpandedImage()
+    return
+  }
+  trapDialogFocus(event, expandedDialog.value)
+}
+
+onBeforeUnmount(() => {
+  releaseExpandedBoundary?.()
+})
 
 function changeSubject(event: Event) {
   const select = event.target as HTMLSelectElement
@@ -123,6 +165,7 @@ function handleCardKeydown(event: KeyboardEvent) {
 
 function handleThumbnailKeydown(role: CardRole, index: number, item: CaptureItemSummary, event: KeyboardEvent) {
   if (event.currentTarget !== event.target) return
+  if (event.ctrlKey || event.metaKey || event.altKey) return
   const items = role === 'question' ? questionItems.value : answerItems.value
   if (event.shiftKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
     event.preventDefault()
@@ -267,6 +310,8 @@ function handleThumbnailKeydown(role: CardRole, index: number, item: CaptureItem
             <button
               type="button"
               class="crop-image"
+              :data-crop-item-id="activeItem(role)!.cropDerivationId ? undefined : activeItem(role)!.id"
+              :data-crop-result-item-id="activeItem(role)!.cropDerivationId ? activeItem(role)!.id : undefined"
               :disabled="busy"
               :aria-label="activeItem(role)!.cropDerivationId ? '恢复裁剪前原图' : `裁剪 ${activeItem(role)!.sourceName}`"
               @pointerdown.stop
@@ -325,7 +370,7 @@ function handleThumbnailKeydown(role: CardRole, index: number, item: CaptureItem
               @revert-crop="emit('revertCrop', $event)"
               @activate="selectImage(role, index)"
               @pointer-start="(itemId, event) => emit('pointerStart', itemId, event)"
-              @keydown="handleThumbnailKeydown(role, index, item, $event)"
+              @selection-keydown="handleThumbnailKeydown(role, index, item, $event)"
             />
             <button
               type="button"
@@ -370,19 +415,21 @@ function handleThumbnailKeydown(role: CardRole, index: number, item: CaptureItem
         v-if="expanded && previews[expanded.item.id]"
         class="image-overlay"
         role="presentation"
-        @click.self="expanded = undefined"
-        @keydown.esc="expanded = undefined"
+        @click.self="closeExpandedImage"
+        @keydown="handleExpandedKeydown"
       >
         <section
+          ref="expandedDialog"
           role="dialog"
           aria-modal="true"
           :aria-label="`大图查看 ${expanded.item.sourceName}`"
           tabindex="-1"
         >
           <button
+            ref="expandedCloseButton"
             type="button"
             aria-label="关闭大图"
-            @click="expanded = undefined"
+            @click="closeExpandedImage"
           >
             <X :size="20" />
           </button>
@@ -401,11 +448,11 @@ function handleThumbnailKeydown(role: CardRole, index: number, item: CaptureItem
 .draft-card{padding:18px;border:1px solid var(--line);border-radius:7px 22px 22px;background:rgba(255,253,247,.78);box-shadow:var(--shadow-soft);transition:transform var(--motion-standard) var(--ease-standard),border-color var(--motion-standard),box-shadow var(--motion-standard)}
 .draft-card.is-selected{border-color:rgba(185,88,63,.5);box-shadow:0 18px 45px rgba(34,48,43,.13),inset 4px 0 0 var(--cinnabar);transform:translateY(-2px)}
 .draft-card.is-drop-question{border-color:rgba(33,51,45,.72);background:rgba(225,235,229,.9);transform:translateY(-3px) scale(1.012);box-shadow:0 22px 48px rgba(33,51,45,.18)}.draft-card.is-drop-answer{border-color:rgba(185,88,63,.72);background:rgba(247,225,216,.88);transform:translateY(-3px) scale(1.012);box-shadow:0 22px 48px rgba(185,88,63,.16)}.draft-card.is-settled{animation:card-settle 240ms var(--ease-standard)}
-.draft-header{display:flex;gap:14px;align-items:center;justify-content:space-between}.draft-target{display:flex;flex:1;gap:10px;align-items:center;padding:0;color:var(--ink);border:0;background:transparent;text-align:left;cursor:pointer}.draft-target>span:last-child{display:grid}.draft-target strong{font-size:17px}.draft-target small{margin-top:2px;color:var(--ink-muted);font-size:10px}.draft-number{color:var(--cinnabar);font-family:serif;font-size:23px}.card-subject{min-height:34px;padding:0 28px 0 10px;color:var(--green-deep);border:1px solid rgba(33,51,45,.2);border-radius:999px;background:var(--green-soft);font-size:10px;font-weight:760;cursor:pointer}.draft-actions{display:flex;gap:7px;align-items:center}.ready-mark{display:inline-flex;gap:5px;align-items:center;min-width:28px;min-height:28px;justify-content:center;padding:6px 9px;color:#914b39;border-radius:999px;background:rgba(185,88,63,.1);font-size:9px;font-weight:800}.is-ready .ready-mark{color:#416b5a;background:var(--green-soft)}
+.draft-header{display:flex;gap:14px;align-items:center;justify-content:space-between}.draft-target{display:flex;flex:1;gap:10px;align-items:center;min-height:44px;padding:0;color:var(--ink);border:0;background:transparent;text-align:left;cursor:pointer}.draft-target>span:last-child{display:grid}.draft-target strong{font-size:17px}.draft-target small{margin-top:2px;color:var(--ink-muted);font-size:12px}.draft-number{color:var(--cinnabar);font-family:serif;font-size:23px}.card-subject{min-height:44px;padding:0 28px 0 10px;color:var(--green-deep);border:1px solid rgba(33,51,45,.2);border-radius:999px;background:var(--green-soft);font-size:12px;font-weight:760;cursor:pointer}.draft-actions{display:flex;gap:7px;align-items:center}.ready-mark{display:inline-flex;gap:5px;align-items:center;min-width:28px;min-height:28px;justify-content:center;padding:6px 9px;color:#914b39;border-radius:999px;background:rgba(185,88,63,.1);font-size:12px;font-weight:800}.is-ready .ready-mark{color:#416b5a;background:var(--green-soft)}
 .card-perspective{position:relative;margin-top:14px;perspective:1400px}.card-inner{position:relative;min-height:480px;transform-style:preserve-3d;transition:transform var(--motion-page) var(--ease-standard)}.card-inner.is-flipped{transform:rotateY(180deg)}.card-face{position:absolute;inset:0;display:grid;grid-template-rows:auto minmax(0,1fr) auto;min-height:440px;padding:14px;overflow:hidden;border:1px solid rgba(33,51,45,.13);border-radius:18px;background:rgba(246,241,231,.72);backface-visibility:hidden}.card-face.is-answer{background:linear-gradient(145deg,rgba(185,88,63,.08),rgba(255,253,247,.9));transform:rotateY(180deg)}
-.face-label{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}.face-label span{color:var(--cinnabar);font-size:10px;font-weight:850;letter-spacing:.12em}.face-label strong{color:var(--ink-muted);font-size:10px}.main-image-wrap{position:relative;display:grid;min-height:340px;overflow:hidden;place-items:center;border-radius:13px;background:#fff;box-shadow:inset 0 0 0 1px rgba(33,51,45,.08);cursor:grab;touch-action:none}.main-image-wrap:active{cursor:grabbing}.main-image-wrap>img{width:100%;height:100%;max-height:430px;object-fit:contain}.image-loading,.face-empty{display:grid;place-items:center;align-content:center;gap:8px;min-height:340px;color:var(--ink-muted);text-align:center}.face-empty span{font-size:11px}.expand-image,.crop-image{position:absolute;bottom:10px;display:inline-flex;gap:5px;align-items:center;min-height:34px;padding:0 11px;color:var(--paper);border:0;border-radius:999px;background:rgba(33,51,45,.82);font-size:10px;cursor:pointer}.expand-image{right:10px}.crop-image{left:10px;background:rgba(185,88,63,.9)}.drag-hint{position:absolute;top:10px;right:10px;display:inline-flex;gap:4px;align-items:center;padding:5px 8px;color:var(--paper);border-radius:999px;background:rgba(33,51,45,.72);font-size:9px;font-weight:760;pointer-events:none}.face-filmstrip{display:flex;gap:7px;align-items:center;min-width:0;margin-top:10px;padding:2px;overflow-x:auto}.change-role{display:grid;flex:0 0 auto;width:32px;height:32px;place-items:center;color:var(--green-deep);border:1px solid rgba(33,51,45,.22);border-radius:50%;background:var(--green-soft);cursor:pointer}.flip-button{position:absolute;z-index:3;right:18px;bottom:18px;display:flex;gap:7px;align-items:center;min-height:42px;padding:0 15px;color:var(--paper);border:0;border-radius:999px;background:var(--green-deep);font-weight:780;cursor:pointer;box-shadow:0 10px 24px rgba(33,51,45,.2)}
-.image-move-actions{position:absolute;top:10px;right:10px;display:flex;gap:6px;align-items:center}.image-move-actions .drag-hint{position:static}.return-image{min-height:29px;padding:0 9px;color:var(--green-deep);border:1px solid rgba(33,51,45,.18);border-radius:999px;background:rgba(255,253,247,.94);font-size:9px;font-weight:760;cursor:pointer}.add-answer-button{background:var(--cinnabar)}
-.image-overlay{position:fixed;z-index:120;inset:0;display:grid;padding:32px;place-items:center;background:rgba(20,28,25,.82);backdrop-filter:blur(14px)}.image-overlay section{position:relative;display:grid;width:min(1400px,100%);height:min(900px,calc(100vh - 64px));padding:16px;grid-template-rows:minmax(0,1fr) auto;border-radius:18px;background:var(--paper)}.image-overlay img{width:100%;height:100%;object-fit:contain}.image-overlay p{min-width:0;margin:10px 42px 0 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.image-overlay button{position:absolute;z-index:1;top:14px;right:14px;display:grid;width:40px;height:40px;place-items:center;color:var(--paper);border:0;border-radius:50%;background:var(--green-deep);cursor:pointer}button:disabled{cursor:not-allowed;opacity:.42}
+.face-label{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}.face-label span{color:var(--cinnabar);font-size:12px;font-weight:850;letter-spacing:.12em}.face-label strong{color:var(--ink-muted);font-size:12px}.main-image-wrap{position:relative;display:grid;min-height:340px;overflow:hidden;place-items:center;border-radius:13px;background:#fff;box-shadow:inset 0 0 0 1px rgba(33,51,45,.08);cursor:grab;touch-action:none}.main-image-wrap:active{cursor:grabbing}.main-image-wrap>img{width:100%;height:100%;max-height:430px;object-fit:contain}.image-loading,.face-empty{display:grid;place-items:center;align-content:center;gap:8px;min-height:340px;color:var(--ink-muted);text-align:center}.face-empty span{font-size:12px}.expand-image,.crop-image{position:absolute;bottom:10px;display:inline-flex;gap:5px;align-items:center;min-height:44px;padding:0 11px;color:var(--paper);border:0;border-radius:999px;background:rgba(33,51,45,.82);font-size:12px;cursor:pointer}.expand-image{right:10px}.crop-image{left:10px;background:rgba(185,88,63,.9)}.drag-hint{position:absolute;top:10px;right:10px;display:inline-flex;gap:4px;align-items:center;padding:5px 8px;color:var(--paper);border-radius:999px;background:rgba(33,51,45,.72);font-size:12px;font-weight:760;pointer-events:none}.face-filmstrip{display:flex;gap:7px;align-items:center;min-width:0;margin-top:10px;padding:2px;overflow-x:auto}.change-role{display:grid;flex:0 0 auto;width:44px;height:44px;place-items:center;color:var(--green-deep);border:1px solid rgba(33,51,45,.22);border-radius:50%;background:var(--green-soft);cursor:pointer}.flip-button{position:absolute;z-index:3;right:18px;bottom:18px;display:flex;gap:7px;align-items:center;min-height:44px;padding:0 15px;color:var(--paper);border:0;border-radius:999px;background:var(--green-deep);font-weight:780;cursor:pointer;box-shadow:0 10px 24px rgba(33,51,45,.2)}
+.image-move-actions{position:absolute;top:10px;right:10px;display:flex;gap:6px;align-items:center}.image-move-actions .drag-hint{position:static}.return-image{min-height:44px;padding:0 9px;color:var(--green-deep);border:1px solid rgba(33,51,45,.18);border-radius:999px;background:rgba(255,253,247,.94);font-size:12px;font-weight:760;cursor:pointer}.add-answer-button{background:var(--cinnabar)}
+.image-overlay{position:fixed;z-index:120;inset:0;display:grid;padding:32px;place-items:center;background:rgba(20,28,25,.82);backdrop-filter:blur(14px)}.image-overlay section{position:relative;display:grid;width:min(1400px,100%);height:min(900px,calc(100vh - 64px));padding:16px;grid-template-rows:minmax(0,1fr) auto;border-radius:18px;background:var(--paper)}.image-overlay img{width:100%;height:100%;object-fit:contain}.image-overlay p{min-width:0;margin:10px 42px 0 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.image-overlay button{position:absolute;z-index:1;top:14px;right:14px;display:grid;width:44px;height:44px;place-items:center;color:var(--paper);border:0;border-radius:50%;background:var(--green-deep);cursor:pointer}button:disabled{cursor:not-allowed;opacity:.42}
 @keyframes card-settle{0%{transform:scale(.97);opacity:.78}55%{transform:scale(1.018)}100%{transform:scale(1);opacity:1}}
 @media(max-width:760px){.draft-card{padding:14px}.draft-header{align-items:flex-start;flex-wrap:wrap}.card-subject{order:3}.card-inner{min-height:420px}.card-face{min-height:390px}.main-image-wrap,.image-loading,.face-empty{min-height:290px}.image-overlay{padding:12px}.image-overlay section{height:calc(100vh - 24px)}}
 @media(prefers-reduced-motion:reduce){.draft-card,.card-inner{transition:none}.draft-card.is-selected,.draft-card.is-drop-question,.draft-card.is-drop-answer{transform:none}.draft-card.is-settled{animation:none}}

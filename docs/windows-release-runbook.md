@@ -10,8 +10,15 @@ unsigned executable is a development artifact, not a product release.
 - Ship the per-user NSIS installer with the offline Evergreen WebView2 prerequisite.
 - Sign both the application executable and installer with the same trusted code-signing
   certificate, SHA-256 digest, and an HTTPS RFC 3161 timestamp.
+- Sign every updater payload with the separate Tauri updater key. Publish one `latest.json`
+  containing both `windows-x86_64` and `windows-aarch64`; a partial manifest is not releasable.
+- Keep automatic update networking disabled in ordinary/local builds. Production builds receive
+  the HTTPS manifest endpoint and updater public key only through the protected release environment.
 - Never publish directly from CI. The workflow creates a draft GitHub Release for a human to
   review and promote.
+- Build only an annotated `vX.Y.Z` tag that resolves to the current `origin/main` commit after a
+  successful completed CI `push` run for that exact SHA. The signed workflow verifies all four
+  facts before either architecture receives signing credentials.
 - Keep a previous signed installer available for rollback. Downgrades are blocked by the
   installer, so rollback requires an explicit uninstall/reinstall procedure and a verified
   encrypted backup.
@@ -20,6 +27,7 @@ Authoritative platform references:
 
 - [Tauri Windows installers](https://v2.tauri.app/distribute/windows-installer/)
 - [Tauri Windows code signing](https://v2.tauri.app/distribute/sign/windows/)
+- [Tauri updater signatures and static manifests](https://v2.tauri.app/plugin/updater/)
 - [Microsoft WebView2 distribution](https://learn.microsoft.com/microsoft-edge/webview2/concepts/distribution)
 - [Microsoft Authenticode timestamping](https://learn.microsoft.com/windows/win32/seccrypto/time-stamping-authenticode-signatures)
 
@@ -31,24 +39,40 @@ Create a protected `production` environment with required reviewers. Configure:
 - `WINDOWS_CERTIFICATE_PASSWORD`: PFX password secret;
 - `WINDOWS_CERTIFICATE_THUMBPRINT`: expected signer thumbprint secret;
 - `WINDOWS_TIMESTAMP_URL`: HTTPS RFC 3161 timestamp service environment variable.
+- `WINDOWS_UPDATE_ENDPOINT`: public HTTPS URL from which installed clients read `latest.json`;
+- `WINDOWS_UPDATE_ARTIFACT_BASE_URL`: public HTTPS release directory used inside `latest.json`;
+- `WINDOWS_UPDATER_PUBLIC_KEY`: public Tauri updater verification key;
+- `TAURI_SIGNING_PRIVATE_KEY`: Tauri updater private key secret;
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: updater private-key password secret.
 
-Do not store any of these in the repository, workflow artifacts, issue text, or support
-diagnostics. Prefer a hardware-backed or managed signing service when operationally available.
-Rotate credentials through a separate audited procedure.
+The updater key pair is independent from the Authenticode certificate. The public verification
+key is safe to distribute and is compiled into production builds; the private key and its
+password must never enter the repository, workflow artifacts, issue text, or support diagnostics.
+Back up the private key offline: losing it prevents shipping trusted updates to already-installed
+clients. Prefer a hardware-backed or managed Authenticode signing service when operationally
+available, and rotate credentials only through a separate audited migration procedure.
 
 ## Prepare a release
 
 1. Update the same semantic version in `package.json`, `src-tauri/Cargo.toml`, and
    `src-tauri/tauri.conf.json`.
 2. Run all repository gates and the unsigned installer smoke test on a clean Windows machine.
-3. Merge only reviewed changes to `main`.
-4. Create and push an annotated `vX.Y.Z` tag from the reviewed commit.
+   The smoke must report runtime readiness, create a real WebView2 window, keep it alive for
+   10 seconds, prove a second launch hands off to the first instance, and close without producing
+   `startup-failure.json`.
+3. Merge only reviewed changes to `main` and wait for the CI `push` run on that exact commit to
+   complete successfully.
+4. Create and push an annotated `vX.Y.Z` tag from that current `main` commit.
 5. Wait for **Signed Windows Release**. Missing secrets, certificate mismatch, non-HTTPS
-   timestamping, version drift, invalid signatures, or install/self-check/uninstall failure all
-   block the job.
-6. Download the workflow artifact. Verify the installer SHA-256 locally and inspect
-   `Get-AuthenticodeSignature` for `Valid` status and the expected publisher.
-7. Complete the manual matrix below, then publish the draft GitHub Release.
+   timestamping/update URLs, version drift, incomplete architecture artifacts, invalid
+   Authenticode/updater signatures, or install/self-check/uninstall failure all block the job.
+6. Download the workflow artifact. Verify both installer SHA-256 files, inspect
+   `Get-AuthenticodeSignature` for `Valid` status and the expected publisher, and confirm
+   `latest.json` contains exactly the x64 and ARM64 entries with the intended public URLs.
+7. Confirm the installers and `latest.json` are reachable at their configured HTTPS URLs before
+   publishing the draft. Never publish a manifest that points to inaccessible or private assets.
+8. Complete the manual matrix below, including an upgrade from the previous signed version, then
+   publish the draft GitHub Release.
 
 ## Required manual matrix
 
@@ -81,6 +105,8 @@ Ask the customer for:
 4. exact reproducible actions, without sharing question images unless the customer explicitly
    consents.
 
-The startup failure record under the app's local application-data category contains only schema
-version, app version, timestamp, and the fixed reason code `tauri_startup_failed`. It never
-contains an internal error, database path, account identity, or question content.
+The startup failure record under the app's application-data category contains only schema
+version, app version, timestamp, and one of the fixed reason codes `tauri_startup_failed` or
+`rust_panic`. It never contains panic text, an internal error, stack trace, database path,
+account identity, or question content. A valid record is included automatically when the user
+exports a safe diagnostic report.

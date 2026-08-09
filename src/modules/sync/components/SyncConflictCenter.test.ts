@@ -39,6 +39,14 @@ const tagConflict = {
   remoteValue: { kind: 'array', value: [] },
   createdAtUtcMs: 1_725_000_000_001,
 }
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((finish, fail) => { resolve = finish; reject = fail })
+  return { promise, resolve, reject }
+}
+
 const syncController = {
   run: vi.fn(),
   scheduleMutation: vi.fn(),
@@ -72,6 +80,9 @@ describe('SyncConflictCenter', () => {
     expect(within(card).getByText('无标签')).toBeVisible()
 
     await userEvent.click(within(card).getByRole('button', { name: '数学全部采用本机版本' }))
+    expect(api.syncConflictResolveEntity).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog', { name: '确认数学的批量选择' })).toBeVisible()
+    await userEvent.click(screen.getByRole('button', { name: '确认全部采用本机版本' }))
 
     expect(api.syncConflictResolveEntity).toHaveBeenCalledWith({
       entityType: 'problem',
@@ -82,6 +93,23 @@ describe('SyncConflictCenter', () => {
     expect(screen.getByText('同步内容没有待处理冲突')).toBeVisible()
     expect(emitted().changed).toHaveLength(1)
     expect(syncController.scheduleMutation).toHaveBeenCalledOnce()
+  })
+
+  it('cancels a bulk choice without writing and restores its trigger focus', async () => {
+    api.syncConflictList.mockResolvedValue({
+      ok: true,
+      data: [noteConflict, tagConflict],
+    })
+    renderCenter()
+
+    const trigger = await screen.findByRole('button', { name: '数学全部采用云端版本' })
+    await userEvent.click(trigger)
+    expect(screen.getByRole('dialog', { name: '确认数学的批量选择' })).toBeVisible()
+    await userEvent.click(screen.getByRole('button', { name: '取消，逐项确认' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(api.syncConflictResolveEntity).not.toHaveBeenCalled()
+    expect(trigger).toHaveFocus()
   })
 
   it('resolves one field without hiding the other fields', async () => {
@@ -124,10 +152,13 @@ describe('SyncConflictCenter', () => {
 
     const button = await screen.findByRole('button', { name: '数学全部采用云端版本' })
     await userEvent.click(button)
+    expect(api.syncConflictResolveEntity).not.toHaveBeenCalled()
+    await userEvent.click(screen.getByRole('button', { name: '确认全部采用云端版本' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('本地内容保持不变')
     expect(screen.getByRole('article', { name: '数学的同步冲突' })).toBeVisible()
     expect(button).toBeEnabled()
+    expect(button).toHaveFocus()
     expect(syncController.scheduleMutation).not.toHaveBeenCalled()
   })
 
@@ -154,6 +185,10 @@ describe('SyncConflictCenter', () => {
     expect(screen.getByText('保留本机内容')).toBeVisible()
     expect(screen.getByRole('button', { name: '删除状态采用本机版本' })).toBeVisible()
     expect(screen.getByRole('button', { name: '删除状态采用云端版本' })).toBeVisible()
+
+    await userEvent.click(screen.getByRole('button', { name: '数学全部采用云端版本' }))
+    expect(screen.getByRole('dialog')).toHaveTextContent('本机这条内容将被删除')
+    expect(screen.getByRole('button', { name: '确认采用云端并删除本机内容' })).toBeVisible()
   })
 
   it('does not expose opaque entity ids and can retry a failed load', async () => {
@@ -175,5 +210,29 @@ describe('SyncConflictCenter', () => {
     await userEvent.click(screen.getByRole('button', { name: '重新读取同步冲突' }))
     expect(await screen.findByRole('article', { name: '数学的同步冲突' })).toBeVisible()
     expect(screen.queryByText('problem-1')).not.toBeInTheDocument()
+  })
+
+  it('locks field and group choices while a refreshed snapshot is pending', async () => {
+    const refresh = deferred<{ ok: true, data: typeof noteConflict[] }>()
+    api.syncConflictList
+      .mockResolvedValueOnce({ ok: true, data: [noteConflict] })
+      .mockReturnValueOnce(refresh.promise)
+    renderCenter()
+
+    const fieldButton = await screen.findByRole('button', { name: '笔记采用云端版本' })
+    const groupButton = screen.getByRole('button', { name: '数学全部采用本机版本' })
+    await userEvent.click(screen.getByRole('button', { name: '重新读取同步冲突' }))
+
+    expect(fieldButton).toBeDisabled()
+    expect(groupButton).toBeDisabled()
+    await userEvent.click(fieldButton)
+    await userEvent.click(groupButton)
+    expect(api.syncConflictResolve).not.toHaveBeenCalled()
+    expect(api.syncConflictResolveEntity).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+
+    refresh.resolve({ ok: true, data: [noteConflict] })
+    await waitFor(() => expect(fieldButton).toBeEnabled())
+    expect(groupButton).toBeEnabled()
   })
 })

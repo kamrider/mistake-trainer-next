@@ -1,18 +1,23 @@
 <script setup lang="ts">
 import { Check, ChevronLeft, ChevronRight, Pencil, SkipForward, Sparkles, X } from '@lucide/vue'
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type {
   CaptureRecognitionJob,
   CaptureRecognitionReasonCode,
   CaptureRecognitionSuggestion,
 } from '../../../shared/api/bindings'
-
-type ReviewFilter = 'review' | 'high' | 'low' | 'stale'
+import { acquireDialogDocumentBoundary } from '../../../app/dialog-document-boundary'
+import { trapDialogFocus } from '../../../app/dialog-focus'
+import {
+  useCaptureRecognitionReviewSession,
+  type CaptureRecognitionReviewFilter,
+} from '../composables/useCaptureRecognitionReviewSession'
 
 const props = defineProps<{
   job: CaptureRecognitionJob
   previews: Record<string, string>
   busy?: boolean | undefined
+  operationBusy?: boolean | undefined
 }>()
 
 const emit = defineEmits<{
@@ -34,16 +39,13 @@ const emit = defineEmits<{
   close: []
 }>()
 
-const filter = ref<ReviewFilter>('review')
-const currentIndex = ref(0)
 const announcement = ref('')
 const confirmApply = ref(false)
-const locallyAccepted = ref(new Set<string>())
-const locallyRejected = ref(new Set<string>())
 const reviewRoot = ref<HTMLElement>()
 const applyButton = ref<HTMLButtonElement>()
 const impactDialog = ref<HTMLElement>()
 let announcementToken = 0
+let releaseDialogBoundary: (() => void) | undefined
 
 const reasonCopy: Record<CaptureRecognitionReasonCode, string> = {
   clear_question_anchor: '检测到清晰题号',
@@ -54,24 +56,21 @@ const reasonCopy: Record<CaptureRecognitionReasonCode, string> = {
   possible_content_cut: '边界附近可能还有内容',
 }
 
-const counts = computed(() => ({
-  review: props.job.suggestions.filter(item => item.state !== 'stale' && item.reviewBand === 'review').length,
-  high: props.job.suggestions.filter(item => item.state !== 'stale' && item.reviewBand === 'high').length,
-  low: props.job.suggestions.filter(item => item.state !== 'stale' && item.reviewBand === 'low').length,
-  stale: props.job.suggestions.filter(item => item.state === 'stale').length,
-}))
-
-const filtered = computed(() => props.job.suggestions.filter((item) => {
-  if (filter.value === 'stale') return item.state === 'stale'
-  return item.state !== 'stale' && item.reviewBand === filter.value
-}))
-const current = computed(() => filtered.value[currentIndex.value])
+const {
+  filter,
+  currentIndex,
+  counts,
+  filtered,
+  current,
+  acceptedIds,
+  decisionState,
+  recordDecision,
+  recordAcceptedMany,
+  move: moveSession,
+  selectFilter: selectSessionFilter,
+} = useCaptureRecognitionReviewSession(() => props.job)
 const currentQuestions = computed(() => current.value?.regions.filter(region => region.role === 'question').length ?? 0)
 const currentAnswers = computed(() => current.value?.regions.filter(region => region.role === 'answer').length ?? 0)
-const acceptedIds = computed(() => props.job.suggestions
-  .filter(item => item.state === 'accepted' || locallyAccepted.value.has(item.id))
-  .filter(item => !locallyRejected.value.has(item.id) && item.state !== 'stale')
-  .map(item => item.id))
 const acceptedSuggestions = computed(() => props.job.suggestions.filter(item => acceptedIds.value.includes(item.id)))
 const impact = computed(() => {
   const regions = acceptedSuggestions.value.flatMap(item => item.regions)
@@ -83,23 +82,6 @@ const impact = computed(() => {
   }
 })
 
-function resetReview() {
-  const accepted = props.job.suggestions
-    .filter(item => item.state === 'accepted')
-    .map(item => item.id)
-  const rejected = props.job.suggestions
-    .filter(item => item.state === 'rejected')
-    .map(item => item.id)
-  locallyAccepted.value = new Set(accepted)
-  locallyRejected.value = new Set(rejected)
-  filter.value = counts.value.review > 0 ? 'review' : counts.value.high > 0 ? 'high' : 'low'
-  currentIndex.value = 0
-}
-
-watch(() => props.job, resetReview, { deep: true })
-watch(filter, () => {
-  currentIndex.value = 0
-})
 watch(
   () => current.value?.itemId,
   (itemId) => {
@@ -108,16 +90,15 @@ watch(
   { immediate: true },
 )
 
-onMounted(() => {
-  resetReview()
-  void nextTick(() => reviewRoot.value?.focus())
+onMounted(async () => {
+  if (reviewRoot.value) releaseDialogBoundary = acquireDialogDocumentBoundary(reviewRoot.value)
+  await nextTick()
+  reviewRoot.value?.focus()
 })
 
-function decisionState(suggestion: CaptureRecognitionSuggestion) {
-  if (locallyAccepted.value.has(suggestion.id)) return 'accepted'
-  if (locallyRejected.value.has(suggestion.id)) return 'rejected'
-  return suggestion.state
-}
+onBeforeUnmount(() => {
+  releaseDialogBoundary?.()
+})
 
 function canAccept(suggestion: CaptureRecognitionSuggestion) {
   return suggestion.reviewBand !== 'low' && suggestion.state !== 'stale'
@@ -133,18 +114,10 @@ function announce(message: string) {
 }
 
 function review(suggestion: CaptureRecognitionSuggestion, decision: 'accepted' | 'rejected') {
+  if (props.operationBusy) return
   if (decision === 'accepted' && !canAccept(suggestion)) return
   const reviewedPosition = currentIndex.value + 1
-  if (decision === 'accepted') {
-    locallyAccepted.value.add(suggestion.id)
-    locallyRejected.value.delete(suggestion.id)
-    locallyAccepted.value = new Set(locallyAccepted.value)
-  }
-  else {
-    locallyRejected.value.add(suggestion.id)
-    locallyAccepted.value.delete(suggestion.id)
-    locallyRejected.value = new Set(locallyRejected.value)
-  }
+  recordDecision(suggestion.id, decision)
   announce(
     `${decision === 'accepted' ? '已接受' : '已跳过'}第 ${reviewedPosition} 条建议，共 ${filtered.value.length} 条`,
   )
@@ -158,20 +131,21 @@ function review(suggestion: CaptureRecognitionSuggestion, decision: 'accepted' |
 }
 
 function acceptHighConfidence() {
+  if (props.operationBusy) return
   const inputs: Array<{
     jobId: string
     suggestionId: string
     decision: 'accepted'
     editedRegions: null
   }> = []
+  const acceptedSuggestionIds: string[] = []
   for (const suggestion of props.job.suggestions) {
     if (
       suggestion.reviewBand === 'high'
       && suggestion.state !== 'stale'
       && decisionState(suggestion) !== 'accepted'
     ) {
-      locallyAccepted.value.add(suggestion.id)
-      locallyRejected.value.delete(suggestion.id)
+      acceptedSuggestionIds.push(suggestion.id)
       inputs.push({
         jobId: props.job.id,
         suggestionId: suggestion.id,
@@ -180,24 +154,19 @@ function acceptHighConfidence() {
       })
     }
   }
-  locallyAccepted.value = new Set(locallyAccepted.value)
-  locallyRejected.value = new Set(locallyRejected.value)
+  recordAcceptedMany(acceptedSuggestionIds)
   if (inputs.length) emit('reviewMany', inputs)
   announce(`已接受 ${inputs.length} 条高可信建议；其他建议保持不变`)
 }
 
 function move(offset: number, announcePosition = true) {
   if (!filtered.value.length) return
-  const nextIndex = Math.min(
-    filtered.value.length - 1,
-    Math.max(0, currentIndex.value + offset),
-  )
-  currentIndex.value = nextIndex
+  const nextIndex = moveSession(offset)
   if (announcePosition) announce(`第 ${nextIndex + 1} 条，共 ${filtered.value.length} 条`)
 }
 
-function selectFilter(nextFilter: ReviewFilter) {
-  filter.value = nextFilter
+function selectFilter(nextFilter: CaptureRecognitionReviewFilter) {
+  selectSessionFilter(nextFilter)
   announce(`已打开${{
     review: '需要检查',
     high: '可快速确认',
@@ -234,29 +203,17 @@ function handleImpactKeydown(event: KeyboardEvent) {
     void closeImpact()
     return
   }
-  if (event.key !== 'Tab' || !impactDialog.value) return
-  const controls = Array.from(
-    impactDialog.value.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
-    ),
-  )
-  if (!controls.length) return
-  const first = controls[0]!
-  const last = controls.at(-1)!
-  if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault()
-    last.focus()
-  }
-  else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault()
-    first.focus()
-  }
+  trapDialogFocus(event, impactDialog.value)
 }
 
 function handleKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape' && !confirmApply.value) {
     event.preventDefault()
     emit('close')
+    return
+  }
+  if (event.key === 'Tab') {
+    trapDialogFocus(event, reviewRoot.value)
     return
   }
   const target = event.target
@@ -274,15 +231,26 @@ function handleKeydown(event: KeyboardEvent) {
     event.preventDefault()
     move(-1)
   }
-  else if (event.key === 'Enter' && current.value && canAccept(current.value)) {
+  else if (
+    event.key === 'Enter'
+    && !props.operationBusy
+    && current.value
+    && canAccept(current.value)
+  ) {
     event.preventDefault()
     review(current.value, 'accepted')
   }
-  else if (event.key.toLowerCase() === 's' && current.value) {
+  else if (event.key.toLowerCase() === 's' && !props.operationBusy && current.value) {
     event.preventDefault()
     review(current.value, 'rejected')
   }
-  else if (event.key.toLowerCase() === 'e' && current.value && canAccept(current.value)) {
+  else if (
+    event.key.toLowerCase() === 'e'
+    && !props.busy
+    && !props.operationBusy
+    && current.value
+    && canAccept(current.value)
+  ) {
     event.preventDefault()
     emit('edit', current.value)
   }
@@ -343,6 +311,14 @@ function asPercent(value: number | null) {
         {{ option[1] }} <strong>{{ counts[option[0]] }}</strong>
       </button>
     </nav>
+
+    <p
+      v-if="busy && !operationBusy"
+      class="review-save-state"
+      aria-live="polite"
+    >
+      正在后台保存审核决定；你可以继续确认下一条，应用切图需等待保存完成。
+    </p>
 
     <div
       v-if="current"
@@ -445,7 +421,7 @@ function asPercent(value: number | null) {
         >
           <button
             type="button"
-            :disabled="busy"
+            :disabled="operationBusy"
             @click="ignoreStale"
           >
             <SkipForward :size="15" /> 忽略已过期建议
@@ -458,14 +434,15 @@ function asPercent(value: number | null) {
           <button
             type="button"
             class="primary-action"
-            :disabled="busy"
+            :disabled="operationBusy"
             @click="review(current, 'rejected')"
           >
             <Check :size="16" /> 保留原图
           </button>
           <button
             type="button"
-            :disabled="busy"
+            :disabled="busy || operationBusy"
+            :data-recognition-edit-suggestion-id="current.id"
             @click="emit('edit', current)"
           >
             <Pencil :size="15" /> 手工裁剪
@@ -478,21 +455,22 @@ function asPercent(value: number | null) {
           <button
             type="button"
             class="primary-action"
-            :disabled="busy"
+            :disabled="operationBusy"
             @click="review(current, 'accepted')"
           >
             <Check :size="16" /> 接受建议
           </button>
           <button
             type="button"
-            :disabled="busy"
+            :disabled="busy || operationBusy"
+            :data-recognition-edit-suggestion-id="current.id"
             @click="emit('edit', current)"
           >
             <Pencil :size="15" /> 调整边界
           </button>
           <button
             type="button"
-            :disabled="busy"
+            :disabled="operationBusy"
             @click="review(current, 'rejected')"
           >
             <SkipForward :size="15" /> 跳过
@@ -525,7 +503,7 @@ function asPercent(value: number | null) {
         v-if="counts.high > 0"
         type="button"
         class="secondary-action"
-        :disabled="busy"
+        :disabled="operationBusy"
         @click="acceptHighConfidence"
       >
         <Sparkles :size="15" /> 仅接受全部高可信建议
@@ -535,7 +513,7 @@ function asPercent(value: number | null) {
         ref="applyButton"
         type="button"
         class="primary-action"
-        :disabled="busy"
+        :disabled="busy || operationBusy"
         @click="openImpact"
       >
         把切图放入素材牌库（{{ acceptedIds.length }}）
@@ -556,7 +534,7 @@ function asPercent(value: number | null) {
       aria-modal="true"
       aria-labelledby="recognition-impact-title"
       tabindex="-1"
-      @keydown="handleImpactKeydown"
+      @keydown.stop="handleImpactKeydown"
     >
       <h3 id="recognition-impact-title">
         确认本次改动
@@ -641,7 +619,7 @@ p {
 
 .eyebrow {
   color: #4f806e;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 850;
   letter-spacing: .1em;
 }
@@ -649,13 +627,13 @@ p {
 header p:not(.eyebrow) {
   margin-top: 4px;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .icon-button {
   display: grid;
-  width: 38px;
-  height: 38px;
+  width: 44px;
+  height: 44px;
   padding: 0;
   place-items: center;
   border-radius: 50%;
@@ -708,7 +686,7 @@ nav button.active {
 }
 
 .preview-placeholder button {
-  min-height: 34px;
+  min-height: 44px;
 }
 
 .region-overlay {
@@ -719,7 +697,7 @@ nav button.active {
   color: white;
   border: 2px solid #3d7764;
   background: rgba(61, 119, 100, .12);
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 900;
 }
 
@@ -738,8 +716,8 @@ nav button.active {
 
 .review-position button {
   display: grid;
-  width: 34px;
-  height: 34px;
+  width: 44px;
+  height: 44px;
   padding: 0;
   place-items: center;
 }
@@ -748,20 +726,20 @@ nav button.active {
   display: inline-block;
   margin: 12px 0 5px;
   color: var(--ink-muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .review-copy ul,
 .impact ul {
   padding-left: 20px;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .split-note {
   margin-top: 7px;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.55;
 }
 
@@ -771,18 +749,18 @@ nav button.active {
   color: #7b493b;
   border-radius: 10px;
   background: rgba(246, 226, 216, .65);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .decision {
   margin-top: 10px;
   color: #315f50;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 800;
 }
 
 button {
-  min-height: 39px;
+  min-height: 44px;
   padding: 0 13px;
   border: 1px solid rgba(33, 51, 45, .2);
   border-radius: 999px;
@@ -818,8 +796,18 @@ footer {
 .apply-hint {
   max-width: 320px;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: 12px;
   text-align: right;
+}
+
+.review-save-state {
+  margin: 12px 0 0;
+  padding: 9px 12px;
+  color: var(--green-deep);
+  border: 1px solid rgba(79, 128, 110, .22);
+  border-radius: 10px;
+  background: rgba(225, 235, 229, .58);
+  font-size: 12px;
 }
 
 .impact {

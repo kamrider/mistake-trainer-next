@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ArchiveRestore, ShieldCheck, TriangleAlert, X } from '@lucide/vue'
-import { nextTick, onMounted, ref } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { acquireDialogDocumentBoundary } from '../../../app/dialog-document-boundary'
+import { trapDialogFocus } from '../../../app/dialog-focus'
 
 const props = defineProps<{
   mode: 'import' | 'rollback'
@@ -13,10 +15,16 @@ const emit = defineEmits<{ cancel: [], confirm: [] }>()
 const panel = ref<HTMLElement>()
 const cancelButton = ref<HTMLButtonElement>()
 const acknowledged = ref(false)
+let releaseDialogBoundary: (() => void) | undefined
 
 onMounted(async () => {
+  if (panel.value) releaseDialogBoundary = acquireDialogDocumentBoundary(panel.value)
   await nextTick()
   cancelButton.value?.focus()
+})
+
+onBeforeUnmount(() => {
+  releaseDialogBoundary?.()
 })
 
 function close() {
@@ -29,19 +37,7 @@ function handleKeydown(event: KeyboardEvent) {
     close()
     return
   }
-  if (event.key !== 'Tab') return
-  const focusable = [...(panel.value?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)') ?? [])]
-  if (!focusable.length) return
-  const first = focusable[0]
-  const last = focusable.at(-1)
-  if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault()
-    last?.focus()
-  }
-  else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault()
-    first?.focus()
-  }
+  trapDialogFocus(event, panel.value)
 }
 </script>
 
@@ -53,6 +49,7 @@ function handleKeydown(event: KeyboardEvent) {
     <section
       ref="panel"
       class="legacy-dialog"
+      tabindex="-1"
       role="dialog"
       aria-modal="true"
       aria-labelledby="legacy-dialog-title"
@@ -141,5 +138,5 @@ function handleKeydown(event: KeyboardEvent) {
 </template>
 
 <style scoped>
-.legacy-backdrop{position:fixed;z-index:90;inset:0;display:grid;padding:24px;place-items:center;background:rgba(24,34,30,.54);backdrop-filter:blur(7px);animation:backdrop-in var(--motion-standard) var(--ease-standard) both}.legacy-dialog{position:relative;width:min(590px,100%);max-height:calc(100vh - 48px);padding:30px;overflow:auto;border:1px solid rgba(33,51,45,.22);border-radius:22px;background:#fffdf7;box-shadow:0 28px 80px rgba(22,32,28,.28);animation:dialog-in var(--motion-page) var(--ease-standard) both}.close-button{position:absolute;top:18px;right:18px;display:grid;width:44px;height:44px;padding:0;place-items:center;border:0;border-radius:50%;background:rgba(33,51,45,.06);cursor:pointer}.dialog-mark{display:grid;width:52px;height:52px;margin-bottom:17px;place-items:center;color:#fffdf7;border-radius:17px 7px 17px 17px;background:var(--green-deep)}.dialog-mark.warning{background:var(--cinnabar)}.eyebrow{margin:0 0 7px;color:var(--cinnabar);font-size:11px;font-weight:850;letter-spacing:.15em}.legacy-dialog h2{margin:0;padding-right:45px;color:var(--green-deep);font-family:Georgia,'Microsoft YaHei',serif;font-size:27px}.description{margin:12px 0 0;color:var(--ink-muted);line-height:1.75}.safety-note{display:flex;gap:9px;align-items:flex-start;margin-top:19px;padding:14px;color:#557263;border-radius:12px;background:rgba(33,51,45,.06);font-size:12px;line-height:1.65}.safety-note svg{flex:0 0 auto}.acknowledge{display:flex;gap:10px;align-items:flex-start;margin-top:14px;padding:14px;color:#713d30;border:1px solid rgba(185,88,63,.25);border-radius:12px;background:rgba(185,88,63,.06);font-size:12px;line-height:1.65;cursor:pointer}.acknowledge input{margin-top:3px;accent-color:var(--cinnabar)}.dialog-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:20px}.dialog-actions button{min-height:44px;padding:10px 16px;border:1px solid var(--line);border-radius:11px;background:var(--paper-raised);cursor:pointer}.dialog-actions .confirm-button{color:#fffdf7;border-color:var(--green-deep);background:var(--green-deep)}.dialog-actions .confirm-button.danger{border-color:var(--cinnabar);background:var(--cinnabar)}button:disabled{opacity:.48;cursor:default}@keyframes backdrop-in{from{opacity:0}}@keyframes dialog-in{from{opacity:0;transform:translateY(12px) scale(.975)}}@media(max-width:620px){.legacy-backdrop{padding:12px}.legacy-dialog{max-height:calc(100vh - 24px);padding:24px 18px}.dialog-actions{flex-direction:column-reverse}.dialog-actions button{width:100%}}@media(prefers-reduced-motion:reduce){.legacy-backdrop,.legacy-dialog{animation:none}}
+.legacy-backdrop{position:fixed;z-index:90;inset:0;display:grid;padding:24px;place-items:center;background:rgba(24,34,30,.54);backdrop-filter:blur(7px);animation:backdrop-in var(--motion-standard) var(--ease-standard) both}.legacy-dialog{position:relative;width:min(590px,100%);max-height:calc(100vh - 48px);padding:30px;overflow:auto;border:1px solid rgba(33,51,45,.22);border-radius:22px;background:#fffdf7;box-shadow:0 28px 80px rgba(22,32,28,.28);animation:dialog-in var(--motion-page) var(--ease-standard) both}.close-button{position:absolute;top:18px;right:18px;display:grid;width:44px;height:44px;padding:0;place-items:center;border:0;border-radius:50%;background:rgba(33,51,45,.06);cursor:pointer}.dialog-mark{display:grid;width:52px;height:52px;margin-bottom:17px;place-items:center;color:#fffdf7;border-radius:17px 7px 17px 17px;background:var(--green-deep)}.dialog-mark.warning{background:var(--cinnabar)}.eyebrow{margin:0 0 7px;color:var(--cinnabar);font-size:12px;font-weight:850;letter-spacing:.15em}.legacy-dialog h2{margin:0;padding-right:45px;color:var(--green-deep);font-family:Georgia,'Microsoft YaHei',serif;font-size:27px}.description{margin:12px 0 0;color:var(--ink-muted);line-height:1.75}.safety-note{display:flex;gap:9px;align-items:flex-start;margin-top:19px;padding:14px;color:#557263;border-radius:12px;background:rgba(33,51,45,.06);font-size:12px;line-height:1.65}.safety-note svg{flex:0 0 auto}.acknowledge{display:flex;gap:10px;align-items:flex-start;margin-top:14px;padding:14px;color:#713d30;border:1px solid rgba(185,88,63,.25);border-radius:12px;background:rgba(185,88,63,.06);font-size:12px;line-height:1.65;cursor:pointer}.acknowledge input{margin-top:3px;accent-color:var(--cinnabar)}.dialog-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:20px}.dialog-actions button{min-height:44px;padding:10px 16px;border:1px solid var(--line);border-radius:11px;background:var(--paper-raised);cursor:pointer}.dialog-actions .confirm-button{color:#fffdf7;border-color:var(--green-deep);background:var(--green-deep)}.dialog-actions .confirm-button.danger{border-color:var(--cinnabar);background:var(--cinnabar)}button:disabled{opacity:.48;cursor:default}@keyframes backdrop-in{from{opacity:0}}@keyframes dialog-in{from{opacity:0;transform:translateY(12px) scale(.975)}}@media(max-width:620px){.legacy-backdrop{padding:12px}.legacy-dialog{max-height:calc(100vh - 24px);padding:24px 18px}.dialog-actions{flex-direction:column-reverse}.dialog-actions button{width:100%}}@media(prefers-reduced-motion:reduce){.legacy-backdrop,.legacy-dialog{animation:none}}
 </style>

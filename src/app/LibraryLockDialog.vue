@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { CloudOff, DatabaseZap, LockKeyhole, RadioTower, RefreshCw, ShieldCheck, X } from '@lucide/vue'
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { acquireDialogDocumentBoundary } from './dialog-document-boundary'
+import { trapDialogFocus } from './dialog-focus'
 
 const props = defineProps<{
   mode: 'lock' | 'sign-out'
@@ -15,6 +17,7 @@ const emit = defineEmits<{
 
 const panel = ref<HTMLElement>()
 const cancelButton = ref<HTMLButtonElement>()
+let releaseDialogBoundary: (() => void) | undefined
 const copy = computed(() => props.mode === 'sign-out'
   ? {
       eyebrow: '云端账户 · 本机保护',
@@ -31,8 +34,13 @@ const copy = computed(() => props.mode === 'sign-out'
 )
 
 onMounted(async () => {
+  if (panel.value) releaseDialogBoundary = acquireDialogDocumentBoundary(panel.value)
   await nextTick()
   cancelButton.value?.focus()
+})
+
+onBeforeUnmount(() => {
+  releaseDialogBoundary?.()
 })
 
 watch(() => props.busy, async (busy) => {
@@ -51,22 +59,7 @@ function handleKeydown(event: KeyboardEvent) {
     close()
     return
   }
-  if (event.key !== 'Tab') return
-  const focusable = [...(panel.value?.querySelectorAll<HTMLElement>('button:not(:disabled)') ?? [])]
-  if (!focusable.length) {
-    event.preventDefault()
-    panel.value?.focus()
-    return
-  }
-  const first = focusable[0]
-  const last = focusable.at(-1)
-  if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault()
-    last?.focus()
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault()
-    first?.focus()
-  }
+  trapDialogFocus(event, panel.value)
 }
 </script>
 
@@ -213,8 +206,8 @@ function handleKeydown(event: KeyboardEvent) {
   top: 18px;
   right: 18px;
   display: grid;
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
   padding: 0;
   place-items: center;
   border: 0;
@@ -238,7 +231,7 @@ function handleKeydown(event: KeyboardEvent) {
 .eyebrow {
   margin: 0 0 7px;
   color: var(--cinnabar);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 800;
   letter-spacing: .15em;
 }
@@ -276,8 +269,8 @@ h2 {
 }
 
 .lock-steps span { display: grid; gap: 5px; min-width: 0; }
-.lock-steps strong { color: var(--green-deep); font-size: 11px; }
-.lock-steps small { color: var(--ink-muted); font-size: 9px; line-height: 1.5; }
+.lock-steps strong { color: var(--green-deep); font-size: 12px; }
+.lock-steps small { color: var(--ink-muted); font-size: 12px; line-height: 1.5; }
 
 .lock-error {
   margin: 14px 0 0;
@@ -299,7 +292,7 @@ h2 {
 
 .dialog-actions button {
   display: inline-flex;
-  min-height: 42px;
+  min-height: 44px;
   gap: 7px;
   align-items: center;
   padding: 0 16px;

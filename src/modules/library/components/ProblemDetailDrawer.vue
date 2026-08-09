@@ -1,7 +1,13 @@
 <script setup lang="ts">
 import { Archive, ArrowLeft, ArrowRight, BookOpenCheck, Image, LoaderCircle, MoreHorizontal, Pencil, Play, RotateCcw, Save, Trash2, X } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import ActionConfirmDialog from '../../../app/components/ActionConfirmDialog.vue'
+import { type NavigationAttempt, useUnsavedChangesGuard } from '../../../app/composables/useUnsavedChangesGuard'
+import { useMenuButton } from '../../../app/composables/useMenuButton'
+import { acquireDialogDocumentBoundary } from '../../../app/dialog-document-boundary'
+import { getDialogFocusableElements, trapDialogFocus } from '../../../app/dialog-focus'
 import type { ProblemDetail } from '../../../shared/api/bindings'
+import { useProblemDetailEditor } from '../composables/useProblemDetailEditor'
 import ProblemTagEditor from './ProblemTagEditor.vue'
 
 const props = defineProps<{
@@ -11,6 +17,8 @@ const props = defineProps<{
   errorMessage?: string
   previousProblemId?: string | null
   nextProblemId?: string | null
+  registerNavigation?: (attempt: NavigationAttempt) => () => void
+  registerContextTransition?: ((attempt: NavigationAttempt) => () => void) | undefined
 }>()
 
 const emit = defineEmits<{
@@ -23,19 +31,28 @@ const emit = defineEmits<{
 
 const questionAssets = computed(() => props.detail?.assets.filter(asset => asset.role === 'question') ?? [])
 const answerAssets = computed(() => props.detail?.assets.filter(asset => asset.role === 'answer') ?? [])
-const editing = ref(false)
-const editSubject = ref('')
-const editNote = ref('')
-const editTags = ref<string[]>([])
-const editTimeLimit = ref('')
-const showMoreActions = ref(false)
+const {
+  editing,
+  editSubject,
+  editNote,
+  editTags,
+  editTimeLimit,
+  dirty,
+  startEditing,
+  prepareSubmission,
+} = useProblemDetailEditor(() => props.detail)
+const detailMenuKey = 'problem-detail-actions'
+const {
+  activeMenuKey: activeDetailMenu,
+  closeMenu: closeDetailMenu,
+  toggleMenu: toggleDetailMenu,
+  handleMenuButtonKeydown: handleDetailMenuButtonKeydown,
+  handleMenuKeydown: handleDetailMenuKeydown,
+} = useMenuButton()
 const drawer = ref<HTMLElement>()
+const leaveBlockedMessage = ref('')
 let previouslyFocused: HTMLElement | null = null
-const dirty = computed(() => Boolean(props.detail && editing.value
-  && (editSubject.value !== props.detail.subject
-    || editNote.value !== props.detail.note
-    || JSON.stringify(editTags.value) !== JSON.stringify(props.detail.tags)
-    || editTimeLimit.value !== String(props.detail.timeLimitSeconds ?? ''))))
+let releaseDialogBoundary: (() => void) | undefined
 const timeLimitError = computed(() => {
   if (editTimeLimit.value === '') return ''
   const value = Number(editTimeLimit.value)
@@ -43,45 +60,61 @@ const timeLimitError = computed(() => {
     ? ''
     : '请输入 1 到 86400 之间的整数，留空表示不限时。'
 })
+const {
+  current: discardConfirmation,
+  confirm: confirmDiscard,
+  cancel: cancelDiscard,
+  attemptLeave,
+} = useUnsavedChangesGuard({
+  dirty: () => dirty.value,
+  busy: () => Boolean(props.saving),
+  onBusy: () => {
+    leaveBlockedMessage.value = '题目操作正在完成，请等待完成后再离开。'
+  },
+  ...(props.registerNavigation ? { registerNavigation: props.registerNavigation } : {}),
+  ...(props.registerContextTransition
+    ? { registerContextTransition: props.registerContextTransition }
+    : {}),
+  confirmation: {
+    eyebrow: '未保存修改 · 离开确认',
+    title: '放弃尚未保存的修改？',
+    description: '刚才修改的科目、笔记、标签和答题时限都不会保存；继续编辑可保留当前输入。',
+    confirmLabel: '放弃修改',
+    cancelLabel: '继续编辑',
+    tone: 'warning',
+  },
+})
 
-watch(() => props.detail, (detail) => {
-  editSubject.value = detail?.subject ?? ''
-  editNote.value = detail?.note ?? ''
-  editTags.value = [...(detail?.tags ?? [])]
-  editTimeLimit.value = String(detail?.timeLimitSeconds ?? '')
-  editing.value = false
-}, { immediate: true })
+watch(() => props.saving, (saving) => {
+  if (!saving) leaveBlockedMessage.value = ''
+})
+watch(() => props.detail?.id, (problemId, previousProblemId) => {
+  if (problemId !== previousProblemId) closeDetailMenu()
+})
 
-function confirmDiscard() {
-  return !dirty.value || window.confirm('当前修改还没有保存，确定要放弃吗？')
+async function requestClose() {
+  if (await attemptLeave()) emit('close')
 }
 
-function requestClose() {
-  if (confirmDiscard()) emit('close')
+async function requestStatus(status: 'active' | 'archived' | 'trashed') {
+  const problemId = props.detail?.id
+  if (problemId && await attemptLeave() && props.detail?.id === problemId) {
+    closeDetailMenu()
+    emit('status', problemId, status)
+  }
 }
 
-function requestStatus(status: 'active' | 'archived' | 'trashed') {
-  if (props.detail && confirmDiscard()) {
-    showMoreActions.value = false
-    emit('status', props.detail.id, status)
+async function requestNavigate(problemId: string) {
+  const sourceProblemId = props.detail?.id
+  if (sourceProblemId && await attemptLeave() && props.detail?.id === sourceProblemId) {
+    emit('navigate', problemId)
   }
 }
 
 function saveChanges() {
-  if (!props.detail || timeLimitError.value) return
-  emit('update', {
-    problemId: props.detail.id,
-    subject: editSubject.value,
-    note: editNote.value,
-    tags: editTags.value,
-    timeLimitSeconds: editTimeLimit.value === '' ? null : Number(editTimeLimit.value),
-  })
-}
-
-function focusableElements() {
-  return drawer.value
-    ? [...drawer.value.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), [tabindex="0"]')]
-    : []
+  if (timeLimitError.value) return
+  const input = prepareSubmission()
+  if (input) emit('update', input)
 }
 
 function handleKeydown(event: KeyboardEvent) {
@@ -90,28 +123,20 @@ function handleKeydown(event: KeyboardEvent) {
     requestClose()
     return
   }
-  if (event.key !== 'Tab' || !drawer.value) return
-  const focusable = focusableElements()
-  if (focusable.length === 0) return
-  const first = focusable[0]
-  const last = focusable[focusable.length - 1]
-  if (event.shiftKey && (document.activeElement === first || document.activeElement === drawer.value)) {
-    event.preventDefault()
-    last?.focus()
-  }
-  else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault()
-    first?.focus()
-  }
+  trapDialogFocus(event, drawer.value)
 }
 
 onMounted(async () => {
+  if (drawer.value) releaseDialogBoundary = acquireDialogDocumentBoundary(drawer.value)
   previouslyFocused = document.activeElement as HTMLElement | null
   await nextTick()
-  focusableElements()[0]?.focus()
+  getDialogFocusableElements(drawer.value)[0]?.focus()
   if (!drawer.value?.contains(document.activeElement)) drawer.value?.focus()
 })
-onBeforeUnmount(() => previouslyFocused?.focus())
+onBeforeUnmount(() => {
+  releaseDialogBoundary?.()
+  previouslyFocused?.focus()
+})
 </script>
 
 <template>
@@ -151,7 +176,7 @@ onBeforeUnmount(() => previouslyFocused?.focus())
             v-if="detail && !loading && !editing"
             type="button"
             class="edit-header-button"
-            @click="editing = true"
+            @click="startEditing"
           >
             <Pencil :size="14" />
             编辑题目
@@ -159,6 +184,21 @@ onBeforeUnmount(() => previouslyFocused?.focus())
         </div>
       </header>
 
+      <p
+        v-if="leaveBlockedMessage"
+        class="leave-blocked-message"
+        role="alert"
+      >
+        {{ leaveBlockedMessage }}
+      </p>
+
+      <p
+        v-if="errorMessage"
+        class="detail-error"
+        role="alert"
+      >
+        {{ errorMessage }}
+      </p>
       <div
         v-if="loading"
         class="detail-loading"
@@ -170,13 +210,6 @@ onBeforeUnmount(() => previouslyFocused?.focus())
         />
         正在解密题目图片…
       </div>
-      <p
-        v-else-if="errorMessage"
-        class="detail-error"
-        role="alert"
-      >
-        {{ errorMessage }}
-      </p>
       <template v-else-if="detail">
         <section
           v-if="editing"
@@ -287,7 +320,7 @@ onBeforeUnmount(() => previouslyFocused?.focus())
           <button
             type="button"
             :disabled="saving || !previousProblemId"
-            @click="previousProblemId && $emit('navigate', previousProblemId)"
+            @click="previousProblemId && requestNavigate(previousProblemId)"
           >
             <ArrowLeft :size="15" />
             上一题
@@ -295,7 +328,7 @@ onBeforeUnmount(() => previouslyFocused?.focus())
           <button
             type="button"
             :disabled="saving || !nextProblemId"
-            @click="nextProblemId && $emit('navigate', nextProblemId)"
+            @click="nextProblemId && requestNavigate(nextProblemId)"
           >
             下一题
             <ArrowRight :size="15" />
@@ -305,20 +338,28 @@ onBeforeUnmount(() => previouslyFocused?.focus())
           v-if="!editing"
           type="button"
           class="more-actions-button"
-          :aria-expanded="showMoreActions"
-          @click="showMoreActions = !showMoreActions"
+          aria-haspopup="menu"
+          aria-controls="problem-detail-actions-menu"
+          :aria-expanded="activeDetailMenu === detailMenuKey"
+          @click="toggleDetailMenu($event, detailMenuKey)"
+          @keydown="handleDetailMenuButtonKeydown($event, detailMenuKey)"
         >
           <MoreHorizontal :size="16" />
           更多题目操作
         </button>
         <div
-          v-if="showMoreActions && !editing"
+          v-if="activeDetailMenu === detailMenuKey && !editing"
+          id="problem-detail-actions-menu"
           class="status-actions"
+          role="menu"
           aria-label="更多题目操作"
+          @keydown="handleDetailMenuKeydown"
         >
           <button
             v-if="detail.status === 'active'"
             type="button"
+            role="menuitem"
+            tabindex="-1"
             :disabled="saving"
             @click="requestStatus('archived')"
           >
@@ -327,6 +368,8 @@ onBeforeUnmount(() => previouslyFocused?.focus())
           <button
             v-if="detail.status !== 'trashed'"
             type="button"
+            role="menuitem"
+            tabindex="-1"
             :disabled="saving"
             @click="requestStatus('trashed')"
           >
@@ -335,6 +378,8 @@ onBeforeUnmount(() => previouslyFocused?.focus())
           <button
             v-else
             type="button"
+            role="menuitem"
+            tabindex="-1"
             :disabled="saving"
             @click="requestStatus('active')"
           >
@@ -370,31 +415,38 @@ onBeforeUnmount(() => previouslyFocused?.focus())
       </footer>
     </aside>
   </div>
+  <ActionConfirmDialog
+    v-if="discardConfirmation"
+    :request="discardConfirmation"
+    @cancel="cancelDiscard"
+    @confirm="confirmDiscard"
+  />
 </template>
 
 <style scoped>
 .detail-layer { position: fixed; z-index: 60; inset: 0; display: flex; justify-content: flex-end; background: rgba(34,48,43,.22); backdrop-filter: blur(3px); animation: fade-in var(--motion-standard) var(--ease-standard); }
 .detail-drawer { overflow-y: auto; width: min(680px,92vw); height: 100%; padding: 30px 34px 38px; border-left: 1px solid rgba(34,48,43,.12); background: var(--paper); box-shadow: -22px 0 60px rgba(34,48,43,.16); animation: drawer-in var(--motion-page) var(--ease-standard); }
 .detail-header { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; padding-bottom: 22px; border-bottom: 1px solid var(--line); }
-.detail-header p { margin: 0 0 5px; color: var(--cinnabar); font-size: 11px; font-weight: 760; letter-spacing: .14em; }
+.detail-header p { margin: 0 0 5px; color: var(--cinnabar); font-size: 12px; font-weight: 760; letter-spacing: .14em; }
 .detail-header h2 { margin: 0; font-size: 34px; letter-spacing: -.04em; }
 .header-actions { display: flex; gap: 9px; align-items: center; }
-.icon-button { display: grid; width: 40px; height: 40px; place-items: center; color: var(--ink); border: 1px solid var(--line); border-radius: 50%; background: rgba(255,253,247,.7); cursor: pointer; }
-.edit-header-button, .more-actions-button { display: inline-flex; gap: 6px; align-items: center; min-height: 40px; padding: 0 13px; color: var(--green-deep); border: 1px solid var(--line); border-radius: 999px; background: rgba(255,253,247,.74); cursor: pointer; font-weight: 700; }
+.icon-button { display: grid; width: 44px; height: 44px; place-items: center; color: var(--ink); border: 1px solid var(--line); border-radius: 50%; background: rgba(255,253,247,.7); cursor: pointer; }
+.edit-header-button, .more-actions-button { display: inline-flex; gap: 6px; align-items: center; min-height: 44px; padding: 0 13px; color: var(--green-deep); border: 1px solid var(--line); border-radius: 999px; background: rgba(255,253,247,.74); cursor: pointer; font-weight: 700; }
 .detail-loading { display: flex; gap: 10px; align-items: center; justify-content: center; min-height: 280px; color: var(--ink-muted); }
 .detail-loading svg { animation: spin .9s linear infinite; }
 .detail-error { margin-top: 24px; padding: 14px; color: #7f3829; border: 1px solid rgba(185,88,63,.25); border-radius: 10px; background: rgba(185,88,63,.08); }
+.leave-blocked-message { margin: 18px 0 0; padding: 12px 14px; color: #7f3829; border: 1px solid rgba(185,88,63,.25); border-radius: 10px; background: rgba(185,88,63,.08); font-size: 13px; font-weight: 700; }
 .note-paper { margin: 24px 0 30px; padding: 18px 20px; border-radius: 3px 14px 14px 14px; background: var(--green-soft); }
-.note-paper span { color: #567064; font-size: 11px; font-weight: 760; letter-spacing: .1em; }
+.note-paper span { color: #567064; font-size: 12px; font-weight: 760; letter-spacing: .1em; }
 .note-paper p { margin: 8px 0 0; line-height: 1.65; }
 .time-limit-copy { display: inline-block; margin-top: 10px; color: var(--ink-muted); }
 .edit-paper { display: grid; gap: 14px; margin: 24px 0 30px; padding: 18px 20px; border-radius: 3px 14px 14px 14px; background: var(--green-soft); }
-.edit-paper label { display: grid; gap: 7px; color: #567064; font-size: 11px; font-weight: 760; letter-spacing: .08em; }
-.edit-tags-field { display: grid; gap: 7px; color: #567064; font-size: 11px; font-weight: 760; letter-spacing: .08em; }
+.edit-paper label { display: grid; gap: 7px; color: #567064; font-size: 12px; font-weight: 760; letter-spacing: .08em; }
+.edit-tags-field { display: grid; gap: 7px; color: #567064; font-size: 12px; font-weight: 760; letter-spacing: .08em; }
 .detail-tags { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 13px; }
-.detail-tags span { padding: 5px 9px; color: var(--green-deep); border: 1px solid rgba(33,51,45,.12); border-radius: 999px; background: rgba(255,253,247,.62); font-size: 11px; font-weight: 720; letter-spacing: 0; }
+.detail-tags span { padding: 5px 9px; color: var(--green-deep); border: 1px solid rgba(33,51,45,.12); border-radius: 999px; background: rgba(255,253,247,.62); font-size: 12px; font-weight: 720; letter-spacing: 0; }
 .field-error { color: #8d3f2f; font-size: 12px; letter-spacing: 0; }
-.edit-paper input, .edit-paper textarea { width: 100%; padding: 10px 12px; color: var(--ink); border: 1px solid rgba(33,51,45,.18); border-radius: 9px; outline: none; background: rgba(255,253,247,.8); font: inherit; font-size: 14px; font-weight: 500; letter-spacing: 0; resize: vertical; }
+.edit-paper input, .edit-paper textarea { width: 100%; min-height: 44px; padding: 10px 12px; color: var(--ink); border: 1px solid rgba(33,51,45,.18); border-radius: 9px; outline: none; background: rgba(255,253,247,.8); font: inherit; font-size: 14px; font-weight: 500; letter-spacing: 0; resize: vertical; }
 .asset-section { margin-top: 28px; }
 .asset-section h3 { display: flex; gap: 8px; align-items: center; margin: 0 0 12px; font-size: 14px; letter-spacing: .05em; }
 .answer-section { padding-top: 24px; border-top: 1px solid var(--line); }
@@ -403,11 +455,11 @@ onBeforeUnmount(() => previouslyFocused?.focus())
 .missing-copy { color: var(--ink-muted); font-size: 13px; }
 .detail-footer { position: sticky; bottom: -38px; margin: 34px -34px -38px; padding: 18px 34px 24px; border-top: 1px solid var(--line); background: rgba(246,241,231,.94); backdrop-filter: blur(12px); }
 .neighbor-actions { display: flex; justify-content: space-between; gap: 9px; margin-bottom: 10px; }
-.neighbor-actions button { display: inline-flex; gap: 6px; align-items: center; min-height: 34px; padding: 0 11px; color: var(--green-deep); border: 1px solid var(--line); border-radius: 999px; background: rgba(255,253,247,.74); cursor: pointer; }
+.neighbor-actions button { display: inline-flex; gap: 6px; align-items: center; min-height: 44px; padding: 0 11px; color: var(--green-deep); border: 1px solid var(--line); border-radius: 999px; background: rgba(255,253,247,.74); cursor: pointer; }
 .neighbor-actions button:disabled { opacity: .4; cursor: default; }
-.more-actions-button { min-height: 36px; margin-bottom: 10px; color: var(--ink-muted); }
+.more-actions-button { min-height: 44px; margin-bottom: 10px; color: var(--ink-muted); }
 .status-actions { display: flex; gap: 9px; margin-bottom: 12px; }
-.status-actions button { display: inline-flex; gap: 6px; align-items: center; min-height: 36px; padding: 0 12px; color: var(--ink-muted); border: 1px solid var(--line); border-radius: 999px; background: rgba(255,253,247,.74); cursor: pointer; }
+.status-actions button { display: inline-flex; gap: 6px; align-items: center; min-height: 44px; padding: 0 12px; color: var(--ink-muted); border: 1px solid var(--line); border-radius: 999px; background: rgba(255,253,247,.74); cursor: pointer; }
 .status-actions button:disabled, .train-button:disabled { cursor: wait; opacity: .5; }
 .train-button { display: flex; gap: 9px; align-items: center; justify-content: center; width: 100%; min-height: 48px; color: var(--paper); border: 0; border-radius: 999px; background: var(--green-deep); font-weight: 740; cursor: pointer; }
 @keyframes fade-in { from { opacity: 0; } }

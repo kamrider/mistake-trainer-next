@@ -97,3 +97,18 @@ fn source_fingerprint_changes_with_contents_without_modifying_the_tree() {
     let second = legacy_tree_fingerprint(directory.path()).unwrap();
     assert_ne!(first, second);
 }
+
+#[test]
+fn fingerprint_rejects_excessive_directory_depth() {
+    let directory = tempdir().unwrap();
+    let mut nested = directory.path().to_path_buf();
+    for _ in 0..33 {
+        nested.push("d");
+        fs::create_dir(&nested).unwrap();
+    }
+    fs::write(nested.join("asset.bin"), b"content").unwrap();
+
+    let error = legacy_tree_fingerprint(directory.path())
+        .expect_err("directory nesting beyond the scan budget must fail");
+    assert!(error.to_string().contains("too deeply nested"));
+}

@@ -70,7 +70,7 @@ const activeNavigationIndex = computed(() =>
         aria-label="主导航"
         :style="{
           '--active-index': activeNavigationIndex,
-          '--active-y': `${activeNavigationIndex * 48}px`,
+          '--active-y': `${activeNavigationIndex * 49}px`,
           '--active-x': `${activeNavigationIndex * 100}%`,
         }"
       >
@@ -83,6 +83,7 @@ const activeNavigationIndex = computed(() =>
           :key="item.id"
           type="button"
           :class="['nav-item', { active: activePage === item.id }]"
+          :aria-label="item.label"
           :aria-current="activePage === item.id ? 'page' : undefined"
           @click="$emit('navigate', item.id)"
         >
@@ -134,10 +135,10 @@ const activeNavigationIndex = computed(() =>
 .brand-mark { display: grid; width: 34px; height: 34px; place-items: center; color: var(--white); border-radius: 9px 9px 9px 3px; background: var(--cinnabar); font-family: Georgia, serif; font-weight: 700; }
 .brand strong, .brand small { display: block; }
 .brand strong { font-family: Georgia, serif; font-size: 17px; letter-spacing: .02em; }
-.brand small { margin-top: 1px; color: var(--ink-muted); font-size: 10px; letter-spacing: .13em; text-transform: uppercase; }
+.brand small { margin-top: 1px; color: var(--ink-muted); font-size: 12px; letter-spacing: .13em; text-transform: uppercase; }
 nav { position: relative; display: grid; gap: 5px; isolation: isolate; }
-.nav-indicator { position: absolute; z-index: -1; top: 0; left: 0; width: 100%; height: 43px; border: 1px solid rgba(33,51,45,.08); border-radius: 11px; background: var(--green-soft); box-shadow: 0 8px 22px rgba(33,51,45,.06); pointer-events: none; transform: translate3d(0,var(--active-y),0); transition: transform var(--motion-page) var(--ease-standard), border-radius var(--motion-standard) var(--ease-standard); will-change: transform; }
-.nav-item { position: relative; z-index: 1; display: flex; gap: 12px; align-items: center; width: 100%; min-height: 43px; padding: 0 13px; color: var(--ink-muted); border: 0; border-radius: 11px; background: transparent; cursor: pointer; text-align: left; transition: color var(--motion-standard) var(--ease-standard), background var(--motion-standard) var(--ease-standard), transform var(--motion-feedback) var(--ease-standard); }
+.nav-indicator { position: absolute; z-index: -1; top: 0; left: 0; width: 100%; height: 44px; border: 1px solid rgba(33,51,45,.08); border-radius: 11px; background: var(--green-soft); box-shadow: 0 8px 22px rgba(33,51,45,.06); pointer-events: none; transform: translate3d(0,var(--active-y),0); transition: transform var(--motion-page) var(--ease-standard), border-radius var(--motion-standard) var(--ease-standard); will-change: transform; }
+.nav-item { position: relative; z-index: 1; display: flex; gap: 12px; align-items: center; width: 100%; min-height: 44px; padding: 0 13px; color: var(--ink-muted); border: 0; border-radius: 11px; background: transparent; cursor: pointer; text-align: left; transition: color var(--motion-standard) var(--ease-standard), background var(--motion-standard) var(--ease-standard), transform var(--motion-feedback) var(--ease-standard); }
 .nav-item:hover { color: var(--ink); background: rgba(232,221,199,.52); }
 .nav-item:active { transform: scale(.985); }
 .nav-item.active { color: var(--green-deep); background: transparent; font-weight: 700; }

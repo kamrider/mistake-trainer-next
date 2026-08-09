@@ -35,6 +35,10 @@ Assert-Contract ($languages -contains 'SimpChinese') 'the installer must include
 Assert-Contract ($languages -contains 'English') 'the installer must include English.'
 Assert-Contract ($configuration.bundle.windows.nsis.displayLanguageSelector -eq $false) 'installer language must follow the Windows locale without an extra prompt.'
 Assert-Contract ($configuration.bundle.windows.nsis.compression -eq 'lzma') 'the offline installer must use LZMA compression.'
+Assert-Contract ($configuration.bundle.createUpdaterArtifacts -eq $false) 'ordinary builds must not create updater artifacts.'
+$configurationText = Get-Content -LiteralPath $configurationPath -Raw
+Assert-Contract ($configurationText -notmatch '"pubkey"') 'ordinary config must not contain an updater public key.'
+Assert-Contract ($configurationText -notmatch '"endpoints"') 'ordinary config must not contain updater endpoints.'
 
 if (-not $ConfigOnly) {
     $cargoManifest = Get-Content -LiteralPath (Join-Path $repositoryRoot 'src-tauri\Cargo.toml') -Raw

@@ -219,11 +219,11 @@ onBeforeUnmount(() => {
 <style scoped>
 .focus-room { display: grid; min-height: 100vh; padding: clamp(24px, 5vw, 64px); place-content: center; justify-items: center; background: radial-gradient(circle at 50% 30%, rgba(255,253,247,.96), transparent 36rem), linear-gradient(145deg, rgba(232,221,199,.58), rgba(246,241,231,.92)); }
 .focus-copy { width: min(660px, 100%); text-align: center; }
-.focus-kicker { display: inline-flex; gap: 7px; align-items: center; color: var(--cinnabar); font-size: 11px; font-weight: 820; letter-spacing: .13em; }
+.focus-kicker { display: inline-flex; gap: 7px; align-items: center; color: var(--cinnabar); font-size: 12px; font-weight: 820; letter-spacing: .13em; }
 h1 { margin: 10px 0 8px; color: var(--green-deep); font-family: var(--font-serif); font-size: clamp(30px, 5vw, 48px); letter-spacing: -.04em; }
 .focus-copy>p { margin: 0; color: var(--ink-muted); font-size: 13px; }
 .focus-status { display: flex; gap: 12px; align-items: center; justify-content: center; margin-top: 18px; }
-.focus-status strong, .focus-status span { min-width: 74px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255,253,247,.76); font-size: 11px; }
+.focus-status strong, .focus-status span { min-width: 74px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255,253,247,.76); font-size: 12px; }
 .focus-status strong { color: var(--paper); border-color: var(--green-deep); background: var(--green-deep); }
 .wrong-hint { min-height: 20px; margin-top: 10px !important; opacity: .55; transition: opacity var(--motion-feedback), transform var(--motion-feedback); }
 .wrong-hint.visible { color: var(--cinnabar-dark); opacity: 1; transform: translateY(-1px); }
@@ -234,14 +234,14 @@ h1 { margin: 10px 0 8px; color: var(--green-deep); font-family: var(--font-serif
 .number-tile.wrong { border-color: var(--cinnabar); background: #fbebe4; animation: tile-corrective var(--motion-standard) var(--ease-standard); }
 .number-tile.completed { pointer-events: none; opacity: .16; transform: scale(.72) rotateX(12deg); }
 .number-tile.completed span { opacity: 0; }
-footer { display: flex; width: min(660px, 100%); gap: 18px; align-items: center; justify-content: space-between; color: var(--ink-muted); font-size: 11px; }
+footer { display: flex; width: min(660px, 100%); gap: 18px; align-items: center; justify-content: space-between; color: var(--ink-muted); font-size: 12px; }
 .focus-actions { display: flex; flex: 0 0 auto; gap: 8px; align-items: center; }
 .exit-focus { min-height: 44px; padding: 0 13px; color: var(--ink-muted); border: 0; border-radius: 999px; background: transparent; cursor: pointer; }
 .skip-focus { display: inline-flex; flex: 0 0 auto; min-height: 44px; gap: 7px; align-items: center; padding: 0 16px; color: var(--green-deep); border: 1px solid rgba(33,51,45,.25); border-radius: 999px; background: rgba(255,253,247,.78); cursor: pointer; font-weight: 720; transition: transform var(--motion-feedback); }
 .skip-focus:hover:not(:disabled) { background: var(--paper-raised); transform: translateY(-1px); }
 .skip-focus:disabled { cursor: wait; opacity: .55; }
 .completion-seal { position: absolute; inset: 50% auto auto 50%; display: grid; width: 150px; height: 150px; place-content: center; color: var(--paper); border-radius: 50%; background: var(--cinnabar); box-shadow: 0 18px 50px rgba(185,88,63,.25); text-align: center; transform: translate(-50%,-50%) rotate(-4deg); animation: seal-in 420ms var(--ease-standard) both; }
-.completion-seal strong { font-family: var(--font-serif); font-size: 34px; letter-spacing: .12em; }.completion-seal span { margin-top: 6px; font-size: 10px; letter-spacing: .08em; }
+.completion-seal strong { font-family: var(--font-serif); font-size: 34px; letter-spacing: .12em; }.completion-seal span { margin-top: 6px; font-size: 12px; letter-spacing: .08em; }
 @keyframes tile-corrective { 35% { transform: translateX(-4px); } 70% { transform: translateX(4px); } }
 @keyframes seal-in { from { opacity: 0; transform: translate(-50%,-50%) scale(.78) rotate(-9deg); } to { opacity: 1; transform: translate(-50%,-50%) scale(1) rotate(-4deg); } }
 @media (max-width: 560px) { .focus-room { padding: 24px 16px; } .schulte-board { width: 100%; gap: 7px; } footer { align-items: stretch; flex-direction: column; text-align: center; } .focus-actions { justify-content: center; }.skip-focus { justify-content: center; } }

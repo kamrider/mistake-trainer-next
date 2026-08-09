@@ -106,12 +106,12 @@ function handleKeydown(event: KeyboardEvent) {
 <style scoped>
 .tag-editor { display: grid; gap: 8px; }
 .tag-editor__chips { display: flex; flex-wrap: wrap; gap: 7px; min-height: 0; }
-.tag-chip { display: inline-flex; gap: 5px; align-items: center; max-width: 100%; min-height: 28px; padding: 3px 6px 3px 10px; overflow-wrap: anywhere; color: var(--green-deep); border: 1px solid rgba(33,51,45,.14); border-radius: 999px; background: rgba(255,253,247,.82); font-size: 12px; font-weight: 720; }
-.tag-chip button { display: grid; width: 20px; height: 20px; padding: 0; place-items: center; color: inherit; border: 0; border-radius: 50%; background: rgba(33,51,45,.07); cursor: pointer; transition: transform var(--motion-feedback) var(--ease-standard), background var(--motion-feedback) var(--ease-standard); }
+.tag-chip { display: inline-flex; gap: 5px; align-items: center; max-width: 100%; min-height: 44px; padding: 0 2px 0 12px; overflow-wrap: anywhere; color: var(--green-deep); border: 1px solid rgba(33,51,45,.14); border-radius: 999px; background: rgba(255,253,247,.82); font-size: 12px; font-weight: 720; }
+.tag-chip button { display: grid; width: 44px; height: 44px; padding: 0; place-items: center; color: inherit; border: 0; border-radius: 50%; background: rgba(33,51,45,.07); cursor: pointer; transition: transform var(--motion-feedback) var(--ease-standard), background var(--motion-feedback) var(--ease-standard); }
 .tag-chip button:hover:not(:disabled) { background: rgba(185,88,63,.16); transform: scale(1.08); }
-.tag-editor > input { width: 100%; padding: 10px 12px; color: var(--ink); border: 1px solid rgba(33,51,45,.18); border-radius: 9px; outline: none; background: rgba(255,253,247,.8); font: inherit; font-size: 14px; font-weight: 500; }
+.tag-editor > input { width: 100%; min-height: 44px; padding: 10px 12px; color: var(--ink); border: 1px solid rgba(33,51,45,.18); border-radius: 9px; outline: none; background: rgba(255,253,247,.8); font: inherit; font-size: 14px; font-weight: 500; }
 .tag-editor > input:focus { border-color: var(--green-deep); box-shadow: 0 0 0 3px rgba(33,51,45,.09); }
-.tag-editor small { color: var(--ink-muted); font-size: 11px; font-weight: 500; letter-spacing: 0; }
+.tag-editor small { color: var(--ink-muted); font-size: 12px; font-weight: 500; letter-spacing: 0; }
 .tag-editor__error { margin: 0; color: #8d3f2f; font-size: 12px; font-weight: 600; letter-spacing: 0; }
 .tag-chip-enter-active, .tag-chip-leave-active { transition: opacity var(--motion-standard) var(--ease-standard), transform var(--motion-standard) var(--ease-standard); }
 .tag-chip-enter-from, .tag-chip-leave-to { opacity: 0; transform: translateY(4px) scale(.92); }

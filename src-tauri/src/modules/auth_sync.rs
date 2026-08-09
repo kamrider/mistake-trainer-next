@@ -1,8 +1,4 @@
-use std::{
-    fmt,
-    sync::{Arc, RwLock},
-    time::Duration,
-};
+use std::{fmt, sync::Arc, time::Duration};
 
 use serde::Serialize;
 use specta::Type;
@@ -10,33 +6,17 @@ use specta::Type;
 use crate::infrastructure::{
     cloud_backend::{self, CloudBackendKind},
     runtime::{KeyringSecretStore, SecretStore},
-    supabase::{
-        AuthReply, AuthTransport, CloudError, SupabaseClient, SupabaseConfig, redact_email,
-    },
+    supabase::{AuthReply, AuthTransport, CloudError, SupabaseClient, SupabaseConfig},
 };
+
+#[path = "auth_session_state.rs"]
+mod session_state;
+
+use session_state::CloudSessionState;
 
 const CLOUD_REFRESH_TOKEN: &str = "cloud-refresh-token";
 const CLOUD_USER_ID: &str = "cloud-user-id";
 pub(crate) const CLOUD_BACKEND_KIND: &str = "cloud-backend-kind";
-
-struct ActiveCloudSession {
-    remote_user_id: String,
-    email: String,
-    access_token: String,
-    expires_at_utc_ms: i64,
-}
-
-impl fmt::Debug for ActiveCloudSession {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ActiveCloudSession")
-            .field("remote_user_id", &"<redacted>")
-            .field("email", &redact_email(&self.email))
-            .field("access_token", &"<redacted>")
-            .field("expires_at_utc_ms", &self.expires_at_utc_ms)
-            .finish()
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Type)]
 #[serde(rename_all = "snake_case")]
@@ -57,9 +37,7 @@ pub struct AuthStatus {
 
 #[derive(Default)]
 pub struct AuthSyncManager {
-    session: RwLock<Option<ActiveCloudSession>>,
-    verification_email: RwLock<Option<String>>,
-    offline: RwLock<bool>,
+    state: CloudSessionState,
 }
 
 /// Process-scoped cloud transport state.  The publishable key is compiled into
@@ -107,60 +85,13 @@ impl CloudAuthRuntime {
 
 impl fmt::Debug for AuthSyncManager {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("AuthSyncManager")
-            .field(
-                "session",
-                &self
-                    .session
-                    .read()
-                    .unwrap_or_else(|value| value.into_inner()),
-            )
-            .field(
-                "verification_email",
-                &self
-                    .verification_email
-                    .read()
-                    .unwrap_or_else(|value| value.into_inner())
-                    .as_deref()
-                    .map(redact_email),
-            )
-            .finish()
+        self.state.fmt_manager(formatter)
     }
 }
 
 impl AuthSyncManager {
     pub fn status(&self) -> AuthStatus {
-        if let Some(session) = self
-            .session
-            .read()
-            .unwrap_or_else(|value| value.into_inner())
-            .as_ref()
-        {
-            return AuthStatus {
-                kind: AuthStatusKind::Connected,
-                email_hint: Some(redact_email(&session.email)),
-            };
-        }
-        let verification = self
-            .verification_email
-            .read()
-            .unwrap_or_else(|value| value.into_inner())
-            .clone();
-        AuthStatus {
-            kind: if *self
-                .offline
-                .read()
-                .unwrap_or_else(|value| value.into_inner())
-            {
-                AuthStatusKind::Offline
-            } else if verification.is_some() {
-                AuthStatusKind::VerificationRequired
-            } else {
-                AuthStatusKind::SignedOut
-            },
-            email_hint: verification.map(|email| redact_email(&email)),
-        }
+        self.state.status()
     }
 
     pub fn accept_verified_session(
@@ -187,24 +118,9 @@ impl AuthSyncManager {
             return Err(CloudError::SecretStore);
         }
 
-        *self
-            .session
-            .write()
-            .unwrap_or_else(|value| value.into_inner()) = Some(ActiveCloudSession {
-            remote_user_id,
-            email,
-            access_token,
-            expires_at_utc_ms,
-        });
-        *self
-            .verification_email
-            .write()
-            .unwrap_or_else(|value| value.into_inner()) = None;
-        *self
-            .offline
-            .write()
-            .unwrap_or_else(|value| value.into_inner()) = false;
-        Ok(self.status())
+        Ok(self
+            .state
+            .connect(remote_user_id, email, access_token, expires_at_utc_ms))
     }
 
     pub async fn sign_up<T: AuthTransport>(
@@ -242,26 +158,12 @@ impl AuthSyncManager {
         };
         match transport.refresh(&refresh_token).await {
             Ok(reply) => self.accept_verified_session(secrets, reply),
-            Err(error) if error.retryable() => {
-                *self
-                    .offline
-                    .write()
-                    .unwrap_or_else(|value| value.into_inner()) = true;
-                Ok(self.status())
-            }
+            Err(error) if error.retryable() => Ok(self.state.mark_offline()),
             Err(CloudError::AuthenticationRejected) => {
                 secrets
                     .set(CLOUD_REFRESH_TOKEN, "")
                     .map_err(|_| CloudError::SecretStore)?;
-                *self
-                    .session
-                    .write()
-                    .unwrap_or_else(|value| value.into_inner()) = None;
-                *self
-                    .offline
-                    .write()
-                    .unwrap_or_else(|value| value.into_inner()) = false;
-                Ok(self.status())
+                Ok(self.state.reject_authentication())
             }
             Err(error) => Err(error),
         }
@@ -272,28 +174,11 @@ impl AuthSyncManager {
         transport: &T,
         secrets: &dyn SecretStore,
     ) -> Result<AuthStatus, CloudError> {
-        let access_token = self
-            .session
-            .read()
-            .unwrap_or_else(|value| value.into_inner())
-            .as_ref()
-            .map(|session| session.access_token.clone());
+        let access_token = self.state.access_token();
         secrets
             .set(CLOUD_REFRESH_TOKEN, "")
             .map_err(|_| CloudError::SecretStore)?;
-        *self
-            .session
-            .write()
-            .unwrap_or_else(|value| value.into_inner()) = None;
-        *self
-            .verification_email
-            .write()
-            .unwrap_or_else(|value| value.into_inner()) = None;
-        *self
-            .offline
-            .write()
-            .unwrap_or_else(|value| value.into_inner()) = false;
-        let status = self.status();
+        let status = self.state.disconnect();
         if let Some(access_token) = access_token {
             // Remote revocation is bounded and best-effort. Local credentials are
             // already gone, so a slow or offline endpoint cannot block sign-out.
@@ -304,25 +189,11 @@ impl AuthSyncManager {
     }
 
     pub fn mark_verification_required(&self, email: &str) -> AuthStatus {
-        *self
-            .verification_email
-            .write()
-            .unwrap_or_else(|value| value.into_inner()) = Some(email.to_owned());
-        self.status()
+        self.state.mark_verification_required(email)
     }
 
     pub(crate) fn session_snapshot(&self) -> Option<(String, String, i64)> {
-        self.session
-            .read()
-            .unwrap_or_else(|value| value.into_inner())
-            .as_ref()
-            .map(|session| {
-                (
-                    session.remote_user_id.clone(),
-                    session.access_token.clone(),
-                    session.expires_at_utc_ms,
-                )
-            })
+        self.state.session_snapshot()
     }
 }
 

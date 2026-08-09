@@ -18,6 +18,7 @@ pub fn run() -> tauri::Result<()> {
     use tauri::Manager as _;
 
     let specta = bindings::builder();
+    let context = tauri::generate_context!();
 
     #[cfg(debug_assertions)]
     bindings::export_typescript_bindings(
@@ -34,11 +35,19 @@ pub fn run() -> tauri::Result<()> {
             let _ = window.set_focus();
         }
     }));
+    #[cfg(windows)]
+    let builder =
+        if commands::updates::updater_config_is_ready(context.config().plugins.0.get("updater")) {
+            builder.plugin(tauri_plugin_updater::Builder::new().build())
+        } else {
+            builder
+        };
 
     builder
         .invoke_handler(specta.invoke_handler())
         .setup(move |app| {
             let control_root = app.path().app_data_dir()?;
+            let resource_root = app.path().resource_dir()?;
             let private_recognition_temp = control_root.join("recognition-private-temp");
             if private_recognition_temp.exists()
                 && std::fs::remove_dir_all(&private_recognition_temp).is_err()
@@ -93,6 +102,7 @@ pub fn run() -> tauri::Result<()> {
             let recognition_manager =
                 infrastructure::capture_recognition_worker::CaptureRecognitionManager::for_product(
                     &control_root,
+                    &resource_root,
                     &private_recognition_temp,
                 );
             app.manage(commands::storage::ApplicationControlRoot(control_root));
@@ -127,7 +137,7 @@ pub fn run() -> tauri::Result<()> {
                 let _ = std::fs::remove_dir_all(private_temp_root);
             }
         })
-        .run(tauri::generate_context!())
+        .run(context)
 }
 
 fn current_utc_millis() -> i64 {

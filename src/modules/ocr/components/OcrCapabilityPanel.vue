@@ -1,5 +1,27 @@
 <script setup lang="ts">
-import { CheckCircle2, Layers3, LockKeyhole, ScanText } from '@lucide/vue'
+import { CheckCircle2, Download, Layers3, LockKeyhole, ScanText, Trash2 } from '@lucide/vue'
+import { computed } from 'vue'
+import type { OcrCapabilityStatus, OcrComponentId } from '../../../shared/api/bindings'
+
+const props = defineProps<{
+  status?: OcrCapabilityStatus | undefined
+  busy?: boolean | undefined
+  message?: string | undefined
+}>()
+
+const emit = defineEmits<{
+  install: [componentId: OcrComponentId]
+  remove: [componentId: OcrComponentId]
+}>()
+
+const small = computed(() =>
+  props.status?.components.find(component => component.id === 'ppocrv6_small'))
+const enhanced = computed(() =>
+  props.status?.automaticRecognitionEnabled === true && small.value?.state === 'installed')
+
+function megabytes(bytes: number | null) {
+  return `${Math.max(1, Math.round((bytes ?? 0) / 1024 / 1024))} MB`
+}
 </script>
 
 <template>
@@ -15,7 +37,7 @@ import { CheckCircle2, Layers3, LockKeyhole, ScanText } from '@lucide/vue'
         <h2 id="intelligence-title">
           智能功能模式
         </h2>
-        <span>当前切图与后续自动识题是两条独立能力，不再让模型档位和现有功能混在一起。</span>
+        <span>切题、答案匹配和内容理解是三层独立能力；当前只开放可复核、可撤销的本地切题。</span>
       </div>
     </header>
 
@@ -27,17 +49,56 @@ import { CheckCircle2, Layers3, LockKeyhole, ScanText } from '@lucide/vue'
             <p>模式一</p>
             <h3>智能切图</h3>
           </div>
-          <strong class="mode-badge active">已开放</strong>
+          <strong class="mode-badge active">{{ enhanced ? '题号增强已启用' : '基础版已开放' }}</strong>
         </div>
         <p class="mode-summary">
-          用本地传统视觉查找分栏和留白，把一页多题拆成多张素材图片。
+          {{ enhanced
+            ? '优先用本地 small 模型定位连续题号；识别文字不保存，低置信度页面保留整页。'
+            : '先用本地版面分析给出预切建议；复杂试卷建议启用题号定位增强。' }}
         </p>
         <ul>
-          <li>不读取文字，不使用 OCR</li>
-          <li>不下载 small / medium 模型</li>
+          <li>{{ enhanced ? '只读取题号锚点，不保存 OCR 正文' : '基础预切无需模型，也不会联网' }}</li>
+          <li>small 是切题主力；medium 更大但不代表切题更准</li>
           <li>切图确认后只进入素材牌库</li>
           <li>原图、现有题卡和加密存储保持不变</li>
         </ul>
+        <div
+          v-if="small"
+          class="enhancement-control"
+          :aria-busy="busy"
+        >
+          <span>
+            <strong>{{ small.displayName }}</strong>
+            <small>{{ small.statusDetail }}</small>
+            <small>{{ megabytes(small.downloadBytes) }} 下载 · {{ small.sourceLabel }} · {{ small.licenseLabel }}</small>
+          </span>
+          <button
+            v-if="small.state !== 'installed'"
+            type="button"
+            :disabled="busy || !small.installAllowed"
+            @click="emit('install', small.id)"
+          >
+            <Download :size="15" />
+            {{ busy ? '处理中…' : small.state === 'corrupt' ? '重新安装' : '启用更准切题' }}
+          </button>
+          <button
+            v-else
+            type="button"
+            class="remove-action"
+            :disabled="busy"
+            @click="emit('remove', small.id)"
+          >
+            <Trash2 :size="15" />移除模型
+          </button>
+        </div>
+        <p
+          v-if="message"
+          class="component-message"
+          role="status"
+          aria-live="polite"
+        >
+          {{ message }}
+        </p>
       </article>
 
       <article
@@ -66,7 +127,7 @@ import { CheckCircle2, Layers3, LockKeyhole, ScanText } from '@lucide/vue'
 
     <p class="privacy-note">
       <LockKeyhole :size="16" />
-      两种模式都以本机隐私和人工可撤销为前提；当前只有智能切图可以执行。
+      所有切题都在本机完成并先进入复核；没有任何结果会绕过确认直接创建正式题目。
     </p>
   </section>
 </template>
@@ -112,7 +173,7 @@ header p,
 .mode-heading p {
   margin: 0 0 5px;
   color: var(--cinnabar);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 820;
   letter-spacing: .13em;
 }
@@ -192,7 +253,7 @@ article.future-mode {
   color: var(--ink-muted);
   border: 1px solid rgba(33, 51, 45, .16);
   border-radius: 999px;
-  font-size: 9px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
@@ -215,7 +276,68 @@ ul {
   margin: 0;
   padding-left: 18px;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.enhancement-control {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 14px;
+  padding-top: 13px;
+  border-top: 1px solid rgba(69, 99, 84, .18);
+}
+
+.enhancement-control span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.enhancement-control strong {
+  color: var(--green-deep);
+  font-size: 12px;
+}
+
+.enhancement-control small {
+  color: var(--ink-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.enhancement-control button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 13px;
+  color: #fff;
+  border: 0;
+  border-radius: 999px;
+  background: var(--green-deep);
+  font-size: 12px;
+  font-weight: 760;
+  cursor: pointer;
+}
+
+.enhancement-control button.remove-action {
+  color: var(--ink-muted);
+  border: 1px solid rgba(33, 51, 45, .16);
+  background: transparent;
+}
+
+.enhancement-control button:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+.component-message {
+  margin: 10px 0 0;
+  color: var(--green-deep);
+  font-size: 12px;
   line-height: 1.5;
 }
 
@@ -227,7 +349,7 @@ ul {
   color: var(--ink-muted);
   border-radius: 11px;
   background: rgba(33, 51, 45, .055);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 @media (max-width: 760px) {

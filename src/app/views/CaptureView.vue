@@ -1,31 +1,50 @@
 <script setup lang="ts">
 import { isTauri } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { computed, inject, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { routeLocationKey, routerKey } from 'vue-router'
+import ActionConfirmDialog from '../components/ActionConfirmDialog.vue'
+import { useActionConfirmation } from '../composables/useActionConfirmation'
+import { useUnsavedChangesGuard } from '../composables/useUnsavedChangesGuard'
 import CaptureWorkspace from '../../modules/capture/components/CaptureWorkspace.vue'
 import CaptureCropEditor from '../../modules/capture/components/CaptureCropEditor.vue'
+import {
+  useCaptureDraftSaveQueue,
+  type CaptureDraftSaveOutcome,
+  type CaptureDraftSaveQueueState,
+  type CaptureDraftSaveUpdate,
+} from '../../modules/capture/composables/useCaptureDraftSaveQueue'
+import { useCaptureBatchLifecycle } from '../../modules/capture/composables/useCaptureBatchLifecycle'
+import { useCaptureFileImport } from '../../modules/capture/composables/useCaptureFileImport'
+import { useCaptureImportWorkflow } from '../../modules/capture/composables/useCaptureImportWorkflow'
+import {
+  useCaptureItemEditing,
+  type CaptureCropEditorState,
+} from '../../modules/capture/composables/useCaptureItemEditing'
+import { useCaptureLanSession } from '../../modules/capture/composables/useCaptureLanSession'
+import { useCaptureOrganizerActions } from '../../modules/capture/composables/useCaptureOrganizerActions'
+import { useCapturePreviewCache } from '../../modules/capture/composables/useCapturePreviewCache'
+import { useCaptureRefreshScheduler } from '../../modules/capture/composables/useCaptureRefreshScheduler'
+import { useCaptureRecognitionWorkflow } from '../../modules/ocr/composables/useCaptureRecognitionWorkflow'
+import {
+  createCaptureDevelopmentCropEditor,
+  createCaptureDevelopmentPreview,
+} from './capture-development-preview'
 import {
   commands,
   type CaptureBatchDetail,
   type CaptureBatchSummary,
   type CaptureDraftSummary,
-  type CaptureLanAddress,
-  type CaptureLanPreflight,
-  type CaptureLanSession,
-  type CaptureLayoutMode,
   type CaptureCropRecipe,
-  type CaptureRecognitionJob,
-  type CaptureRecognitionOperationSummary,
-  type CaptureRecognitionRegionProposal,
-  type OcrCapabilityStatus,
-  type OcrRecognitionFeatureStatus,
   type SubjectPreferences,
 } from '../../shared/api/bindings'
 import { normalizeAppResult } from '../../shared/api/normalize-result'
+import { createModalReturnFocusController } from '../modal-return-focus'
 import { syncControllerKey } from '../sync-controller'
+import { workspaceTransitionGuardKey } from '../workspace-transition-guard'
 
 const syncController = inject(syncControllerKey, undefined)
+const workspaceTransitionGuard = inject(workspaceTransitionGuardKey, undefined)
 const appRouter = inject(routerKey, undefined)
 const currentRoute = inject(routeLocationKey, undefined)
 const batches = ref<CaptureBatchSummary[]>([])
@@ -33,30 +52,17 @@ const detail = ref<CaptureBatchDetail>()
 const busy = ref(false)
 const errorMessage = ref('')
 const saveState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
+const draftSaveQueueState = ref<CaptureDraftSaveQueueState>({
+  pending: false,
+  running: false,
+  retryRequired: false,
+})
+const draftSaveUnsaved = computed(() =>
+  draftSaveQueueState.value.pending
+  || draftSaveQueueState.value.running
+  || draftSaveQueueState.value.retryRequired)
+const draftSaveRetryAvailable = computed(() => draftSaveQueueState.value.retryRequired)
 const commitMessage = ref('')
-const previews = reactive<Record<string, string>>({})
-const cropEditor = ref<{ itemId: string, itemName: string, dataUrl: string }>()
-const recognitionCropEditor = ref<{
-  suggestionId: string
-  itemName: string
-  dataUrl: string
-  regions: CaptureRecognitionRegionProposal[]
-}>()
-const lanAddresses = ref<CaptureLanAddress[]>([])
-const lanPreflight = ref<CaptureLanPreflight>()
-const lanPreflightBusy = ref(false)
-const lanSession = ref<CaptureLanSession>()
-const recognitionCapability = ref<OcrCapabilityStatus>()
-const recognitionJob = ref<CaptureRecognitionJob>()
-const recognitionOperation = ref<CaptureRecognitionOperationSummary>()
-const recognitionNotice = ref('')
-const recognitionBusy = ref(false)
-const recognitionFeature = computed<OcrRecognitionFeatureStatus>(() =>
-  recognitionCapability.value?.recognitionFeature ?? {
-    state: 'ready',
-    requiredComponentId: 'opencv_preprocess',
-    detail: '智能切图使用内置本地视觉分析，不读取文字、不需要下载模型；确认后结果只进入素材牌库。',
-  })
 const subjectPreferences = ref<SubjectPreferences>({
   enabledSubjects: ['语文', '数学', '英语', '政治', '历史', '地理', '物理', '化学', '生物'],
   customSubjects: [],
@@ -66,30 +72,398 @@ const subjectOptions = computed(() => [...new Set([
   ...subjectPreferences.value.enabledSubjects,
   ...subjectPreferences.value.customSubjects,
 ])])
-const previewOrder: string[] = []
-const previewRequests = new Set<string>()
+let requestedDetailBatchId = ''
+
+const recognitionWorkflow = useCaptureRecognitionWorkflow({
+  desktopAvailable: isTauri(),
+  requestedBatchId: () => requestedDetailBatchId,
+  activeDetail: () => detail.value,
+  onDetailChange: value => { detail.value = value },
+  onError: showError,
+  operations: {
+    capability: async () => {
+      const invocation = await commands.ocrCapabilityStatus()
+      if (invocation.status !== 'ok') throw new Error('OCR capability transport failed')
+      return normalizeAppResult(invocation.data)
+    },
+    status: async batchId =>
+      normalizeAppResult(await commands.captureRecognitionStatus(batchId)),
+    lastOperation: async batchId =>
+      normalizeAppResult(await commands.captureRecognitionLastOperation(batchId)),
+    start: async input =>
+      normalizeAppResult(await commands.captureRecognitionStart(input)),
+    cancel: async (jobId) => {
+      const invocation = await commands.captureRecognitionCancel(jobId)
+      if (invocation.status !== 'ok') throw new Error('Recognition cancel transport failed')
+      return normalizeAppResult(invocation.data)
+    },
+    review: async input =>
+      normalizeAppResult(await commands.captureRecognitionReview(input)),
+    preview: async (batchId, itemId) =>
+      normalizeAppResult(await commands.captureCropSourcePreview(batchId, itemId)),
+    apply: async (input) => {
+      const invocation = await commands.captureRecognitionApply(input)
+      if (invocation.status !== 'ok') throw new Error('Recognition apply transport failed')
+      return normalizeAppResult(invocation.data)
+    },
+    revert: async (input) => {
+      const invocation = await commands.captureRecognitionRevert(input)
+      if (invocation.status !== 'ok') throw new Error('Recognition revert transport failed')
+      return normalizeAppResult(invocation.data)
+    },
+  },
+})
+const {
+  feature: recognitionFeature,
+  job: recognitionJob,
+  operation: recognitionOperation,
+  notice: recognitionNotice,
+  busy: recognitionBusy,
+  operationBusy: recognitionOperationBusy,
+  cropEditor: recognitionCropEditor,
+  loadCapability: loadRecognitionCapability,
+  loadStatus: loadRecognitionStatus,
+  loadLastOperation: loadRecognitionLastOperation,
+  start: startRecognition,
+  cancel: cancelRecognition,
+  resume: resumeRecognition,
+  review: reviewRecognition,
+  reviewMany: reviewRecognitionMany,
+  edit: editRecognition,
+  apply: applyRecognition,
+  revert: revertRecognition,
+  saveProposal: saveRecognitionProposal,
+  closeProposal: closeRecognitionProposal,
+  reset: resetRecognition,
+  dispose: disposeRecognition,
+} = recognitionWorkflow
+const {
+  current: destructiveConfirmation,
+  ask: askDestructiveConfirmation,
+  confirm: confirmDestructiveAction,
+  cancel: cancelDestructiveAction,
+} = useActionConfirmation()
+const draftPersistenceBusy = computed(() =>
+  draftSaveQueueState.value.pending || draftSaveQueueState.value.running)
+const captureOperationBusy = computed(() => busy.value || recognitionBusy.value)
+const captureTransitionBusy = computed(() =>
+  draftPersistenceBusy.value
+  || captureOperationBusy.value
+  || Boolean(destructiveConfirmation.value))
+const draftSaveBlockedMessage = '最新草稿仍在保存，请等待完成后再离开。'
+const captureOperationBlockedMessage = '采集操作正在完成，请等待完成后再离开。'
+const destructiveConfirmationBlockedMessage = '请先完成当前确认操作，再离开采集箱。'
+const {
+  current: draftLeaveConfirmation,
+  confirm: confirmDraftLeave,
+  cancel: cancelDraftLeave,
+  attemptLeave: attemptDraftLeave,
+} = useUnsavedChangesGuard({
+  dirty: () => draftSaveUnsaved.value,
+  busy: () => captureTransitionBusy.value,
+  onBusy: () => {
+    showError(destructiveConfirmation.value
+      ? destructiveConfirmationBlockedMessage
+      : draftPersistenceBusy.value
+        ? draftSaveBlockedMessage
+        : captureOperationBlockedMessage)
+  },
+  ...(appRouter
+    ? {
+        registerNavigation: attempt => appRouter.beforeEach((to, from) => {
+          if (from.name !== 'inbox') return true
+          if (to.name !== 'inbox') return attempt()
+          const activeBatchId = detail.value?.batch.id
+          if (!activeBatchId) return true
+          const targetBatchId = typeof to.query.batchId === 'string'
+            ? to.query.batchId
+            : undefined
+          if (targetBatchId === activeBatchId) return true
+          return attempt()
+        }),
+    }
+    : {}),
+  ...(workspaceTransitionGuard
+    ? { registerContextTransition: workspaceTransitionGuard.register }
+    : {}),
+  confirmation: {
+    eyebrow: '采集草稿 · 离开确认',
+    title: '放弃尚未保存的采集草稿？',
+    description: '最近一次科目、标签或备注修改尚未保存。你可以继续留在采集箱重试，也可以明确放弃这次修改并离开。',
+    cancelLabel: '继续留在采集箱',
+    confirmLabel: '放弃草稿修改并离开',
+    tone: 'danger',
+  },
+})
+watch(captureTransitionBusy, (isBusy) => {
+  if (
+    !isBusy
+    && [
+      draftSaveBlockedMessage,
+      captureOperationBlockedMessage,
+      destructiveConfirmationBlockedMessage,
+    ].includes(errorMessage.value)
+  ) {
+    errorMessage.value = ''
+  }
+})
 const desktopAvailable = isTauri()
+type DevelopmentCapturePreviewMode = 'capture-batches' | 'capture-card' | 'crop-editor'
+const developmentCapturePreviewMode = computed<DevelopmentCapturePreviewMode | undefined>(() => {
+  if (!import.meta.env.DEV || desktopAvailable) return undefined
+  const mode = currentRoute?.query.preview
+  return mode === 'capture-batches' || mode === 'capture-card' || mode === 'crop-editor'
+    ? mode
+    : undefined
+})
+const developmentCropEditor = ref<CaptureCropEditorState>()
 let unlistenBatch: UnlistenFn | undefined
 let unlistenRecognition: UnlistenFn | undefined
-let refreshTimer: ReturnType<typeof setTimeout> | undefined
-let lanPollTimer: ReturnType<typeof setInterval> | undefined
-let viewMounted = false
-let requestedDetailBatchId = ''
-type PendingDraftUpdate = {
-  batchId: string
-  draftId: string
-  subject: string
-  tags: string[]
-  note: string
-  attempts: number
-}
-const pendingDraftUpdates = new Map<string, PendingDraftUpdate>()
-let draftSaveRunning = false
-type LanPreflightCommandResult = Awaited<ReturnType<typeof commands.captureLanPreflight>>
-let lanPreflightRequest: Promise<LanPreflightCommandResult> | undefined
 
 function showError(message: string) {
   errorMessage.value = message
+}
+
+const organizerActions = useCaptureOrganizerActions({
+  desktopAvailable,
+  activeDetail: () => detail.value,
+  isBlocked: () => busy.value,
+  onBusyChange: value => { busy.value = value },
+  onSaveStateChange: value => { saveState.value = value },
+  onDetailChange: value => { detail.value = value },
+  onError: showError,
+  reloadDetail: loadDetail,
+  operations: {
+    applyLayout: async input => normalizeAppResult(await commands.captureLayoutApply(input)),
+    assignSubject: async input => normalizeAppResult(await commands.captureBatchAssignSubject(input)),
+    moveItem: async input => normalizeAppResult(await commands.captureItemMove(input)),
+    stageRole: async input => normalizeAppResult(await commands.captureItemStageRole(input)),
+    mergeCard: async input => normalizeAppResult(await commands.captureCardMerge(input)),
+    deleteDraft: async (batchId, expectedRevision, draftId) =>
+      normalizeAppResult(await commands.captureDraftDelete(batchId, expectedRevision, draftId)),
+  },
+})
+const {
+  applyLayout,
+  assignBatchSubject,
+  moveItem,
+  stageItemRole,
+  mergeCard,
+  deleteDraft,
+} = organizerActions
+
+const previewCache = useCapturePreviewCache({
+  activeBatchId: () => desktopAvailable ? detail.value?.batch.id : undefined,
+  fetchPreview: async (batchId, itemId) =>
+    normalizeAppResult(await commands.captureItemPreview(batchId, itemId)),
+  maxEntries: 40,
+})
+const previews = previewCache.previews
+const loadPreview = previewCache.load
+const removeCachedPreview = previewCache.invalidate
+
+function loadDevelopmentCapturePreview(mode: DevelopmentCapturePreviewMode) {
+  const preview = createCaptureDevelopmentPreview()
+  batches.value = preview.batches
+  detail.value = mode === 'capture-batches' ? undefined : preview.detail
+  previewCache.clear()
+  Object.assign(previews, preview.previews)
+  developmentCropEditor.value = mode === 'crop-editor'
+    ? createCaptureDevelopmentCropEditor(preview)
+    : undefined
+}
+
+const itemEditing = useCaptureItemEditing({
+  desktopAvailable,
+  activeDetail: () => detail.value,
+  isBlocked: () => busy.value,
+  onBusyChange: value => { busy.value = value },
+  onSaveStateChange: value => { saveState.value = value },
+  onDetailChange: value => { detail.value = value },
+  onError: showError,
+  confirm: askDestructiveConfirmation,
+  invalidatePreview: removeCachedPreview,
+  loadBatches,
+  loadDetail,
+  operations: {
+    remove: async (batchId, expectedRevision, itemId) =>
+      normalizeAppResult(await commands.captureItemRemove(batchId, expectedRevision, itemId)),
+    preview: async (batchId, itemId) =>
+      normalizeAppResult(await commands.captureCropSourcePreview(batchId, itemId)),
+    apply: async input => normalizeAppResult(await commands.captureCropApply(input)),
+    revert: async input => normalizeAppResult(await commands.captureCropRevert(input)),
+  },
+})
+const {
+  cropEditor,
+  closeCropEditor,
+  removeItem,
+  openCropEditor,
+  applyCrop,
+  revertCrop,
+} = itemEditing
+const visibleCropEditor = computed(() => developmentCropEditor.value ?? cropEditor.value)
+
+function cropLauncherFor(itemId: string) {
+  return Array.from(document.querySelectorAll<HTMLButtonElement>('button[data-crop-item-id]'))
+    .find(button => button.dataset.cropItemId === itemId && !button.disabled)
+}
+
+function cropResultControlFor(itemId: string) {
+  return Array.from(document.querySelectorAll<HTMLButtonElement>('button[data-crop-result-item-id]'))
+    .find(button => button.dataset.cropResultItemId === itemId && !button.disabled)
+}
+
+function recognitionEditControlFor(suggestionId: string) {
+  return Array.from(document.querySelectorAll<HTMLButtonElement>('button[data-recognition-edit-suggestion-id]'))
+    .find(button => button.dataset.recognitionEditSuggestionId === suggestionId && !button.disabled)
+}
+
+const cropReturnFocus = createModalReturnFocusController({
+  currentContextId: () => detail.value?.batch.id,
+  isModalOpen: () => Boolean(visibleCropEditor.value),
+  findFallback: cropLauncherFor,
+})
+
+const recognitionCropReturnFocus = createModalReturnFocusController({
+  currentContextId: () => detail.value?.batch.id,
+  isModalOpen: () => Boolean(recognitionCropEditor.value),
+  findFallback: recognitionEditControlFor,
+})
+
+async function openVisibleCropEditor(itemId: string) {
+  const activeElement = document.activeElement
+  const batchId = detail.value?.batch.id
+  if (!batchId) {
+    cropReturnFocus.clear()
+    await openCropEditor(itemId)
+    return
+  }
+  cropReturnFocus.capture({
+    contextId: batchId,
+    targetId: itemId,
+    element: activeElement instanceof HTMLButtonElement && activeElement.dataset.cropItemId === itemId
+      ? activeElement
+      : undefined,
+  })
+  await openCropEditor(itemId)
+  if (!cropEditor.value) await cropReturnFocus.restore()
+}
+
+async function closeVisibleCropEditor() {
+  developmentCropEditor.value = undefined
+  closeCropEditor()
+  await cropReturnFocus.restore()
+}
+
+async function applyVisibleCrop(recipes: CaptureCropRecipe[]) {
+  if (developmentCropEditor.value) {
+    developmentCropEditor.value = undefined
+    await cropReturnFocus.restore()
+    return
+  }
+  const report = await applyCrop(recipes)
+  if (!cropEditor.value) {
+    await cropReturnFocus.restore(
+      report?.derivedItemIds[0]
+        ? () => cropResultControlFor(report.derivedItemIds[0]!)
+        : undefined,
+    )
+  }
+}
+
+async function openRecognitionCropEditor(suggestionId: string) {
+  const activeElement = document.activeElement
+  const batchId = detail.value?.batch.id
+  if (!batchId) {
+    recognitionCropReturnFocus.clear()
+    await editRecognition(suggestionId)
+    return
+  }
+  recognitionCropReturnFocus.capture({
+    contextId: batchId,
+    targetId: suggestionId,
+    element: activeElement instanceof HTMLButtonElement
+      && activeElement.dataset.recognitionEditSuggestionId === suggestionId
+      ? activeElement
+      : undefined,
+  })
+  await editRecognition(suggestionId)
+  if (!recognitionCropEditor.value) await recognitionCropReturnFocus.restore()
+}
+
+async function closeRecognitionCropEditor() {
+  closeRecognitionProposal()
+  await recognitionCropReturnFocus.restore()
+}
+
+async function saveRecognitionCropEditor(recipes: CaptureCropRecipe[]) {
+  await saveRecognitionProposal(recipes)
+  if (!recognitionCropEditor.value) await recognitionCropReturnFocus.restore()
+}
+
+const fileImporter = useCaptureFileImport({
+  activeBatchId: () => desktopAvailable ? detail.value?.batch.id : undefined,
+  currentItemCount: () => detail.value?.items.length ?? 0,
+  isBlocked: () => busy.value,
+  onBusyChange: (isBusy) => { busy.value = isBusy },
+  importBytes: async input =>
+    normalizeAppResult(await commands.captureImportBytes(input)),
+  createUploadId: () => crypto.randomUUID(),
+  maxBatchItems: 150,
+  concurrency: 2,
+})
+
+const importWorkflow = useCaptureImportWorkflow({
+  desktopAvailable,
+  activeDetail: () => detail.value,
+  isBlocked: () => busy.value,
+  onBusyChange: value => { busy.value = value },
+  onError: showError,
+  loadBatches,
+  loadDetail,
+  select: async batchId => normalizeAppResult(await commands.captureImportSelect(batchId)),
+  fileImporter,
+})
+const {
+  progress: importProgress,
+  importSelect,
+  importFiles,
+  importFromPaste,
+  clearProgress: clearImportProgress,
+  dispose: disposeImportWorkflow,
+} = importWorkflow
+
+const captureLan = useCaptureLanSession({
+  desktopAvailable,
+  activeBatchId: () => detail.value?.batch.id,
+  isBlocked: () => busy.value,
+  onBusyChange: (isBusy) => { busy.value = isBusy },
+  onError: showError,
+  operations: {
+    addresses: async () => normalizeAppResult(await commands.captureLanAddresses()),
+    preflight: async () => normalizeAppResult(await commands.captureLanPreflight()),
+    repair: async () => normalizeAppResult(await commands.captureLanFirewallRepair()),
+    status: async () => normalizeAppResult(await commands.captureLanStatus()),
+    start: async input => normalizeAppResult(await commands.captureLanStart(input)),
+    stop: async () => normalizeAppResult(await commands.captureLanStop()),
+  },
+})
+const {
+  addresses: lanAddresses,
+  preflight: lanPreflight,
+  preflightBusy: lanPreflightBusy,
+  session: lanSession,
+  loadAddresses: loadLanAddresses,
+  loadPreflight: loadLanPreflight,
+  loadStatus: loadLanStatus,
+  stop: stopMobileCapture,
+} = captureLan
+
+async function startMobileCapture(selectedAddress: string | null) {
+  if (!desktopAvailable || !detail.value?.batch.id || busy.value) return
+  errorMessage.value = ''
+  await captureLan.start(selectedAddress)
 }
 
 async function loadBatches() {
@@ -120,12 +494,11 @@ async function loadDetail(batchId: string) {
   if (!desktopAvailable) return
   requestedDetailBatchId = batchId
   try {
-    const [invocation] = await Promise.all([
-      commands.captureBatchDetail(batchId),
-      loadRecognitionCapability(),
-      loadRecognitionStatus(batchId),
-      loadRecognitionLastOperation(batchId),
-    ])
+    const detailRequest = commands.captureBatchDetail(batchId)
+    void loadRecognitionCapability()
+    void loadRecognitionStatus(batchId)
+    void loadRecognitionLastOperation(batchId)
+    const invocation = await detailRequest
     const result = normalizeAppResult(invocation)
     if (requestedDetailBatchId !== batchId) return
     if (result.ok) {
@@ -140,300 +513,57 @@ async function loadDetail(batchId: string) {
     else showError(result.error.userMessage)
   }
   catch {
-    showError('没有读取到这个采集批次，请返回后重试。')
+    if (requestedDetailBatchId === batchId) showError('没有读取到这个采集批次，请返回后重试。')
   }
 }
 
-function removeCachedPreview(itemId: string) {
-  delete previews[itemId]
-  for (let index = previewOrder.length - 1; index >= 0; index -= 1) {
-    if (previewOrder[index] === itemId) previewOrder.splice(index, 1)
-  }
-}
+const refreshScheduler = useCaptureRefreshScheduler({
+  activeBatchId: () => detail.value?.batch.id,
+  refreshDetail: loadDetail,
+  refreshList: loadBatches,
+  refreshLanStatus: loadLanStatus,
+  delayMs: 120,
+})
 
-async function loadRecognitionCapability() {
-  if (!desktopAvailable || !commands.ocrCapabilityStatus) return
-  try {
-    const invocation = await commands.ocrCapabilityStatus()
-    if (invocation.status === 'ok') {
-      const result = normalizeAppResult(invocation.data)
-      if (result.ok) recognitionCapability.value = result.data
-    }
-  }
-  catch {
-    // The workbench remains usable and shows the conservative gate state.
-  }
-}
-
-async function loadRecognitionStatus(batchId: string) {
-  if (!desktopAvailable || !commands.captureRecognitionStatus) return
-  try {
-    const result = normalizeAppResult(await commands.captureRecognitionStatus(batchId))
-    if (result.ok && requestedDetailBatchId === batchId) {
-      recognitionJob.value = result.data ?? undefined
-    }
-  }
-  catch {
-    // Recognition is optional and must not block manual organization.
-  }
-}
-
-async function loadRecognitionLastOperation(batchId: string) {
-  if (!desktopAvailable || !commands.captureRecognitionLastOperation) return
-  try {
-    const result = normalizeAppResult(await commands.captureRecognitionLastOperation(batchId))
-    if (result.ok && requestedDetailBatchId === batchId) {
-      recognitionOperation.value = result.data ?? undefined
-    }
-  }
-  catch {
-    // Undo availability is supplementary and must not block the workbench.
-  }
-}
-
-async function startRecognition() {
+async function applyPairSuggestions(pairIds: string[]) {
   const current = detail.value
-  if (!current || recognitionBusy.value || !commands.captureRecognitionStart) return
-  recognitionBusy.value = true
+  if (!desktopAvailable || !current || busy.value || !pairIds.length) return
+  busy.value = true
+  saveState.value = 'saving'
   errorMessage.value = ''
   try {
-    const result = normalizeAppResult(await commands.captureRecognitionStart({
+    const result = normalizeAppResult(await commands.capturePairSuggestionsApply({
       batchId: current.batch.id,
-      itemIds: [...current.unassignedItemIds],
+      expectedRevision: current.batch.revision,
+      pairIds,
     }))
-    if (result.ok) recognitionJob.value = result.data
-    else showError(result.error.userMessage)
-  }
-  catch {
-    showError('智能切图没有启动；原图和当前分组保持不变。')
-  }
-  finally {
-    recognitionBusy.value = false
-  }
-}
-
-async function cancelRecognition(jobId: string) {
-  if (recognitionBusy.value || !commands.captureRecognitionCancel) return
-  recognitionBusy.value = true
-  try {
-    const invocation = await commands.captureRecognitionCancel(jobId)
-    if (invocation.status === 'ok') {
-      const result = normalizeAppResult(invocation.data)
-      if (result.ok) recognitionJob.value = result.data
-      else showError(result.error.userMessage)
-    }
-  }
-  catch {
-    showError('停止请求没有完成；你仍可继续手工整理。')
-  }
-  finally {
-    recognitionBusy.value = false
-  }
-}
-
-function resumeRecognition() {
-  // The workbench owns the inline disclosure state; the view keeps the job alive.
-}
-
-type RecognitionReviewRequest = {
-  jobId: string
-  suggestionId: string
-  decision: 'accepted' | 'rejected'
-  editedRegions: CaptureRecognitionRegionProposal[] | null
-}
-
-async function persistRecognitionReview(input: RecognitionReviewRequest): Promise<boolean> {
-  const previousJob = recognitionJob.value
-  if (previousJob) {
-    recognitionJob.value = {
-      ...previousJob,
-      suggestions: previousJob.suggestions.map(suggestion =>
-        suggestion.id === input.suggestionId
-          ? {
-              ...suggestion,
-              state: input.decision,
-              regions: input.editedRegions ?? suggestion.regions,
-            }
-          : suggestion),
-    }
-  }
-  try {
-    const result = normalizeAppResult(await commands.captureRecognitionReview(input))
     if (result.ok) {
-      recognitionJob.value = result.data
-      return true
+      detail.value = result.data
+      saveState.value = 'saved'
+      recognitionNotice.value = `已把 ${pairIds.length} 组题面与答案生成采集草稿；确认科目后再保存到正式题库。`
     }
     else {
-      recognitionJob.value = previousJob
-      showError(result.error.userMessage)
-    }
-  }
-  catch {
-    recognitionJob.value = previousJob
-    showError('这条识别建议没有保存；你刚才的手工整理不会受到影响。')
-  }
-  return false
-}
-
-async function reviewRecognition(input: RecognitionReviewRequest) {
-  if (recognitionBusy.value || !commands.captureRecognitionReview) return false
-  recognitionBusy.value = true
-  try {
-    return await persistRecognitionReview(input)
-  }
-  finally {
-    recognitionBusy.value = false
-  }
-}
-
-async function reviewRecognitionMany(inputs: RecognitionReviewRequest[]) {
-  if (recognitionBusy.value || !commands.captureRecognitionReview || !inputs.length) return
-  recognitionBusy.value = true
-  try {
-    for (const input of inputs) {
-      if (!await persistRecognitionReview(input)) break
-    }
-  }
-  finally {
-    recognitionBusy.value = false
-  }
-}
-
-async function editRecognition(suggestionId: string) {
-  const current = detail.value
-  const suggestion = recognitionJob.value?.suggestions.find(item => item.id === suggestionId)
-  if (!current || !suggestion || recognitionBusy.value) return
-  recognitionBusy.value = true
-  try {
-    const result = normalizeAppResult(
-      await commands.captureCropSourcePreview(current.batch.id, suggestion.itemId),
-    )
-    if (result.ok) {
-      recognitionCropEditor.value = {
-        suggestionId,
-        itemName: '识别建议来源图',
-        dataUrl: result.data.dataUrl,
-        regions: suggestion.regions.map(region => ({ ...region, rect: { ...region.rect } })),
+      saveState.value = 'error'
+      showError(
+        result.error.code === 'capture_input_invalid'
+          ? '这组题答素材刚刚被移动、改角色或已加入其他题卡，已刷新并保留你的现有整理。'
+          : result.error.userMessage,
+      )
+      if (
+        result.error.code === 'capture_revision_conflict'
+        || result.error.code === 'capture_input_invalid'
+      ) {
+        await loadDetail(current.batch.id)
       }
     }
-    else showError(result.error.userMessage)
   }
   catch {
-    showError('没有读取到建议来源图；当前建议和原图都没有改变。')
+    saveState.value = 'error'
+    showError('题答匹配没有应用；素材牌库和现有题卡保持不变。')
   }
   finally {
-    recognitionBusy.value = false
+    busy.value = false
   }
-}
-
-async function applyRecognition(suggestionIds: string[]) {
-  const current = detail.value
-  const job = recognitionJob.value
-  if (
-    !desktopAvailable
-    || !current
-    || !job
-    || recognitionBusy.value
-    || !suggestionIds.length
-    || !commands.captureRecognitionApply
-  ) return
-  recognitionBusy.value = true
-  errorMessage.value = ''
-  recognitionNotice.value = ''
-  try {
-    const invocation = await commands.captureRecognitionApply({
-      batchId: current.batch.id,
-      jobId: job.id,
-      expectedRevision: current.batch.revision,
-      acceptedSuggestionIds: suggestionIds,
-    })
-    if (invocation.status !== 'ok') {
-      showError('识别结果没有应用；原图和当前题卡保持不变。')
-      return
-    }
-    const result = normalizeAppResult(invocation.data)
-    if (!result.ok) {
-      showError(result.error.userMessage)
-      if (result.error.code === 'capture_recognition_stale') {
-        await loadRecognitionStatus(current.batch.id)
-      }
-      return
-    }
-    detail.value = result.data.detail
-    recognitionJob.value = undefined
-    recognitionOperation.value = {
-      operationId: result.data.operationId,
-      batchId: current.batch.id,
-      afterRevision: result.data.detail.batch.revision,
-      createdItemCount: result.data.createdItemCount,
-      reverted: false,
-    }
-    recognitionNotice.value =
-      `已切分 ${result.data.createdItemCount} 张题答图片，已放入素材牌库。`
-  }
-  catch {
-    showError('识别结果没有应用；原图、复核选择和当前题卡都已保留。')
-  }
-  finally {
-    recognitionBusy.value = false
-  }
-}
-
-async function revertRecognition(operationId: string) {
-  const current = detail.value
-  if (
-    !desktopAvailable
-    || !current
-    || recognitionBusy.value
-    || !commands.captureRecognitionRevert
-  ) return
-  recognitionBusy.value = true
-  errorMessage.value = ''
-  try {
-    const invocation = await commands.captureRecognitionRevert({
-      batchId: current.batch.id,
-      operationId,
-      expectedRevision: current.batch.revision,
-    })
-    if (invocation.status !== 'ok') {
-      showError('没有撤销智能整理；当前题卡保持不变。')
-      return
-    }
-    const result = normalizeAppResult(invocation.data)
-    if (!result.ok) {
-      showError(result.error.userMessage)
-      return
-    }
-    detail.value = result.data.detail
-    recognitionOperation.value = recognitionOperation.value
-      ? { ...recognitionOperation.value, reverted: true }
-      : undefined
-    recognitionNotice.value =
-      `已撤销智能整理，恢复 ${result.data.revertedItemCount} 张来源图的原始状态。`
-  }
-  catch {
-    showError('没有撤销智能整理；当前题卡和图片保持不变。')
-  }
-  finally {
-    recognitionBusy.value = false
-  }
-}
-
-async function saveRecognitionProposal(recipes: CaptureCropRecipe[]) {
-  const editor = recognitionCropEditor.value
-  const job = recognitionJob.value
-  if (!editor || !job || recipes.length !== editor.regions.length) return
-  const editedRegions = recipes.map((recipe, index) => ({
-    ...editor.regions[index]!,
-    rect: recipe.rect,
-  }))
-  const saved = await reviewRecognition({
-    jobId: job.id,
-    suggestionId: editor.suggestionId,
-    decision: 'accepted',
-    editedRegions,
-  })
-  if (saved) recognitionCropEditor.value = undefined
 }
 
 function openRecognitionSetup() {
@@ -448,13 +578,19 @@ function openRecognitionSetup() {
   })
 }
 
-function closeDetail() {
+function clearDetailState(reloadBatches: boolean) {
   requestedDetailBatchId = ''
   detail.value = undefined
-  recognitionJob.value = undefined
-  recognitionOperation.value = undefined
-  recognitionNotice.value = ''
-  void loadBatches()
+  commitMessage.value = ''
+  cropReturnFocus.clear()
+  recognitionCropReturnFocus.clear()
+  closeCropEditor()
+  resetRecognition()
+  if (reloadBatches) void loadBatches()
+}
+
+function leaveDetail(reloadBatches: boolean) {
+  clearDetailState(reloadBatches)
   if (appRouter) {
     void appRouter.replace({
       name: 'inbox',
@@ -463,705 +599,173 @@ function closeDetail() {
   }
 }
 
-function draftUpdateKey(batchId: string, draftId: string) {
-  return `${batchId}:${draftId}`
-}
-
-async function flushDraftUpdates() {
-  if (draftSaveRunning || busy.value || !detail.value || !pendingDraftUpdates.size) return
-  const batchId = detail.value.batch.id
-  const entry = [...pendingDraftUpdates.entries()].find(([, value]) => value.batchId === batchId)
-  if (!entry) {
-    for (const [key, value] of pendingDraftUpdates) {
-      if (value.batchId !== batchId) pendingDraftUpdates.delete(key)
+async function persistDraftUpdate(
+  update: CaptureDraftSaveUpdate,
+): Promise<CaptureDraftSaveOutcome> {
+  const current = detail.value
+  if (!current || current.batch.id !== update.batchId) {
+    return {
+      kind: 'failed',
+      message: '当前采集批次已经切换，本次草稿没有保存。',
     }
-    return
   }
-
-  const [key, pending] = entry
-  pendingDraftUpdates.delete(key)
-  draftSaveRunning = true
-  busy.value = true
-  saveState.value = 'saving'
   try {
-    const current = detail.value
-    if (!current || current.batch.id !== pending.batchId) return
     const result = normalizeAppResult(await commands.captureDraftUpdate({
       batchId: current.batch.id,
       expectedRevision: current.batch.revision,
-      draftId: pending.draftId,
-      subject: pending.subject,
-      tags: pending.tags,
-      note: pending.note,
+      draftId: update.draftId,
+      subject: update.subject,
+      tags: update.tags,
+      note: update.note,
     }))
     if (result.ok) {
-      detail.value = result.data
-      saveState.value = 'saved'
+      if (detail.value?.batch.id === update.batchId) {
+        detail.value = result.data
+      }
+      return { kind: 'saved' }
     }
-    else if (result.error.code === 'capture_revision_conflict' && pending.attempts < 1) {
-      await loadDetail(pending.batchId)
-      pending.attempts += 1
-      pendingDraftUpdates.set(key, pending)
+    if (result.error.code === 'capture_revision_conflict') {
+      return {
+        kind: 'revision_conflict',
+        message: result.error.userMessage,
+      }
     }
-    else {
-      saveState.value = 'error'
-      showError(result.error.userMessage)
+    return {
+      kind: 'failed',
+      message: result.error.userMessage,
     }
   }
   catch {
+    return {
+      kind: 'failed',
+      message: '草稿文字保存没有完成；本次编辑仍保留在当前输入框中，请再次修改或重试。',
+    }
+  }
+}
+
+function closeDetail() {
+  if (!draftSaveUnsaved.value) {
+    leaveDetail(true)
+    return
+  }
+  void (async () => {
+    if (await attemptDraftLeave()) leaveDetail(true)
+  })()
+}
+
+function openBatch(batchId: string) {
+  if (detail.value?.batch.id === batchId) return
+  if (!draftSaveUnsaved.value) return loadDetail(batchId)
+  void (async () => {
+    if (!await attemptDraftLeave()) return
+    draftSaveQueue.clear()
+    await loadDetail(batchId)
+  })()
+}
+
+const draftSaveQueue = useCaptureDraftSaveQueue({
+  activeBatchId: () => detail.value?.batch.id,
+  isBlocked: () => busy.value,
+  perform: persistDraftUpdate,
+  refresh: loadDetail,
+  onSaving: () => { saveState.value = 'saving' },
+  onSaved: () => { saveState.value = 'saved' },
+  onFailed: (message) => {
     saveState.value = 'error'
-    showError('草稿文字保存没有完成；本次编辑仍保留在当前输入框中，请再次修改或重试。')
-  }
-  finally {
-    draftSaveRunning = false
-    busy.value = false
-  }
+    showError(message)
+  },
+  onBusyChange: (isBusy) => { busy.value = isBusy },
+  onStateChange: (state) => {
+    draftSaveQueueState.value = state
+    if (state.retryRequired && !state.pending && !state.running) {
+      saveState.value = 'error'
+    }
+  },
+})
+
+async function retryDraftSave() {
+  errorMessage.value = ''
+  await draftSaveQueue.retry()
 }
 
 watch(busy, (isBusy) => {
-  if (!isBusy) void flushDraftUpdates()
+  if (!isBusy) void draftSaveQueue.flush()
 })
 
 watch(() => detail.value?.batch.id, (batchId) => {
-  if (!batchId) return
-  for (const [key, value] of pendingDraftUpdates) {
-    if (value.batchId !== batchId) pendingDraftUpdates.delete(key)
-  }
+  previewCache.clear()
+  clearImportProgress()
+  if (batchId) draftSaveQueue.retainBatch(batchId)
+  else draftSaveQueue.clear()
+}, { flush: 'sync' })
+
+watch(
+  () => currentRoute
+    ? [currentRoute.name, currentRoute.query.batchId] as const
+    : undefined,
+  (routeState) => {
+    if (!routeState || routeState[0] !== 'inbox') return
+    const targetBatchId = typeof routeState[1] === 'string' ? routeState[1] : ''
+    if (targetBatchId) {
+      if (
+        detail.value?.batch.id !== targetBatchId
+        && requestedDetailBatchId !== targetBatchId
+      ) {
+        void loadDetail(targetBatchId)
+      }
+    }
+    else if (detail.value) {
+      clearDetailState(true)
+    }
+  },
+  { flush: 'post' },
+)
+
+const batchLifecycle = useCaptureBatchLifecycle({
+  desktopAvailable,
+  activeDetail: () => detail.value,
+  activeLanBatchId: () => lanSession.value?.batchId,
+  isBlocked: () => busy.value,
+  onBusyChange: value => { busy.value = value },
+  onError: showError,
+  onCommitMessage: message => { commitMessage.value = message },
+  onActiveBatchDiscarded: (batchId) => {
+    if (detail.value?.batch.id === batchId) leaveDetail(false)
+  },
+  loadBatches,
+  loadDetail,
+  stopMobileCapture,
+  scheduleSyncMutation: () => syncController?.scheduleMutation(),
+  operations: {
+    create: async input => normalizeAppResult(await commands.captureBatchCreate(input)),
+    discard: async batchId => normalizeAppResult(await commands.captureBatchDiscard(batchId)),
+    update: async input => normalizeAppResult(await commands.captureBatchUpdate(input)),
+    commit: async (batchId, expectedRevision) =>
+      normalizeAppResult(await commands.captureCommitReady(batchId, expectedRevision)),
+  },
 })
+const { createBatch, discardBatch, finishCollecting, commitReady } = batchLifecycle
 
-async function createBatch(subject: string) {
-  if (!desktopAvailable || busy.value) return
-  busy.value = true
-  errorMessage.value = ''
-  try {
-    const result = normalizeAppResult(await commands.captureBatchCreate({ subject }))
-    if (result.ok) {
-      await loadBatches()
-      await loadDetail(result.data.id)
-    }
-    else showError(result.error.userMessage)
-  }
-  catch {
-    showError('新批次没有创建成功，请稍后重试。')
-  }
-  finally {
-    busy.value = false
-  }
-}
-
-async function discardBatch(batchId: string) {
-  if (!desktopAvailable || busy.value) return
-  if (lanSession.value?.batchId === batchId) await stopMobileCapture(true)
-  busy.value = true
-  try {
-    const result = normalizeAppResult(await commands.captureBatchDiscard(batchId))
-    if (result.ok) {
-      if (detail.value?.batch.id === batchId) detail.value = undefined
-      await loadBatches()
-    }
-    else showError(result.error.userMessage)
-  }
-  catch {
-    showError('批次没有删除成功，原有图片仍会保留。')
-  }
-  finally {
-    busy.value = false
-  }
-}
-
-async function importSelect() {
-  const batchId = detail.value?.batch.id
-  if (!desktopAvailable || !batchId || busy.value) return
-  busy.value = true
-  errorMessage.value = ''
-  try {
-    const result = normalizeAppResult(await commands.captureImportSelect(batchId))
-    if (!result.ok) showError(result.error.userMessage)
-    await loadDetail(batchId)
-  }
-  catch {
-    showError('图片选择没有完成，请稍后重试。')
-  }
-  finally {
-    busy.value = false
-  }
-}
-
-async function importFiles(files: File[]) {
-  const batchId = detail.value?.batch.id
-  if (!desktopAvailable || !batchId || busy.value || !files.length) return
-  busy.value = true
-  errorMessage.value = ''
-  try {
-    const maxBatchItems = 150
-    const skippedCount = Math.max(0, files.length - maxBatchItems)
-    const filesToImport = files.slice(0, maxBatchItems)
-    const failedNames: string[] = []
-    const sequenceOffset = detail.value?.items.length ?? 0
-    let nextFileIndex = 0
-    const importOne = async (file: File, sourceSequence: number) => {
-      const sourceName = file.name || 'clipboard-image'
-      try {
-        const bytes = [...new Uint8Array(await file.arrayBuffer())]
-        const result = normalizeAppResult(await commands.captureImportBytes({
-          batchId,
-          clientUploadId: crypto.randomUUID(),
-          sourceName,
-          sourceSequence,
-          bytes,
-        }))
-        if (!result.ok) failedNames.push(sourceName)
-      }
-      catch {
-        failedNames.push(sourceName)
-      }
-    }
-    const workerCount = Math.min(2, filesToImport.length)
-    await Promise.all(Array.from({ length: workerCount }, async () => {
-      while (nextFileIndex < filesToImport.length) {
-        const index = nextFileIndex
-        nextFileIndex += 1
-        await importOne(filesToImport[index]!, sequenceOffset + index)
-      }
-    }))
-    const notices: string[] = []
-    if (skippedCount) {
-      notices.push(`本批最多保存 ${maxBatchItems} 张，已跳过最后 ${skippedCount} 张图片。`)
-    }
-    if (failedNames.length) {
-      const preview = failedNames.slice(0, 3).join('、')
-      const suffix = failedNames.length > 3 ? ` 等 ${failedNames.length} 张` : ''
-      notices.push(`${preview}${suffix} 未能加入采集箱，其余图片已继续导入。`)
-    }
-    if (notices.length) showError(notices.join(' '))
-    await loadDetail(batchId)
-  }
-  catch {
-    showError('拖入或粘贴的图片没有全部保存；已成功的图片仍在批次中。')
-    await loadDetail(batchId)
-  }
-  finally {
-    busy.value = false
-  }
-}
-
-async function finishCollecting(subject: string) {
-  const current = detail.value
-  if (!desktopAvailable || !current || busy.value) return
-  if (lanSession.value?.batchId === current.batch.id) await stopMobileCapture(true)
-  busy.value = true
-  try {
-    const result = normalizeAppResult(await commands.captureBatchUpdate({
-      batchId: current.batch.id,
-      expectedRevision: current.batch.revision,
-      subject,
-      finishCollecting: true,
-    }))
-    if (result.ok) await loadDetail(current.batch.id)
-    else showError(result.error.userMessage)
-  }
-  catch {
-    showError('没有结束采集，请稍后重试。')
-  }
-  finally {
-    busy.value = false
-  }
-}
-
-async function applyLayout(mode: CaptureLayoutMode, questions: number, answers: number, splitIndex: number | null) {
-  const current = detail.value
-  if (!desktopAvailable || !current || busy.value) return
-  busy.value = true
-  try {
-    const result = normalizeAppResult(await commands.captureLayoutApply({
-      batchId: current.batch.id,
-      expectedRevision: current.batch.revision,
-      mode,
-      questionImagesPerDraft: questions,
-      answerImagesPerDraft: answers,
-      splitIndex,
-    }))
-    if (result.ok) detail.value = result.data
-    else showError(result.error.userMessage)
-  }
-  catch {
-    showError('整理模板没有应用，原有分组仍会保留。')
-  }
-  finally {
-    busy.value = false
-  }
-}
-
-async function assignBatchSubject(subject: string) {
-  const current = detail.value
-  if (!desktopAvailable || !current || busy.value || !subject.trim()) return
-  busy.value = true
-  saveState.value = 'saving'
-  errorMessage.value = ''
-  try {
-    const result = normalizeAppResult(await commands.captureBatchAssignSubject({
-      batchId: current.batch.id,
-      expectedRevision: current.batch.revision,
-      subject,
-    }))
-    if (result.ok) {
-      detail.value = result.data
-      saveState.value = 'saved'
-    }
-    else {
-      saveState.value = 'error'
-      showError(result.error.userMessage)
-      if (result.error.code === 'capture_revision_conflict') await loadDetail(current.batch.id)
-    }
-  }
-  catch {
-    saveState.value = 'error'
-    showError('整批科目没有保存成功，原有题卡保持不变。')
-  }
-  finally {
-    busy.value = false
-  }
-}
-
-async function moveItem(target: { itemId: string, targetDraftId: string | null, targetRole: 'question' | 'answer' | null, targetPosition: number }) {
-  const current = detail.value
-  if (!desktopAvailable || !current || busy.value) return
-  busy.value = true
-  saveState.value = 'saving'
-  try {
-    const result = normalizeAppResult(await commands.captureItemMove({
-      batchId: current.batch.id,
-      expectedRevision: current.batch.revision,
-      ...target,
-    }))
-    if (result.ok) {
-      detail.value = result.data
-      saveState.value = 'saved'
-    }
-    else {
-      saveState.value = 'error'
-      showError(result.error.userMessage)
-      if (result.error.code === 'capture_revision_conflict') await loadDetail(current.batch.id)
-    }
-  }
-  catch {
-    saveState.value = 'error'
-    showError('图片没有移动成功，请刷新批次后重试。')
-  }
-  finally {
-    busy.value = false
-  }
-}
-
-async function stageItemRole(itemId: string, stagedRole: 'question' | 'answer') {
-  const current = detail.value
-  if (!desktopAvailable || !current || busy.value) return
-  busy.value = true
-  saveState.value = 'saving'
-  errorMessage.value = ''
-  try {
-    const result = normalizeAppResult(await commands.captureItemStageRole({
-      batchId: current.batch.id,
-      expectedRevision: current.batch.revision,
-      itemId,
-      stagedRole,
-    }))
-    if (result.ok) {
-      detail.value = result.data
-      saveState.value = 'saved'
-    }
-    else {
-      saveState.value = 'error'
-      showError(result.error.userMessage)
-      if (result.error.code === 'capture_revision_conflict') await loadDetail(current.batch.id)
-    }
-  }
-  catch {
-    saveState.value = 'error'
-    showError('图片角色没有保存成功，请重试。')
-  }
-  finally {
-    busy.value = false
-  }
-}
-
-async function mergeCard(itemIds: string[], targetDraftId: string | null, newDraftSubject: string | null) {
-  const current = detail.value
-  if (!desktopAvailable || !current || busy.value || !itemIds.length) return
-  busy.value = true
-  saveState.value = 'saving'
-  errorMessage.value = ''
-  try {
-    const result = normalizeAppResult(await commands.captureCardMerge({
-      batchId: current.batch.id,
-      expectedRevision: current.batch.revision,
-      targetDraftId,
-      itemIds,
-      newDraftSubject,
-    }))
-    if (result.ok) {
-      detail.value = result.data
-      saveState.value = 'saved'
-    }
-    else {
-      saveState.value = 'error'
-      showError(result.error.userMessage)
-      if (result.error.code === 'capture_revision_conflict') await loadDetail(current.batch.id)
-    }
-  }
-  catch {
-    saveState.value = 'error'
-    showError('题卡没有保存成功，图片仍保留在原位置。')
-  }
-  finally {
-    busy.value = false
-  }
-}
-
-async function deleteDraft(draftId: string) {
-  const current = detail.value
-  if (!desktopAvailable || !current || busy.value) return
-  busy.value = true
-  saveState.value = 'saving'
-  errorMessage.value = ''
-  try {
-    const result = normalizeAppResult(await commands.captureDraftDelete(
-      current.batch.id,
-      current.batch.revision,
-      draftId,
-    ))
-    if (result.ok) {
-      detail.value = result.data
-      saveState.value = 'saved'
-    }
-    else {
-      saveState.value = 'error'
-      showError(result.error.userMessage)
-      if (result.error.code === 'capture_revision_conflict') await loadDetail(current.batch.id)
-    }
-  }
-  catch {
-    saveState.value = 'error'
-    showError('题卡没有撤销成功，原有图片和分组仍会保留。')
-  }
-  finally {
-    busy.value = false
-  }
-}
-
-async function updateDraft(draft: CaptureDraftSummary, subject: string, tags: string[], note: string) {
+function updateDraft(draft: CaptureDraftSummary, subject: string, tags: string[], note: string) {
   const current = detail.value
   if (!desktopAvailable || !current) return
-  pendingDraftUpdates.set(draftUpdateKey(current.batch.id, draft.id), {
+  draftSaveQueue.enqueue({
     batchId: current.batch.id,
     draftId: draft.id,
     subject,
     tags,
     note,
-    attempts: 0,
   })
-  void flushDraftUpdates()
-}
-
-async function removeItem(itemId: string) {
-  const current = detail.value
-  if (!desktopAvailable || !current || busy.value) return
-  if (!window.confirm('删除这张采集图片？如果没有其他引用，对应的加密资产也会被清理。')) return
-  busy.value = true
-  try {
-    const result = normalizeAppResult(await commands.captureItemRemove(current.batch.id, current.batch.revision, itemId))
-    if (result.ok) {
-      detail.value = result.data
-      removeCachedPreview(itemId)
-    }
-    else showError(result.error.userMessage)
-  }
-  catch {
-    showError('图片没有删除成功。')
-  }
-  finally {
-    busy.value = false
-  }
-}
-
-async function commitReady() {
-  const current = detail.value
-  if (!desktopAvailable || !current || busy.value) return
-  busy.value = true
-  commitMessage.value = ''
-  try {
-    const result = normalizeAppResult(await commands.captureCommitReady(current.batch.id, current.batch.revision))
-    if (result.ok) {
-      commitMessage.value = result.data.committedCount
-        ? `已将 ${result.data.committedCount} 道题加入题库。`
-        : '没有可加入题库的完整题卡。'
-      if (result.data.committedCount > 0) syncController?.scheduleMutation()
-      await loadDetail(current.batch.id)
-      await loadBatches()
-    }
-    else showError(result.error.userMessage)
-  }
-  catch {
-    showError('批量入库没有完成，所有草稿仍保持原样，可以直接重试。')
-  }
-  finally {
-    busy.value = false
-  }
-}
-
-async function loadPreview(itemId: string) {
-  const batchId = detail.value?.batch.id
-  if (!desktopAvailable || !batchId || previews[itemId] || previewRequests.has(itemId)) return
-  previewRequests.add(itemId)
-  try {
-    const result = normalizeAppResult(await commands.captureItemPreview(batchId, itemId))
-    if (!result.ok) return
-    removeCachedPreview(itemId)
-    previews[itemId] = result.data.dataUrl
-    previewOrder.push(itemId)
-    while (previewOrder.length > 40) {
-      const expired = previewOrder.shift()
-      if (expired) removeCachedPreview(expired)
-    }
-  }
-  catch {
-    // A failed thumbnail must not interrupt organizing the rest of the batch.
-  }
-  finally {
-    previewRequests.delete(itemId)
-  }
-}
-
-async function openCropEditor(itemId: string) {
-  const current = detail.value
-  if (!desktopAvailable || !current || current.batch.state !== 'organizing' || busy.value) return
-  const item = current.items.find(value => value.id === itemId)
-  if (!item || item.cropDerivationId) return
-  busy.value = true
-  errorMessage.value = ''
-  try {
-    const result = normalizeAppResult(await commands.captureCropSourcePreview(current.batch.id, itemId))
-    if (result.ok) cropEditor.value = { itemId, itemName: item.sourceName, dataUrl: result.data.dataUrl }
-    else showError(result.error.userMessage)
-  }
-  catch {
-    showError('没有读取到裁剪大图，原图仍然安全保留，请重试。')
-  }
-  finally {
-    busy.value = false
-  }
-}
-
-async function applyCrop(recipes: CaptureCropRecipe[]) {
-  const current = detail.value
-  const editor = cropEditor.value
-  if (!desktopAvailable || !current || !editor || busy.value) return
-  busy.value = true
-  errorMessage.value = ''
-  try {
-    const result = normalizeAppResult(await commands.captureCropApply({
-      batchId: current.batch.id,
-      expectedRevision: current.batch.revision,
-      itemId: editor.itemId,
-      recipes,
-    }))
-    if (result.ok) {
-      detail.value = result.data.detail
-      removeCachedPreview(editor.itemId)
-      cropEditor.value = undefined
-      saveState.value = 'saved'
-      await loadBatches()
-    }
-    else showError(result.error.userMessage)
-  }
-  catch {
-    showError('裁剪没有保存，原图和当前分组均未改变，请重试。')
-  }
-  finally {
-    busy.value = false
-  }
-}
-
-async function revertCrop(derivationId: string) {
-  const current = detail.value
-  if (!desktopAvailable || !current || busy.value) return
-  if (!window.confirm('恢复裁剪前的原图？这次裁出的所有区域会从采集工作台移除，但原图会回到原来的位置。')) return
-  busy.value = true
-  errorMessage.value = ''
-  try {
-    const result = normalizeAppResult(await commands.captureCropRevert({
-      batchId: current.batch.id,
-      expectedRevision: current.batch.revision,
-      derivationId,
-    }))
-    if (result.ok) {
-      for (const item of current.items.filter(value => value.cropDerivationId)) {
-        removeCachedPreview(item.id)
-      }
-      detail.value = result.data
-      saveState.value = 'saved'
-      await loadBatches()
-    }
-    else showError(result.error.userMessage)
-  }
-  catch {
-    showError('没有恢复成功，现有图片保持不变。')
-  }
-  finally {
-    busy.value = false
-  }
-}
-
-async function requestLanPreflight(): Promise<LanPreflightCommandResult> {
-  if (lanPreflightRequest) return lanPreflightRequest
-  const request = commands.captureLanPreflight()
-  lanPreflightRequest = request
-  try {
-    return await request
-  }
-  finally {
-    if (lanPreflightRequest === request) lanPreflightRequest = undefined
-  }
-}
-
-async function loadLanAddresses(): Promise<CaptureLanAddress[]> {
-  if (!desktopAvailable) return []
-  try {
-    const result = normalizeAppResult(await commands.captureLanAddresses())
-    if (!viewMounted) return []
-    if (result.ok) {
-      lanAddresses.value = result.data
-      return result.data
-    }
-  }
-  catch {
-    if (viewMounted) lanAddresses.value = []
-  }
-  return []
-}
-
-async function loadLanPreflight(): Promise<CaptureLanPreflight | undefined> {
-  if (!desktopAvailable) return lanPreflight.value
-  lanPreflightBusy.value = true
-  try {
-    const result = normalizeAppResult(await requestLanPreflight())
-    if (!viewMounted) return undefined
-    if (result.ok) {
-      lanPreflight.value = result.data
-      return result.data
-    }
-    lanPreflight.value = undefined
-    showError(result.error.userMessage)
-  }
-  catch {
-    if (viewMounted) {
-      lanPreflight.value = undefined
-      showError('没有读取到 Windows 手机连接权限，请重新检测。')
-    }
-  }
-  finally {
-    if (viewMounted) lanPreflightBusy.value = false
-  }
-  return undefined
-}
-
-async function requestLanPermission(): Promise<CaptureLanPreflight | undefined> {
-  if (!desktopAvailable) return undefined
-  lanPreflightBusy.value = true
-  try {
-    const result = normalizeAppResult(await commands.captureLanFirewallRepair())
-    if (result.ok) {
-      lanPreflight.value = result.data
-      return result.data
-    }
-    showError(result.error.userMessage)
-  }
-  catch {
-    showError('Windows 授权没有完成；下次点击“手机扫码”时会再次请求。')
-  }
-  finally {
-    if (viewMounted) lanPreflightBusy.value = false
-  }
-  return undefined
-}
-
-async function loadLanStatus() {
-  if (!desktopAvailable) return
-  try {
-    const result = normalizeAppResult(await commands.captureLanStatus())
-    if (result.ok) lanSession.value = result.data ?? undefined
-  }
-  catch {
-    lanSession.value = undefined
-  }
-}
-
-async function startMobileCapture(selectedAddress: string | null) {
-  const requestedBatchId = detail.value?.batch.id
-  if (!desktopAvailable || !requestedBatchId || busy.value) return
-  busy.value = true
-  errorMessage.value = ''
-  try {
-    let preflight = await loadLanPreflight()
-    if (preflight?.needsFirewallRepair) preflight = await requestLanPermission()
-    const current = detail.value
-    if (!preflight?.canStart || !current || current.batch.id !== requestedBatchId) return
-    const addresses = await loadLanAddresses()
-    const currentAddress = selectedAddress && addresses.some(address => address.address === selectedAddress)
-      ? selectedAddress
-      : addresses[0]?.address ?? null
-    const result = normalizeAppResult(await commands.captureLanStart({
-      batchId: current.batch.id,
-      selectedAddress: currentAddress,
-    }))
-    if (result.ok) lanSession.value = result.data
-    else showError(result.error.userMessage)
-  }
-  catch {
-    showError('手机采集服务没有启动成功，请检查 Wi‑Fi 后重试。')
-  }
-  finally {
-    busy.value = false
-  }
-}
-
-async function stopMobileCapture(silent = false) {
-  if (!desktopAvailable) return
-  try {
-    const result = normalizeAppResult(await commands.captureLanStop())
-    if (result.ok) lanSession.value = undefined
-    else if (!silent) showError(result.error.userMessage)
-  }
-  catch {
-    if (!silent) showError('手机采集服务没有停止成功；退出应用会强制关闭端口。')
-  }
-}
-
-function handlePaste(event: ClipboardEvent) {
-  if (!detail.value || detail.value.batch.state === 'completed') return
-  if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return
-  const files = [...(event.clipboardData?.items ?? [])]
-    .filter(item => item.kind === 'file' && item.type.startsWith('image/'))
-    .map(item => item.getAsFile())
-    .filter((file): file is File => Boolean(file))
-  if (!files.length) return
-  event.preventDefault()
-  void importFiles(files)
-}
-
-function scheduleRefresh(batchId: string) {
-  if (refreshTimer) clearTimeout(refreshTimer)
-  refreshTimer = setTimeout(() => {
-    if (detail.value?.batch.id === batchId) void loadDetail(batchId)
-    else void loadBatches()
-    void loadLanStatus()
-  }, 120)
 }
 
 onMounted(async () => {
-  viewMounted = true
-  window.addEventListener('paste', handlePaste)
+  window.addEventListener('paste', importFromPaste)
   if (!desktopAvailable) {
+    const previewMode = developmentCapturePreviewMode.value
+    if (previewMode) {
+      loadDevelopmentCapturePreview(previewMode)
+      return
+    }
     showError('浏览器预览只展示界面；请在 Windows 桌面应用中使用加密采集箱。')
     return
   }
@@ -1174,10 +778,10 @@ onMounted(async () => {
     await loadDetail(requestedBatchId)
   }
   await Promise.all([loadLanAddresses(), loadLanPreflight(), loadLanStatus()])
-  lanPollTimer = setInterval(() => void loadLanStatus(), 5_000)
+  captureLan.startPolling(5_000)
   const eventUnlisteners = await Promise.all([
     listen<{ batchId: string }>('capture_batch_changed', event =>
-      scheduleRefresh(event.payload.batchId)),
+      refreshScheduler.schedule(event.payload.batchId)),
     listen<{ batchId: string }>('capture_recognition_changed', event => {
       if (detail.value?.batch.id === event.payload.batchId) {
         void loadRecognitionStatus(event.payload.batchId)
@@ -1189,13 +793,17 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  viewMounted = false
-  window.removeEventListener('paste', handlePaste)
-  if (refreshTimer) clearTimeout(refreshTimer)
-  if (lanPollTimer) clearInterval(lanPollTimer)
+  cropReturnFocus.clear()
+  recognitionCropReturnFocus.clear()
+  window.removeEventListener('paste', importFromPaste)
   unlistenBatch?.()
   unlistenRecognition?.()
-  pendingDraftUpdates.clear()
+  refreshScheduler.dispose()
+  disposeImportWorkflow()
+  previewCache.dispose()
+  captureLan.dispose()
+  draftSaveQueue.dispose()
+  disposeRecognition()
 })
 </script>
 
@@ -1206,6 +814,7 @@ onBeforeUnmount(() => {
     :previews="previews"
     :busy="busy"
     :save-state="saveState"
+    :draft-save-retry-available="draftSaveRetryAvailable"
     :commit-message="commitMessage"
     :error-message="errorMessage"
     :desktop-available="desktopAvailable"
@@ -1215,13 +824,15 @@ onBeforeUnmount(() => {
     :lan-session="lanSession"
     :subject-options="subjectOptions"
     :capture-sound-enabled="subjectPreferences.captureSoundEnabled"
+    :import-progress="importProgress"
     :recognition-feature="recognitionFeature"
     :recognition-job="recognitionJob"
     :recognition-operation="recognitionOperation"
     :recognition-notice="recognitionNotice"
     :recognition-busy="recognitionBusy"
+    :recognition-operation-busy="recognitionOperationBusy"
     @create-batch="createBatch"
-    @open-batch="loadDetail"
+    @open-batch="openBatch"
     @back="closeDetail"
     @discard-batch="discardBatch"
     @import-select="importSelect"
@@ -1232,12 +843,14 @@ onBeforeUnmount(() => {
     @move-item="moveItem"
     @stage-item-role="stageItemRole"
     @merge-card="mergeCard"
+    @apply-pair-suggestions="applyPairSuggestions"
     @delete-draft="deleteDraft"
     @update-draft="updateDraft"
+    @retry-draft-save="retryDraftSave"
     @remove-item="removeItem"
     @commit-ready="commitReady"
     @preview="loadPreview"
-    @crop="openCropEditor"
+    @crop="openVisibleCropEditor"
     @revert-crop="revertCrop"
     @mobile-capture="startMobileCapture"
     @refresh-lan-addresses="loadLanAddresses"
@@ -1249,17 +862,17 @@ onBeforeUnmount(() => {
     @recognition-open-setup="openRecognitionSetup"
     @recognition-review="reviewRecognition"
     @recognition-review-many="reviewRecognitionMany"
-    @recognition-edit="editRecognition"
+    @recognition-edit="openRecognitionCropEditor"
     @recognition-apply="applyRecognition"
     @recognition-revert="revertRecognition"
   />
   <CaptureCropEditor
-    v-if="cropEditor"
-    :data-url="cropEditor.dataUrl"
-    :item-name="cropEditor.itemName"
+    v-if="visibleCropEditor"
+    :data-url="visibleCropEditor.dataUrl"
+    :item-name="visibleCropEditor.itemName"
     :busy="busy"
-    @close="cropEditor = undefined"
-    @apply="applyCrop"
+    @close="closeVisibleCropEditor"
+    @apply="applyVisibleCrop"
   />
   <CaptureCropEditor
     v-if="recognitionCropEditor"
@@ -1274,7 +887,19 @@ onBeforeUnmount(() => {
       maxEdge: 4096,
       jpegQuality: 90,
     }))"
-    @close="recognitionCropEditor = undefined"
-    @save-proposal="saveRecognitionProposal"
+    @close="closeRecognitionCropEditor"
+    @save-proposal="saveRecognitionCropEditor"
+  />
+  <ActionConfirmDialog
+    v-if="destructiveConfirmation"
+    :request="destructiveConfirmation"
+    @cancel="cancelDestructiveAction"
+    @confirm="confirmDestructiveAction"
+  />
+  <ActionConfirmDialog
+    v-if="draftLeaveConfirmation"
+    :request="draftLeaveConfirmation"
+    @cancel="cancelDraftLeave"
+    @confirm="confirmDraftLeave"
   />
 </template>

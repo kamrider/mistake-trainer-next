@@ -8,6 +8,7 @@ const props = defineProps<{
   source: ExportCandidateSource
   selectedIds: string[]
   loading: boolean
+  disabled?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -56,6 +57,35 @@ function dueLabel(value: number | null) {
 function selectionLabel(candidate: ExportCandidate) {
   return `选择${candidate.subject}：${candidate.note || '无笔记题目'}`
 }
+
+function handleSourceKeydown(event: KeyboardEvent) {
+  const target = event.currentTarget
+  if (!(target instanceof HTMLButtonElement)) return
+  const group = target.closest('[role="radiogroup"]')
+  if (!group) return
+  const cards = Array.from(group.querySelectorAll<HTMLButtonElement>('[role="radio"]:not(:disabled)'))
+  const currentIndex = cards.indexOf(target)
+  if (currentIndex < 0 || cards.length === 0) return
+
+  let nextIndex: number
+  if (event.key === 'ArrowRight' || event.key === 'ArrowDown')
+    nextIndex = (currentIndex + 1) % cards.length
+  else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp')
+    nextIndex = (currentIndex - 1 + cards.length) % cards.length
+  else if (event.key === 'Home')
+    nextIndex = 0
+  else if (event.key === 'End')
+    nextIndex = cards.length - 1
+  else
+    return
+
+  const nextCard = cards[nextIndex]
+  const nextSource = nextCard?.dataset.source
+  if (!nextCard || !sourceOptions.some(option => option.value === nextSource)) return
+  event.preventDefault()
+  nextCard.focus()
+  emit('source', nextSource as ExportCandidateSource)
+}
 </script>
 
 <template>
@@ -72,8 +102,11 @@ function selectionLabel(candidate: ExportCandidate) {
         role="radio"
         class="source-card"
         :class="{ active: source === option.value }"
+        :data-source="option.value"
+        :tabindex="!loading && !disabled && source === option.value ? 0 : -1"
         :aria-checked="source === option.value"
-        :disabled="loading"
+        :disabled="loading || disabled"
+        @keydown="handleSourceKeydown"
         @click="emit('source', option.value)"
       >
         <component
@@ -103,20 +136,20 @@ function selectionLabel(candidate: ExportCandidate) {
           type="search"
           aria-label="搜索候选题"
           placeholder="搜索科目或笔记"
-          :disabled="loading || candidates.length === 0"
+          :disabled="loading || disabled || candidates.length === 0"
         >
       </label>
       <span class="selection-count">已选 {{ selectedIds.length }} / {{ candidates.length }}</span>
       <button
         type="button"
-        :disabled="loading || filteredCandidates.length === 0"
+        :disabled="loading || disabled || filteredCandidates.length === 0"
         @click="emit('selectAll', filteredCandidates.map(candidate => candidate.id))"
       >
         全选当前结果
       </button>
       <button
         type="button"
-        :disabled="loading || selectedIds.length === 0"
+        :disabled="loading || disabled || selectedIds.length === 0"
         @click="emit('clear')"
       >
         清空选择
@@ -156,12 +189,13 @@ function selectionLabel(candidate: ExportCandidate) {
           v-for="candidate in filteredCandidates"
           :key="candidate.id"
           class="candidate-row"
-          :class="{ selected: selected.has(candidate.id) }"
+          :class="{ selected: selected.has(candidate.id), disabled }"
         >
           <input
             type="checkbox"
             :checked="selected.has(candidate.id)"
             :aria-label="selectionLabel(candidate)"
+            :disabled="loading || disabled"
             @change="emit('toggle', candidate.id)"
           >
           <span class="selection-mark"><CheckCircle2 :size="17" /></span>
@@ -192,14 +226,14 @@ function selectionLabel(candidate: ExportCandidate) {
 .source-card strong,
 .source-card small { display: block; }
 .source-card strong { font-size: 13px; }
-.source-card small { margin-top: 5px; color: var(--ink-muted); font-size: 10px; line-height: 1.45; }
+.source-card small { margin-top: 5px; color: var(--ink-muted); font-size: 12px; line-height: 1.45; }
 .source-check { color: var(--cinnabar); }
 
 .picker-toolbar { display: flex; gap: 8px; align-items: center; min-height: 42px; }
 .search-field { display: flex; min-width: 190px; flex: 1; gap: 8px; align-items: center; padding: 0 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper-raised); }
-.search-field input { width: 100%; min-height: 38px; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); }
-.selection-count { color: var(--ink-muted); font-size: 11px; white-space: nowrap; }
-.picker-toolbar button { min-height: 36px; padding: 0 11px; color: var(--green-deep); border: 1px solid var(--line); border-radius: 999px; background: transparent; cursor: pointer; font-size: 11px; }
+.search-field input { width: 100%; min-height: 44px; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); }
+.selection-count { color: var(--ink-muted); font-size: 12px; white-space: nowrap; }
+.picker-toolbar button { min-height: 44px; padding: 0 11px; color: var(--green-deep); border: 1px solid var(--line); border-radius: 999px; background: transparent; cursor: pointer; font-size: 12px; }
 .picker-toolbar button:disabled { cursor: default; opacity: .42; }
 
 .candidate-viewport { min-height: 168px; max-height: 430px; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--line); border-radius: 5px 15px 15px; background: rgba(255, 253, 247, .5); }
@@ -208,6 +242,8 @@ function selectionLabel(candidate: ExportCandidate) {
 .candidate-row:last-child { border-bottom: 0; }
 .candidate-row:hover { background: rgba(232, 221, 199, .22); transform: translateX(2px); }
 .candidate-row.selected { background: rgba(227, 235, 228, .7); box-shadow: inset 3px 0 var(--green-deep); }
+.candidate-row.disabled { cursor: wait; opacity: .62; }
+.candidate-row.disabled:hover { transform: none; }
 .candidate-row > input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; }
 .selection-mark { display: grid; width: 28px; height: 28px; place-items: center; color: var(--ink-muted); border: 1px solid var(--line); border-radius: 50%; background: var(--paper-raised); transition: color var(--motion-standard) var(--ease-standard), background var(--motion-standard) var(--ease-standard), transform var(--motion-feedback) var(--ease-standard); }
 .candidate-row.selected .selection-mark { color: white; border-color: var(--green-deep); background: var(--green-deep); transform: scale(1.06); }
@@ -215,11 +251,11 @@ function selectionLabel(candidate: ExportCandidate) {
 .candidate-copy { min-width: 0; }
 .candidate-copy > span { display: flex; gap: 10px; align-items: baseline; }
 .candidate-copy strong { color: var(--green-deep); font-size: 13px; }
-.candidate-copy small { color: var(--ink-muted); font-size: 10px; }
+.candidate-copy small { color: var(--ink-muted); font-size: 12px; }
 .candidate-copy p { overflow: hidden; margin: 7px 0 0; color: var(--ink); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .asset-badges { display: grid; gap: 6px; justify-items: end; }
-.asset-badges > span { display: inline-flex; gap: 5px; align-items: center; color: var(--ink-muted); font-size: 10px; }
-.asset-badges small { padding: 4px 7px; color: #48665a; border-radius: 999px; background: var(--green-soft); font-size: 9px; }
+.asset-badges > span { display: inline-flex; gap: 5px; align-items: center; color: var(--ink-muted); font-size: 12px; }
+.asset-badges small { padding: 4px 7px; color: #48665a; border-radius: 999px; background: var(--green-soft); font-size: 12px; }
 .asset-badges small.incomplete { color: #8b4634; background: #f6e5dc; }
 .picker-state { display: flex; min-height: 168px; gap: 9px; align-items: center; justify-content: center; margin: 0; color: var(--ink-muted); font-size: 12px; }
 .loading-mark { width: 16px; height: 16px; border: 2px solid var(--sand); border-top-color: var(--cinnabar); border-radius: 50%; animation: spin .8s linear infinite; }

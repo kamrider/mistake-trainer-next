@@ -1,14 +1,21 @@
 <script setup lang="ts">
 import { isTauri } from '@tauri-apps/api/core'
-import { computed, inject, onBeforeUnmount, onMounted, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import LibraryWorkspace from '../../modules/library/components/LibraryWorkspace.vue'
 import ProblemDetailDrawer from '../../modules/library/components/ProblemDetailDrawer.vue'
+import { useLibraryBatchStatus } from '../../modules/library/composables/useLibraryBatchStatus'
+import { useLibraryProblemActions } from '../../modules/library/composables/useLibraryProblemActions'
+import { useLibraryReviewLaunch } from '../../modules/library/composables/useLibraryReviewLaunch'
 import { commands, type ProblemDetail, type ProblemStatusFilter, type ProblemSummary } from '../../shared/api/bindings'
 import { normalizeAppResult } from '../../shared/api/normalize-result'
+import { useDurableActionGuard } from '../composables/useDurableActionGuard'
+import type { NavigationAttempt } from '../composables/useUnsavedChangesGuard'
 import { syncControllerKey } from '../sync-controller'
+import { workspaceTransitionGuardKey } from '../workspace-transition-guard'
 
 const syncController = inject(syncControllerKey, undefined)
+const workspaceTransitionGuard = inject(workspaceTransitionGuardKey, undefined)
 const router = useRouter()
 const route = useRoute()
 const profileName = ref('本机学习档案')
@@ -19,14 +26,35 @@ const selectedProblemIds = ref<string[]>([])
 const loading = ref(true)
 const errorMessage = ref('')
 const startingExperience = ref<'review' | 'exam' | null>(null)
+const changingBatchStatus = ref<ProblemStatusFilter | null>(null)
 let refreshSequence = 0
 let searchTimer: number | undefined
 let detailSequence = 0
+let viewActive = true
 const detailOpen = ref(false)
 const detailLoading = ref(false)
 const detail = ref<ProblemDetail>()
 const detailError = ref('')
 const detailSaving = ref(false)
+const libraryOperationBusy = computed(() =>
+  Boolean(startingExperience.value || changingBatchStatus.value))
+const durableTransitionBlockedMessage = '题库操作正在进行，请等待完成后再离开。'
+const { attemptLeave: attemptDurableTransition } = useDurableActionGuard({
+  busy: () => libraryOperationBusy.value,
+  onBlocked: () => {
+    if (detailOpen.value) detailError.value = durableTransitionBlockedMessage
+    else errorMessage.value = durableTransitionBlockedMessage
+  },
+  ...(workspaceTransitionGuard
+    ? { registerContextTransition: workspaceTransitionGuard.register }
+    : {}),
+})
+watch(libraryOperationBusy, (busy) => {
+  if (busy) return
+  if (errorMessage.value === durableTransitionBlockedMessage) errorMessage.value = ''
+  if (detailError.value === durableTransitionBlockedMessage) detailError.value = ''
+})
+onBeforeRouteLeave(attemptDurableTransition)
 const detailIndex = computed(() => detail.value
   ? problems.value.findIndex(problem => problem.id === detail.value?.id)
   : -1)
@@ -36,6 +64,13 @@ const previousProblemId = computed(() => detailIndex.value > 0
 const nextProblemId = computed(() => detailIndex.value >= 0 && detailIndex.value < problems.value.length - 1
   ? problems.value[detailIndex.value + 1]?.id ?? null
   : null)
+
+function registerDetailNavigation(attempt: NavigationAttempt) {
+  return router.beforeEach((to, from) => {
+    if (from.name !== 'library' || to.name === 'library') return true
+    return attempt()
+  })
+}
 
 function loadDevelopmentPreview() {
   profileName.value = '本机学习档案'
@@ -96,7 +131,7 @@ async function openDetail(problemId: string) {
   const sequence = ++detailSequence
   detailOpen.value = true
   detailLoading.value = true
-  detail.value = undefined
+  if (detail.value?.id !== problemId) detail.value = undefined
   detailError.value = ''
   try {
     if (!isTauri()) return
@@ -120,53 +155,76 @@ function closeDetail() {
   detailError.value = ''
 }
 
+const problemActions = useLibraryProblemActions({
+  activeProblemId: () => viewActive && detailOpen.value ? detail.value?.id : undefined,
+  isSaving: () => detailSaving.value,
+  onSavingChange: value => { detailSaving.value = value },
+  onError: message => { detailError.value = message },
+  onUpdateSuccess: (input) => {
+    if (detail.value?.id !== input.problemId) return
+    detail.value = {
+      ...detail.value,
+      subject: input.subject,
+      note: input.note,
+      tags: [...input.tags],
+      timeLimitSeconds: input.timeLimitSeconds,
+    }
+  },
+  refresh,
+  reloadDetail: openDetail,
+  closeDetail: (problemId) => {
+    if (detailOpen.value && detail.value?.id === problemId) closeDetail()
+  },
+  scheduleSync: () => syncController?.scheduleMutation(),
+  operations: {
+    update: async input => normalizeAppResult(await commands.problemUpdate(input)),
+    changeStatus: async input => normalizeAppResult(await commands.problemChangeStatus(input)),
+  },
+})
+const { updateProblem, changeProblemStatus } = problemActions
+
+const batchStatus = useLibraryBatchStatus({
+  selectedProblemIds: () => selectedProblemIds.value,
+  onSelectionChange: problemIds => { selectedProblemIds.value = problemIds },
+  changingStatus: () => changingBatchStatus.value,
+  onChangingStatusChange: nextStatus => { changingBatchStatus.value = nextStatus },
+  onError: message => { errorMessage.value = message },
+  scheduleSync: () => syncController?.scheduleMutation(),
+  refresh,
+  operation: async input => normalizeAppResult(await commands.problemChangeStatus(input)),
+})
+const { changeBatchStatus } = batchStatus
+
+const isLibraryPreview = () => !isTauri()
+  && import.meta.env.DEV
+  && route.query.preview === 'library'
+const reviewLaunch = useLibraryReviewLaunch({
+  selectedProblemIds: () => selectedProblemIds.value,
+  startingExperience: () => startingExperience.value,
+  ownsRoute: () => viewActive && route.name === 'library',
+  onSelectionChange: problemIds => { selectedProblemIds.value = problemIds },
+  onStartingExperienceChange: experience => { startingExperience.value = experience },
+  onListError: message => { errorMessage.value = message },
+  onDetailError: message => { detailError.value = message },
+  startManual: async input => isLibraryPreview()
+    ? { ok: true, data: undefined }
+    : normalizeAppResult(await commands.reviewManualStart(input)),
+  startExam: async input => isLibraryPreview()
+    ? { ok: true, data: undefined }
+    : normalizeAppResult(await commands.reviewExamStart(input)),
+  navigate: async (experience) => {
+    await router.push(isLibraryPreview()
+      ? {
+          name: 'review',
+          query: { preview: experience === 'exam' ? 'exam-answering' : 'manual-review' },
+        }
+      : { name: 'review' })
+  },
+})
+const { startReview } = reviewLaunch
+
 async function trainProblem(problemId: string) {
   await startReview([problemId], true, 'review')
-}
-
-async function updateProblem(input: { problemId: string; subject: string; note: string; tags: string[]; timeLimitSeconds: number | null }) {
-  detailSaving.value = true
-  detailError.value = ''
-  try {
-    const result = normalizeAppResult(await commands.problemUpdate(input))
-    if (!result.ok) {
-      detailError.value = result.error.userMessage
-      return
-    }
-    syncController?.scheduleMutation()
-    await refresh()
-    await openDetail(input.problemId)
-  }
-  catch {
-    detailError.value = '修改没有保存，请稍后重试。'
-  }
-  finally {
-    detailSaving.value = false
-  }
-}
-
-async function changeProblemStatus(problemId: string, targetStatus: ProblemStatusFilter) {
-  detailSaving.value = true
-  detailError.value = ''
-  try {
-    const result = normalizeAppResult(await commands.problemChangeStatus({
-      problemIds: [problemId],
-      targetStatus,
-    }))
-    if (!result.ok) {
-      detailError.value = result.error.userMessage
-      return
-    }
-    syncController?.scheduleMutation()
-    closeDetail()
-    await refresh()
-  }
-  catch {
-    detailError.value = '题目状态没有改变，请稍后重试。'
-  }
-  finally {
-    detailSaving.value = false
-  }
 }
 
 async function changeStatus(nextStatus: ProblemStatusFilter) {
@@ -201,72 +259,9 @@ function clearSelection() {
   errorMessage.value = ''
 }
 
-async function startReview(
-  problemIds = selectedProblemIds.value,
-  fromDetail = false,
-  experience: 'review' | 'exam' = 'review',
-) {
-  if (problemIds.length === 0 || startingExperience.value) return
-  startingExperience.value = experience
-  if (fromDetail) detailError.value = ''
-  else errorMessage.value = ''
-  let sessionCreated = false
-  try {
-    if (!isTauri() && import.meta.env.DEV && route.query.preview === 'library') {
-      await router.push({
-        name: 'review',
-        query: { preview: experience === 'exam' ? 'exam-answering' : 'manual-review' },
-      })
-      selectedProblemIds.value = []
-      return
-    }
-    const result = normalizeAppResult(experience === 'exam'
-      ? await commands.reviewExamStart({ problemIds })
-      : await commands.reviewManualStart({ problemIds }))
-    if (!result.ok) {
-      if (fromDetail) detailError.value = result.error.userMessage
-      else errorMessage.value = result.error.userMessage
-      return
-    }
-    sessionCreated = true
-    if (!fromDetail) selectedProblemIds.value = []
-    await router.push({ name: 'review' })
-  }
-  catch {
-    const message = sessionCreated
-      ? `${experience === 'exam' ? '模拟考试' : '训练卡组'}已安全保存，可从侧边栏“训练室”继续。`
-      : `${experience === 'exam' ? '模拟考试' : '训练卡组'}没有创建成功，请保持当前选择并稍后重试。`
-    if (fromDetail) detailError.value = message
-    else errorMessage.value = message
-  }
-  finally {
-    startingExperience.value = null
-  }
-}
-
-async function changeBatchStatus(targetStatus: ProblemStatusFilter) {
-  if (selectedProblemIds.value.length === 0) return
-  errorMessage.value = ''
-  try {
-    const result = normalizeAppResult(await commands.problemChangeStatus({
-      problemIds: selectedProblemIds.value,
-      targetStatus,
-    }))
-    if (!result.ok) {
-      errorMessage.value = result.error.userMessage
-      return
-    }
-    syncController?.scheduleMutation()
-    selectedProblemIds.value = []
-    await refresh()
-  }
-  catch {
-    errorMessage.value = '批量操作没有完成，请稍后重试。'
-  }
-}
-
 onMounted(refresh)
 onBeforeUnmount(() => {
+  viewActive = false
   if (searchTimer !== undefined) window.clearTimeout(searchTimer)
 })
 </script>
@@ -280,6 +275,7 @@ onBeforeUnmount(() => {
     :problems="problems"
     :selected-problem-ids="selectedProblemIds"
     :starting-experience="startingExperience"
+    :changing-batch-status="changingBatchStatus"
     :error-message="errorMessage"
     @capture="router.push({ name: 'inbox' })"
     @status-change="changeStatus"
@@ -295,11 +291,13 @@ onBeforeUnmount(() => {
   <ProblemDetailDrawer
     v-if="detailOpen"
     :detail="detail"
-    :loading="detailLoading"
+    :loading="detailLoading && !detail"
     :saving="detailSaving || Boolean(startingExperience)"
     :error-message="detailError"
     :previous-problem-id="previousProblemId"
     :next-problem-id="nextProblemId"
+    :register-navigation="registerDetailNavigation"
+    :register-context-transition="workspaceTransitionGuard?.register"
     @close="closeDetail"
     @train="trainProblem"
     @update="updateProblem"

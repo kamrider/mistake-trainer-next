@@ -19,6 +19,9 @@ export const commands = {
 	ocrComponentInstall: (componentId: OcrComponentId) => typedError<AppResult<OcrComponentStatus>, null>(__TAURI_INVOKE("ocr_component_install", { componentId })),
 	ocrComponentRemove: (componentId: OcrComponentId) => typedError<AppResult<OcrComponentStatus>, null>(__TAURI_INVOKE("ocr_component_remove", { componentId })),
 	systemStatus: () => __TAURI_INVOKE<AppResult<SystemStatus>>("system_status"),
+	windowsUpdateStatus: () => typedError<AppResult<WindowsUpdateStatus>, null>(__TAURI_INVOKE("windows_update_status")),
+	windowsUpdateCheck: () => typedError<AppResult<WindowsUpdateCheckReport>, null>(__TAURI_INVOKE("windows_update_check")),
+	windowsUpdateInstall: (expectedVersion: string) => typedError<AppResult<WindowsUpdateInstallReceipt>, null>(__TAURI_INVOKE("windows_update_install", { expectedVersion })),
 	profileList: () => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_list"),
 	profileCreate: (input: ProfileNameInput) => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_create", { input }),
 	profileRename: (input: ProfileRenameInput) => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_rename", { input }),
@@ -75,6 +78,7 @@ export const commands = {
 	captureItemMove: (input: CaptureItemMoveInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_item_move", { input }),
 	captureItemStageRole: (input: CaptureItemStageRoleInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_item_stage_role", { input }),
 	captureCardMerge: (input: CaptureCardMergeInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_card_merge", { input }),
+	capturePairSuggestionsApply: (input: CapturePairSuggestionsApplyInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_pair_suggestions_apply", { input }),
 	captureDraftDelete: (batchId: string, expectedRevision: number, draftId: string) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_draft_delete", { batchId, expectedRevision, draftId }),
 	captureDraftUpdate: (input: CaptureDraftUpdateInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_draft_update", { input }),
 	captureCommitReady: (batchId: string, expectedRevision: number) => __TAURI_INVOKE<AppResult<CaptureCommitReport>>("capture_commit_ready", { batchId, expectedRevision }),
@@ -157,6 +161,7 @@ export type CaptureBatchDetail = {
 	items: CaptureItemSummary[],
 	drafts: CaptureDraftSummary[],
 	unassignedItemIds: string[],
+	pairSuggestions: CapturePairSuggestionSummary[],
 };
 
 export type CaptureBatchState = "collecting" | "organizing" | "completed";
@@ -343,6 +348,19 @@ export type CaptureLayoutInput = {
 
 export type CaptureLayoutMode = "alternating" | "split" | "questions_only" | "manual";
 
+export type CapturePairSuggestionSummary = {
+	id: string,
+	questionItemIds: string[],
+	answerItemIds: string[],
+	confidenceBasisPoints: number,
+};
+
+export type CapturePairSuggestionsApplyInput = {
+	batchId: string,
+	expectedRevision: number,
+	pairIds: string[],
+};
+
 export type CaptureRecognitionApplyInput = {
 	batchId: string,
 	jobId: string,
@@ -355,6 +373,7 @@ export type CaptureRecognitionApplyReport = {
 	appliedSuggestionCount: number,
 	createdDraftCount: number,
 	createdItemCount: number,
+	pairSuggestionCount: number,
 	unmatchedAnswerCount: number,
 	staleSuggestionCount: number,
 	detail: CaptureBatchDetail,
@@ -973,6 +992,22 @@ export type WindowsCompatibilityStatus = {
 };
 
 export type WindowsSupportLevel = "supported" | "extended" | "unsupported";
+
+export type WindowsUpdateCheckReport = {
+	available: boolean,
+	currentVersion: string,
+	version: string | null,
+	publishedAt: string | null,
+};
+
+export type WindowsUpdateInstallReceipt = {
+	acceptedVersion: string,
+};
+
+export type WindowsUpdateStatus = {
+	enabled: boolean,
+	currentVersion: string,
+};
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

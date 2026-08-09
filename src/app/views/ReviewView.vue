@@ -1,16 +1,19 @@
 <script setup lang="ts">
 import { isTauri } from '@tauri-apps/api/core'
-import { computed, inject, onMounted, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { computed, inject, onMounted, ref, watch } from 'vue'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import ReviewRoom from '@/modules/review/components/ReviewRoom.vue'
 import SchulteFocus from '@/modules/review/components/SchulteFocus.vue'
 import { useReviewClock } from '@/modules/review/composables/useReviewClock'
 import { mapSimpleRating, type FsrsRating, type SimpleRating } from '@/modules/review/domain/rating'
 import { commands, type ProblemDetail, type ReviewFocusState, type ReviewQueueOverview } from '@/shared/api/bindings'
 import { normalizeAppResult } from '@/shared/api/normalize-result'
+import { useDurableActionGuard } from '@/app/composables/useDurableActionGuard'
 import { syncControllerKey } from '@/app/sync-controller'
+import { workspaceTransitionGuardKey } from '@/app/workspace-transition-guard'
 
 const syncController = inject(syncControllerKey, undefined)
+const workspaceTransitionGuard = inject(workspaceTransitionGuardKey, undefined)
 const route = useRoute()
 const router = useRouter()
 const overview = ref<ReviewQueueOverview>({
@@ -40,6 +43,20 @@ const examCorrectCount = ref(0)
 const examWrongCount = ref(0)
 const errorMessage = ref('')
 const clock = useReviewClock()
+const durableActionBusy = computed(() => submitting.value || transitioning.value || focusBusy.value)
+const durableTransitionBlockedMessage = '正在保存训练进度，请稍候再离开。'
+const { attemptLeave: attemptDurableTransition } = useDurableActionGuard({
+  busy: () => durableActionBusy.value,
+  onBlocked: () => {
+    errorMessage.value = durableTransitionBlockedMessage
+  },
+  ...(workspaceTransitionGuard
+    ? { registerContextTransition: workspaceTransitionGuard.register }
+    : {}),
+})
+watch(durableActionBusy, (busy) => {
+  if (!busy && errorMessage.value === durableTransitionBlockedMessage) errorMessage.value = ''
+})
 
 const queue = computed(() => overview.value.items)
 const currentItem = computed(() => queue.value[currentIndex.value])
@@ -356,6 +373,7 @@ async function skipFocus() {
   }
 }
 
+onBeforeRouteLeave(attemptDurableTransition)
 onMounted(loadQueue)
 </script>
 
@@ -481,7 +499,7 @@ onMounted(loadQueue)
       :time-limit-seconds="currentProblem.timeLimitSeconds"
       :expired="clock.expired.value"
       :resumed="overview.resumed && (isExamAnswering || currentIndex === 0)"
-      :submitting="submitting || transitioning"
+      :submitting="durableActionBusy"
       @reveal="clock.stop"
       @exit="router.push({ name: 'dashboard' })"
       @previous="moveExam(-1)"

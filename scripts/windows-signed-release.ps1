@@ -23,15 +23,20 @@ $requiredEnvironment = @(
   'WINDOWS_CERTIFICATE',
   'WINDOWS_CERTIFICATE_PASSWORD',
   'WINDOWS_CERTIFICATE_THUMBPRINT',
-  'WINDOWS_TIMESTAMP_URL'
+  'WINDOWS_TIMESTAMP_URL',
+  'WINDOWS_UPDATE_ENDPOINT',
+  'WINDOWS_UPDATE_ARTIFACT_BASE_URL',
+  'WINDOWS_UPDATER_PUBLIC_KEY',
+  'TAURI_SIGNING_PRIVATE_KEY',
+  'TAURI_SIGNING_PRIVATE_KEY_PASSWORD'
 )
 foreach ($name in $requiredEnvironment) {
   Assert-Release (-not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) "missing $name."
 }
 
 Assert-Release (-not [string]::IsNullOrWhiteSpace($ReleaseTag)) 'release tag is missing.'
-$releaseVersion = $ReleaseTag.TrimStart('v')
-Assert-Release ($releaseVersion -match '^\d+\.\d+\.\d+([+-][0-9A-Za-z.-]+)?$') "tag '$ReleaseTag' is not a supported semantic version."
+Assert-Release ($ReleaseTag -match '^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:(?:0|[1-9]\d*)|(?:\d*[A-Za-z-][0-9A-Za-z-]*))(?:\.(?:(?:0|[1-9]\d*)|(?:\d*[A-Za-z-][0-9A-Za-z-]*)))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$') "tag '$ReleaseTag' must use exact vX.Y.Z semantic-version syntax."
+$releaseVersion = $ReleaseTag.Substring(1)
 $targetTriple = if ($Architecture -eq 'arm64') { 'aarch64-pc-windows-msvc' } else { 'x86_64-pc-windows-msvc' }
 $selfCheckArchitecture = if ($Architecture -eq 'arm64') { 'arm64' } else { 'x86_64' }
 
@@ -49,6 +54,23 @@ Assert-Release ($cargoVersionMatch.Groups[1].Value -eq $releaseVersion) "Cargo.t
 $timestampUri = $null
 Assert-Release ([uri]::TryCreate($env:WINDOWS_TIMESTAMP_URL, [System.UriKind]::Absolute, [ref]$timestampUri)) 'timestamp URL is invalid.'
 Assert-Release ($timestampUri.Scheme -eq 'https') 'timestamp URL must use HTTPS.'
+
+$updateEndpoint = $null
+Assert-Release ([uri]::TryCreate($env:WINDOWS_UPDATE_ENDPOINT, [System.UriKind]::Absolute, [ref]$updateEndpoint)) 'update endpoint is invalid.'
+Assert-Release ($updateEndpoint.Scheme -eq 'https') 'update endpoint must use HTTPS.'
+Assert-Release ([string]::IsNullOrEmpty($updateEndpoint.UserInfo)) 'update endpoint must not contain credentials.'
+Assert-Release ([string]::IsNullOrEmpty($updateEndpoint.Fragment)) 'update endpoint must not contain a fragment.'
+
+$artifactBaseUri = $null
+Assert-Release ([uri]::TryCreate($env:WINDOWS_UPDATE_ARTIFACT_BASE_URL, [System.UriKind]::Absolute, [ref]$artifactBaseUri)) 'update artifact base URL is invalid.'
+Assert-Release ($artifactBaseUri.Scheme -eq 'https') 'update artifact base URL must use HTTPS.'
+Assert-Release ([string]::IsNullOrEmpty($artifactBaseUri.UserInfo)) 'update artifact base URL must not contain credentials.'
+Assert-Release ([string]::IsNullOrEmpty($artifactBaseUri.Query)) 'update artifact base URL must not contain a query.'
+Assert-Release ([string]::IsNullOrEmpty($artifactBaseUri.Fragment)) 'update artifact base URL must not contain a fragment.'
+
+$updaterPublicKey = $env:WINDOWS_UPDATER_PUBLIC_KEY.Trim()
+Assert-Release ($updaterPublicKey.Length -ge 32) 'updater public key is unexpectedly short.'
+Assert-Release ($updaterPublicKey.Length -le 16384) 'updater public key is unexpectedly large.'
 
 $expectedThumbprint = Normalize-Thumbprint $env:WINDOWS_CERTIFICATE_THUMBPRINT
 Assert-Release ($expectedThumbprint -match '^[0-9A-F]{40,64}$') 'certificate thumbprint has an invalid shape.'
@@ -84,6 +106,7 @@ try {
   Assert-Release ($signingCertificate.HasPrivateKey) 'expected signing certificate has no private key.'
   $overrideJson = @{
     bundle = @{
+      createUpdaterArtifacts = $true
       windows = @{
         certificateThumbprint = $expectedThumbprint
         digestAlgorithm = 'sha256'
@@ -91,7 +114,16 @@ try {
         tsp = $true
       }
     }
-  } | ConvertTo-Json -Depth 5
+    plugins = @{
+      updater = @{
+        pubkey = $updaterPublicKey
+        endpoints = @($updateEndpoint.AbsoluteUri)
+        windows = @{
+          installMode = 'passive'
+        }
+      }
+    }
+  } | ConvertTo-Json -Depth 7
   [System.IO.File]::WriteAllText(
     $overridePath,
     $overrideJson,
@@ -116,6 +148,11 @@ try {
   Assert-Release (Test-Path -LiteralPath $applicationExecutable -PathType Leaf) 'release application executable is missing.'
   Assert-Release ($installers.Count -eq 1) "expected one NSIS installer; found $($installers.Count)."
   Assert-Release ($installers[0].Name -match "_$Architecture-setup\.exe$") "installer '$($installers[0].Name)' does not match requested architecture '$Architecture'."
+  $updaterSignaturePath = "$($installers[0].FullName).sig"
+  Assert-Release (Test-Path -LiteralPath $updaterSignaturePath -PathType Leaf) 'Tauri updater signature is missing.'
+  $updaterSignature = (Get-Content -LiteralPath $updaterSignaturePath -Raw).Trim()
+  Assert-Release (-not [string]::IsNullOrWhiteSpace($updaterSignature)) 'Tauri updater signature is empty.'
+  Assert-Release ($updaterSignature.Length -le 16384) 'Tauri updater signature is unexpectedly large.'
 
   foreach ($artifact in @((Get-Item -LiteralPath $applicationExecutable), $installers[0])) {
     $signature = Get-AuthenticodeSignature -LiteralPath $artifact.FullName
@@ -132,6 +169,7 @@ try {
   $checksumPath = "$($installers[0].FullName).sha256"
   "$hash  $($installers[0].Name)" | Set-Content -LiteralPath $checksumPath -Encoding ascii
   Write-Output "Signed Windows release verified: $($installers[0].FullName)"
+  Write-Output "Updater signature verified: $updaterSignaturePath"
   Write-Output "Checksum: $checksumPath"
 }
 finally {

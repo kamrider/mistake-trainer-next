@@ -303,7 +303,7 @@ const isStorageError = computed(() => props.phase === 'error' && props.reason ==
 .access-eyebrow {
   margin: 0 0 8px;
   color: var(--cinnabar);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: .16em;
   text-transform: uppercase;
@@ -392,7 +392,7 @@ h1 {
 .access-footnote {
   margin: 22px 0 0;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.6;
 }
 

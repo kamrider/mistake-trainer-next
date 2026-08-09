@@ -31,4 +31,21 @@ describe('LegacyImportDialog', () => {
     await userEvent.click(confirm)
     expect(view.emitted().confirm).toHaveLength(1)
   })
+
+  it('keeps focus inside the dialog when busy disables every control', () => {
+    render(LegacyImportDialog, {
+      props: { mode: 'import', busy: true, memberCount: 2, problemCount: 18 },
+    })
+    const dialog = screen.getByRole('dialog')
+    const tab = new KeyboardEvent('keydown', {
+      key: 'Tab',
+      bubbles: true,
+      cancelable: true,
+    })
+
+    dialog.dispatchEvent(tab)
+
+    expect(tab.defaultPrevented).toBe(true)
+    expect(dialog).toHaveFocus()
+  })
 })

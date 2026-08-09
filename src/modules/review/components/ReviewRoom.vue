@@ -35,8 +35,11 @@ const advanced = ref(false)
 const cardDirection = ref<'forward' | 'backward'>('forward')
 const headingElement = ref<HTMLElement>()
 const lightbox = ref<{ images: string[]; index: number; label: string }>()
+type HeadingFocusRequest = { stageKey: string; previousActive: Element | null }
+const pendingHeadingFocus = ref<HeadingFocusRequest>()
 const isExamAnswering = computed(() => props.mode === 'exam' && props.examPhase === 'answering')
 const isExamGrading = computed(() => props.mode === 'exam' && props.examPhase === 'grading')
+const stageKey = computed(() => `${props.current}-${props.examPhase || 'review'}`)
 const progress = computed(() => {
   if (props.total <= 0) return '0%'
   return `${Math.round((Math.min(props.current, props.total) / props.total) * 100)}%`
@@ -55,23 +58,38 @@ const cardTransitionName = computed(() => cardDirection.value === 'backward'
   ? 'card-shift-backward'
   : 'card-shift-forward')
 
-function focusHeadingIfIdle() {
-  const previousActive = document.activeElement
-  void nextTick(() => {
-    const active = document.activeElement
-    if (
-      active !== previousActive
-      && active !== document.body
-      && active !== document.documentElement
-    ) return
-    headingElement.value?.focus({ preventScroll: true })
-  })
+function resolveHeadingFocus() {
+  const request = pendingHeadingFocus.value
+  const heading = headingElement.value
+  if (!request || !heading) return
+  const mountedStageKey = heading.closest<HTMLElement>('[data-review-stage-key]')?.dataset.reviewStageKey
+  if (mountedStageKey !== request.stageKey) return
+
+  const active = document.activeElement
+  if (
+    active !== request.previousActive
+    && active !== document.body
+    && active !== document.documentElement
+  ) {
+    pendingHeadingFocus.value = undefined
+    return
+  }
+  heading.focus({ preventScroll: true })
+  pendingHeadingFocus.value = undefined
+}
+
+function requestHeadingFocus() {
+  pendingHeadingFocus.value = {
+    stageKey: stageKey.value,
+    previousActive: document.activeElement,
+  }
+  void nextTick(resolveHeadingFocus)
 }
 
 watch([() => props.current, () => props.examPhase], () => {
   revealed.value = isExamGrading.value
   lightbox.value = undefined
-  focusHeadingIfIdle()
+  requestHeadingFocus()
 })
 
 function revealAnswer() {
@@ -119,6 +137,7 @@ function handleShortcut(event: KeyboardEvent) {
   if (isEditableTarget(event.target)) return
   if (event.key === 'Escape') {
     event.preventDefault()
+    if (props.submitting) return
     emit('exit')
     return
   }
@@ -175,7 +194,7 @@ function handleShortcut(event: KeyboardEvent) {
 
 onMounted(() => {
   window.addEventListener('keydown', handleShortcut)
-  focusHeadingIfIdle()
+  requestHeadingFocus()
 })
 onBeforeUnmount(() => window.removeEventListener('keydown', handleShortcut))
 </script>
@@ -189,7 +208,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleShortcut))
       <button
         class="icon-action"
         type="button"
-        aria-label="退出训练"
+        :aria-label="submitting ? '正在保存训练进度' : '退出训练'"
+        :disabled="submitting"
         @click="emit('exit')"
       >
         <ArrowLeft :size="19" />
@@ -224,10 +244,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleShortcut))
     <Transition
       :name="cardTransitionName"
       mode="out-in"
+      @after-enter="resolveHeadingFocus"
     >
       <section
-        :key="`${current}-${examPhase || 'review'}`"
+        :key="stageKey"
         class="review-stage"
+        :data-review-stage-key="stageKey"
       >
         <p class="stage-kicker">
           <Sparkles
@@ -491,7 +513,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleShortcut))
 .review-header {
   display: grid;
   max-width: 1100px;
-  grid-template-columns: 42px minmax(180px, 1fr) auto;
+  grid-template-columns: 44px minmax(180px, 1fr) auto;
   gap: 18px;
   align-items: center;
   margin: 0 auto 36px;
@@ -499,8 +521,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleShortcut))
 
 .icon-action {
   display: grid;
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   place-items: center;
   color: var(--ink);
   border: 1px solid var(--line);
@@ -509,7 +531,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleShortcut))
   cursor: pointer;
   transition: transform var(--motion-feedback) var(--ease-standard), background var(--motion-standard) var(--ease-standard);
 }
-.icon-action:hover { background: var(--paper-raised); transform: translateX(-2px); }
+.icon-action:hover:not(:disabled) { background: var(--paper-raised); transform: translateX(-2px); }
+.icon-action:disabled { cursor: wait; opacity: .52; }
 
 .review-progress { display: flex; gap: 14px; align-items: center; color: var(--ink-muted); font-family: var(--font-serif); font-size: 13px; }
 .progress-track { overflow: hidden; height: 5px; flex: 1; border-radius: 999px; background: var(--sand); }
@@ -539,12 +562,12 @@ h1 { margin: 10px 0 26px; font-size: clamp(30px, 4vw, 46px); font-weight: 650; l
 }
 .problem-paper p,
 .answer-paper p { margin: 0; font-family: var(--font-serif); font-size: clamp(20px, 2.6vw, 28px); line-height: 1.8; }
-.paper-label { position: absolute; top: 0; left: 0; padding: 7px 14px; color: var(--ink-muted); border-radius: 0 0 11px; background: var(--sand); font-size: 11px; font-weight: 760; letter-spacing: .12em; }
+.paper-label { position: absolute; top: 0; left: 0; padding: 7px 14px; color: var(--ink-muted); border-radius: 0 0 11px; background: var(--sand); font-size: 12px; font-weight: 760; letter-spacing: .12em; }
 
 .review-images { display: grid; gap: 14px; }
 .media-button { position: relative; overflow: hidden; width: 100%; padding: 0; border: 1px solid var(--line); border-radius: 4px 14px 14px; background: white; cursor: zoom-in; }
 .media-button img { display: block; width: 100%; max-height: 66vh; object-fit: contain; }
-.media-button span { position: absolute; right: 10px; bottom: 10px; display: inline-flex; gap: 6px; align-items: center; padding: 7px 10px; color: white; border-radius: 999px; background: rgba(33, 51, 45, .86); font-size: 11px; font-weight: 720; opacity: 0; transform: translateY(4px); transition: opacity var(--motion-standard) var(--ease-standard), transform var(--motion-standard) var(--ease-standard); }
+.media-button span { position: absolute; right: 10px; bottom: 10px; display: inline-flex; gap: 6px; align-items: center; padding: 7px 10px; color: white; border-radius: 999px; background: rgba(33, 51, 45, .86); font-size: 12px; font-weight: 720; opacity: 0; transform: translateY(4px); transition: opacity var(--motion-standard) var(--ease-standard), transform var(--motion-standard) var(--ease-standard); }
 .media-button:hover span,
 .media-button:focus-visible span { opacity: 1; transform: translateY(0); }
 
@@ -562,7 +585,7 @@ h1 { margin: 10px 0 26px; font-size: clamp(30px, 4vw, 46px); font-weight: 650; l
 .begin-grading-action { color: var(--paper); border-color: var(--cinnabar); background: var(--cinnabar); box-shadow: 0 10px 24px rgba(185,88,63,.16); }
 .begin-grading-action:hover:not(:disabled) { background: #a84b35; }
 
-kbd { min-width: 24px; padding: 2px 6px; color: inherit; border: 1px solid currentColor; border-radius: 6px; font-family: inherit; font-size: 10px; line-height: 1.35; opacity: .62; }
+kbd { min-width: 24px; padding: 2px 6px; color: inherit; border: 1px solid currentColor; border-radius: 6px; font-family: inherit; font-size: 12px; line-height: 1.35; opacity: .62; }
 .answer-area { margin-top: 18px; }
 .answer-paper { min-height: 140px; border-color: rgba(185, 88, 63, .28); background: #fbf5ea; box-shadow: 0 14px 34px rgba(91, 61, 42, .1); }
 .answer-paper .paper-label { color: #8b4634; background: #efd8cd; }
@@ -570,7 +593,7 @@ kbd { min-width: 24px; padding: 2px 6px; color: inherit; border: 1px solid curre
 .rating-heading { display: flex; gap: 18px; align-items: flex-end; justify-content: space-between; max-width: 680px; margin: 24px auto 14px; text-align: left; }
 .rating-heading p { margin: 0; color: var(--ink); font-weight: 760; }
 .rating-heading small { color: var(--ink-muted); }
-.mode-toggle { padding: 5px 0; color: var(--green-deep); border: 0; border-bottom: 1px solid currentColor; background: transparent; cursor: pointer; font-size: 12px; white-space: nowrap; }
+.mode-toggle { min-height: 44px; padding: 5px 0; color: var(--green-deep); border: 0; border-bottom: 1px solid currentColor; background: transparent; cursor: pointer; font-size: 12px; white-space: nowrap; }
 
 .rating-actions { display: grid; max-width: 480px; grid-template-columns: 1fr 1fr; gap: 12px; margin: 0 auto; }
 .rating-actions button { display: inline-flex; gap: 9px; align-items: center; justify-content: center; min-height: 50px; padding: 0 16px; border-radius: 999px; cursor: pointer; font-weight: 740; transition: transform var(--motion-feedback) var(--ease-standard), background var(--motion-standard) var(--ease-standard); }
@@ -600,7 +623,7 @@ button:focus-visible { outline: 3px solid rgba(185, 88, 63, .32); outline-offset
 
 @media (max-width: 780px) {
   .review-room { padding: 18px 18px 48px; }
-  .review-header { grid-template-columns: 42px 1fr; margin-bottom: 26px; }
+  .review-header { grid-template-columns: 44px 1fr; margin-bottom: 26px; }
   .header-chips { grid-column: 1 / -1; justify-content: flex-start; overflow-x: auto; }
   .problem-paper,
   .answer-paper { padding: 36px 22px 24px; }

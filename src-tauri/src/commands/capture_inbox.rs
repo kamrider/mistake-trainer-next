@@ -9,17 +9,18 @@ use crate::{
     modules::{
         capture::{CaptureFileReadError, read_capture_file},
         capture_inbox::{
-            ApplyCaptureCrop, ApplyCaptureLayout, CaptureBatchDetail, CaptureBatchState,
-            CaptureBatchSummary, CaptureCommitReport, CaptureCropApplyReport, CaptureCropRecipe,
-            CaptureInboxError, CaptureItemPreview, CaptureItemSummary, CaptureLayoutMode,
-            CreateCaptureBatch, IngestCaptureItem, MergeCaptureCard, MoveCaptureItem,
-            RevertCaptureCrop, StageCaptureItemRole, UpdateCaptureDraft, apply_capture_crop,
-            apply_capture_layout, assign_capture_batch_subject, commit_ready_capture_drafts,
-            create_capture_batch, delete_capture_draft, discard_capture_batch,
-            get_capture_batch_detail, get_capture_crop_source_preview, get_capture_item_preview,
-            ingest_capture_item, list_capture_batches, merge_capture_card, move_capture_item,
-            remove_capture_item, revert_capture_crop, stage_capture_item_role,
-            update_capture_batch, update_capture_draft,
+            ApplyCaptureCrop, ApplyCaptureLayout, ApplyCapturePairSuggestions, CaptureBatchDetail,
+            CaptureBatchState, CaptureBatchSummary, CaptureCommitReport, CaptureCropApplyReport,
+            CaptureCropRecipe, CaptureInboxError, CaptureItemPreview, CaptureItemSummary,
+            CaptureLayoutMode, CreateCaptureBatch, IngestCaptureItem, MergeCaptureCard,
+            MoveCaptureItem, RevertCaptureCrop, StageCaptureItemRole, UpdateCaptureDraft,
+            apply_capture_crop, apply_capture_layout, apply_capture_pair_suggestions,
+            assign_capture_batch_subject, commit_ready_capture_drafts, create_capture_batch,
+            delete_capture_draft, discard_capture_batch, get_capture_batch_detail,
+            get_capture_crop_source_preview, get_capture_item_preview, ingest_capture_item,
+            list_capture_batches, merge_capture_card, move_capture_item, remove_capture_item,
+            revert_capture_crop, stage_capture_item_role, update_capture_batch,
+            update_capture_draft,
         },
     },
 };
@@ -113,6 +114,14 @@ pub struct CaptureCardMergeInput {
     pub target_draft_id: Option<String>,
     pub item_ids: Vec<String>,
     pub new_draft_subject: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CapturePairSuggestionsApplyInput {
+    pub batch_id: String,
+    pub expected_revision: u32,
+    pub pair_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Type)]
@@ -672,6 +681,34 @@ pub fn capture_card_merge(
             target_draft_id: input.target_draft_id,
             item_ids: input.item_ids,
             new_draft_subject: input.new_draft_subject,
+            now_utc_ms: current_utc_millis(),
+        },
+    ));
+    emit_batch_changed(&app, &batch_id);
+    result
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn capture_pair_suggestions_apply(
+    app: AppHandle,
+    state: State<'_, LibraryRuntime>,
+    input: CapturePairSuggestionsApplyInput,
+) -> AppResult<CaptureBatchDetail> {
+    let batch_id = input.batch_id.clone();
+    let profile = state.active_profile();
+    let mut connection = match state.connection.lock() {
+        Ok(connection) => connection,
+        Err(_) => return capture_error("library_lock_poisoned", None),
+    };
+    let result = result_or_error(apply_capture_pair_suggestions(
+        &mut connection,
+        ApplyCapturePairSuggestions {
+            account_id: state.account_id().to_owned(),
+            profile_id: profile.id,
+            batch_id: input.batch_id,
+            expected_revision: input.expected_revision,
+            pair_ids: input.pair_ids,
             now_utc_ms: current_utc_millis(),
         },
     ));

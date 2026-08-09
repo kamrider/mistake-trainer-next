@@ -141,6 +141,22 @@ class AnchorAssemblyTests(unittest.TestCase):
         self.assertAlmostEqual(regions[1].rect.y, (360 - 10.5) / 700)
         self.assertAlmostEqual(regions[2].rect.y, (500 - 10.5) / 700)
 
+    def test_formula_numbers_do_not_break_a_consecutive_answer_sequence(self) -> None:
+        boxes = (
+            box(30, 80, 700, 120, "5. first answer", 0.98),
+            box(30, 240, 700, 280, "6. second answer", 0.97),
+            box(45, 360, 60, 385, "2", 0.99),
+            box(30, 500, 700, 540, "7. third answer", 0.98),
+            box(45, 610, 60, 635, "5", 0.99),
+        )
+
+        regions = suggest_from_ocr_boxes(1_000, 700, boxes)
+
+        self.assertEqual(len(regions), 3)
+        self.assertAlmostEqual(regions[0].rect.y, (80 - 10.5) / 700)
+        self.assertAlmostEqual(regions[1].rect.y, (240 - 10.5) / 700)
+        self.assertAlmostEqual(regions[2].rect.y, (500 - 10.5) / 700)
+
     def test_wide_header_does_not_cancel_a_strong_two_column_question_sequence(self) -> None:
         boxes = (
             box(40, 100, 420, 140, "1. left", 0.98),

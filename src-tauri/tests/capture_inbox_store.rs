@@ -159,6 +159,27 @@ fn crop_collecting_requires_internal_permission() {
     .expect_err("desktop crop must remain organizing-only");
     assert!(matches!(desktop_error, CaptureInboxError::InvalidState));
 
+    let stale_desktop_error = apply_capture_crop(
+        &mut connection,
+        &library.blob_root(),
+        &ASSET_KEY,
+        ApplyCaptureCrop {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch.id.clone(),
+            expected_revision: revision.saturating_add(1),
+            item_id: source.id.clone(),
+            recipes: vec![crop_recipe(0.0, 0.5)],
+            allow_collecting: false,
+            now_utc_ms: 35,
+        },
+    )
+    .expect_err("invalid crop state must take precedence over a stale revision");
+    assert!(matches!(
+        stale_desktop_error,
+        CaptureInboxError::InvalidState
+    ));
+
     let applied = apply_capture_crop(
         &mut connection,
         &library.blob_root(),
@@ -468,6 +489,58 @@ fn ingest(
         },
     )
     .expect("ingest item")
+}
+
+#[test]
+fn transaction_begin_failure_cleans_the_staged_capture_asset() {
+    let library = TestLibrary::new();
+    let mut connection = library.open();
+    let batch = create_batch(
+        &library,
+        &mut connection,
+        "math",
+        CaptureBatchState::Collecting,
+    );
+    connection
+        .execute_batch("BEGIN IMMEDIATE")
+        .expect("hold an outer transaction");
+
+    let error = ingest_capture_item(
+        &mut connection,
+        &library.blob_root(),
+        &ASSET_KEY,
+        IngestCaptureItem {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch.id,
+            client_upload_id: "nested-transaction".to_owned(),
+            source_name: "nested.png".to_owned(),
+            source_sequence: None,
+            bytes: png(44),
+            now_utc_ms: 20,
+        },
+    )
+    .expect_err("nested transaction must fail after staging");
+    assert!(matches!(error, CaptureInboxError::Database(_)));
+    connection
+        .execute_batch("ROLLBACK")
+        .expect("release outer transaction");
+
+    let staging_root = library.blob_root().join(".staging");
+    assert!(staging_root.exists());
+    assert_eq!(
+        std::fs::read_dir(staging_root)
+            .expect("read staging directory")
+            .count(),
+        0
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM assets", [], |row| row
+                .get::<_, i64>(0))
+            .expect("count assets"),
+        0
+    );
 }
 
 fn organize(
@@ -1189,6 +1262,30 @@ fn ready_drafts_commit_atomically_and_incomplete_drafts_remain() {
         after, before,
         "failed commit must roll back every draft and problem"
     );
+}
+
+#[test]
+fn committing_requires_organizing_before_revision_match() {
+    let library = TestLibrary::new();
+    let mut connection = library.open();
+    let batch = create_batch(
+        &library,
+        &mut connection,
+        "math",
+        CaptureBatchState::Collecting,
+    );
+
+    let error = commit_ready_capture_drafts(
+        &mut connection,
+        ACCOUNT,
+        &library.profile_id,
+        &batch.id,
+        batch.revision.saturating_add(1),
+        20,
+    )
+    .expect_err("collecting state must take precedence over stale revision");
+
+    assert!(matches!(error, CaptureInboxError::InvalidState));
 }
 
 #[test]

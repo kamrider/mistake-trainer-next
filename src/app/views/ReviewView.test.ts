@@ -1,9 +1,14 @@
 import { render, screen, waitFor } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
-import { createMemoryHistory } from 'vue-router'
+import { createMemoryHistory, RouterView } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createAppRouter } from '../router'
 import { syncControllerKey } from '../sync-controller'
+import {
+  createWorkspaceTransitionGuard,
+  workspaceTransitionGuardKey,
+  type WorkspaceTransitionGuard,
+} from '../workspace-transition-guard'
 import ReviewView from './ReviewView.vue'
 
 const api = vi.hoisted(() => ({
@@ -48,11 +53,29 @@ const syncController = {
   dispose: vi.fn(),
 }
 
-async function renderView() {
+async function renderView(workspaceTransitionGuard?: WorkspaceTransitionGuard) {
   const router = createAppRouter(createMemoryHistory())
   await router.push('/review')
   await router.isReady()
-  render(ReviewView, {
+  const view = render(ReviewView, {
+    global: {
+      plugins: [router],
+      provide: {
+        [syncControllerKey as symbol]: syncController,
+        ...(workspaceTransitionGuard
+          ? { [workspaceTransitionGuardKey as symbol]: workspaceTransitionGuard }
+          : {}),
+      },
+    },
+  })
+  return { router, view }
+}
+
+async function renderRoutedView() {
+  const router = createAppRouter(createMemoryHistory())
+  await router.push('/review')
+  await router.isReady()
+  render(RouterView, {
     global: {
       plugins: [router],
       provide: { [syncControllerKey as symbol]: syncController },
@@ -92,6 +115,65 @@ describe('ReviewView', () => {
     expect(input.durationMs).toBeLessThanOrEqual(86_400_000)
     expect(await screen.findByRole('heading', { name: '把今天该记住的，认真看完了。' })).toBeVisible()
     expect(syncController.scheduleMutation).toHaveBeenCalledOnce()
+  })
+
+  it('blocks route changes until an in-flight rating has been persisted', async () => {
+    const user = userEvent.setup()
+    let resolveSubmit: (value: unknown) => void = () => undefined
+    api.reviewSubmit.mockImplementationOnce(() => new Promise(resolve => { resolveSubmit = resolve }))
+    const router = await renderRoutedView()
+
+    await user.click(await screen.findByRole('button', { name: '显示答案' }))
+    await user.click(screen.getByRole('button', { name: '记住了' }))
+    await waitFor(() => expect(api.reviewSubmit).toHaveBeenCalledOnce())
+    await router.push({ name: 'dashboard' })
+
+    expect(router.currentRoute.value.name).toBe('review')
+    expect(await screen.findByRole('alert')).toHaveTextContent('正在保存训练进度，请稍候再离开。')
+
+    resolveSubmit({ ok: true, data: {
+      eventId: 'event-pending', problemId: 'problem-2', rating: 'good', dueAtUtcMs: 2,
+      stability: 1, difficulty: 5, algorithmVersion: 'fsrs-6.6.1', parameterVersion: 'default-6.6.1',
+      focus: null,
+    } })
+    expect(await screen.findByRole('heading', { name: '把今天该记住的，认真看完了。' })).toBeVisible()
+
+    await router.push({ name: 'dashboard' })
+    expect(router.currentRoute.value.name).toBe('dashboard')
+  })
+
+  it('blocks workspace transitions while review progress is being persisted and unregisters on unmount', async () => {
+    const user = userEvent.setup()
+    let resolveSubmit: (value: unknown) => void = () => undefined
+    api.reviewSubmit.mockImplementationOnce(() => new Promise(resolve => { resolveSubmit = resolve }))
+    const workspaceTransitionGuard = createWorkspaceTransitionGuard()
+    const { view } = await renderView(workspaceTransitionGuard)
+
+    const idleUnload = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(idleUnload)
+    expect(idleUnload.defaultPrevented).toBe(false)
+
+    await user.click(await screen.findByRole('button', { name: '显示答案' }))
+    await user.click(screen.getByRole('button', { name: '记住了' }))
+    await waitFor(() => expect(api.reviewSubmit).toHaveBeenCalledOnce())
+
+    await expect(workspaceTransitionGuard.attempt()).resolves.toBe(false)
+    expect(await screen.findByRole('alert')).toHaveTextContent('正在保存训练进度，请稍候再离开。')
+    expect(api.reviewSubmit).toHaveBeenCalledOnce()
+    const busyUnload = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(busyUnload)
+    expect(busyUnload.defaultPrevented).toBe(true)
+
+    view.unmount()
+    await expect(workspaceTransitionGuard.attempt()).resolves.toBe(true)
+    const afterUnmount = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(afterUnmount)
+    expect(afterUnmount.defaultPrevented).toBe(false)
+    resolveSubmit({ ok: true, data: {
+      eventId: 'event-pending', problemId: 'problem-2', rating: 'good', dueAtUtcMs: 2,
+      stability: 1, difficulty: 5, algorithmVersion: 'fsrs-6.6.1', parameterVersion: 'default-6.6.1',
+      focus: null,
+    } })
   })
 
   it('retries a failed queue read without showing fake review content', async () => {

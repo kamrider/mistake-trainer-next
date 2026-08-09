@@ -44,6 +44,26 @@ describe('App', () => {
     })
   })
 
+  it('focuses entered page context without stealing deliberate focus during a real transition', async () => {
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/')
+    await router.isReady()
+    render(App, {
+      global: { plugins: [router], stubs: { transition: false } },
+    })
+
+    await user.click(screen.getByRole('button', { name: '题库' }))
+    await waitFor(() => expect(screen.getByRole('heading', { name: '题库' })).toHaveFocus())
+
+    await user.click(screen.getByRole('button', { name: '设置' }))
+    await waitFor(() => expect(router.currentRoute.value.name).toBe('settings'))
+    const dashboardNavigation = screen.getByRole('button', { name: '训练台' })
+    dashboardNavigation.focus()
+    await screen.findByRole('heading', { name: '设置' })
+    expect(dashboardNavigation).toHaveFocus()
+  })
+
   it('keeps rendering content while cycling through every sidebar page', async () => {
     const user = userEvent.setup()
     const router = createAppRouter(createMemoryHistory())
@@ -83,6 +103,7 @@ describe('App', () => {
   })
 
   it('shows a recoverable message instead of a blank page when a route throws', async () => {
+    const user = userEvent.setup()
     const router = createAppRouter(createMemoryHistory())
     router.addRoute({
       name: 'broken-route',
@@ -97,7 +118,50 @@ describe('App', () => {
     render(App, { global: { plugins: [router] } })
 
     expect(await screen.findByRole('alert')).toHaveTextContent('这个页面暂时打不开')
+    const routeErrorHeading = await screen.findByRole('heading', { name: '这个页面暂时打不开' })
+    await waitFor(() => expect(routeErrorHeading).toHaveFocus())
+    expect(screen.getByRole('button', { name: '重试当前页面' })).toBeVisible()
     expect(screen.getByRole('button', { name: '回到训练台' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '重试当前页面' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('这个页面暂时打不开')
+    expect(router.currentRoute.value.name).toBe('broken-route')
+    await user.click(screen.getByRole('button', { name: '回到训练台' }))
+    await waitFor(() => expect(router.currentRoute.value.name).toBe('dashboard'))
+    error.mockRestore()
+  })
+
+  it('recreates the current route after a transient render failure', async () => {
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory())
+    let instances = 0
+    router.addRoute({
+      name: 'transient-route',
+      path: '/transient-route',
+      component: {
+        setup() {
+          instances += 1
+          if (instances === 1) throw new Error('transient render failure')
+        },
+        template: '<h1>页面已恢复</h1>',
+      },
+      meta: { shellPage: 'settings' },
+    })
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    await router.push('/transient-route')
+    await router.isReady()
+
+    render(App, { global: { plugins: [router] } })
+
+    const fallback = await screen.findByRole('alert')
+    expect(fallback).toHaveTextContent('这个页面暂时打不开')
+    expect(fallback).toHaveTextContent('未保存的页面输入可能需要重新填写')
+    await user.click(screen.getByRole('button', { name: '重试当前页面' }))
+
+    const recoveredHeading = await screen.findByRole('heading', { name: '页面已恢复' })
+    expect(recoveredHeading).toBeVisible()
+    await waitFor(() => expect(recoveredHeading).toHaveFocus())
+    expect(router.currentRoute.value.name).toBe('transient-route')
+    expect(instances).toBe(2)
     error.mockRestore()
   })
 

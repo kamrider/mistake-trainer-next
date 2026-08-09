@@ -1,6 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    if let Some(exit_code) = run_windows_product_check_if_requested() {
+        std::process::exit(exit_code);
+    }
+
     if let Some(exit_code) = run_windows_self_check_if_requested() {
         std::process::exit(exit_code);
     }
@@ -19,14 +23,22 @@ fn main() {
         return;
     }
 
+    let startup_record_root =
+        mistake_trainer_next_lib::modules::startup_safety::default_application_data_root();
+    if let Some(root) = startup_record_root.clone() {
+        mistake_trainer_next_lib::modules::startup_safety::install_panic_recording_hook(
+            root,
+            env!("CARGO_PKG_VERSION").to_owned(),
+        );
+    }
+
     if mistake_trainer_next_lib::run().is_err() {
-        if let Some(root) =
-            mistake_trainer_next_lib::modules::startup_safety::default_application_data_root()
-        {
+        if let Some(root) = startup_record_root {
             let _ = mistake_trainer_next_lib::modules::startup_safety::write_startup_failure_record(
                 &root,
                 env!("CARGO_PKG_VERSION"),
                 current_utc_millis(),
+                mistake_trainer_next_lib::modules::startup_safety::StartupFailureReason::TauriStartupFailed,
             );
         }
         let _ = rfd::MessageDialog::new()
@@ -39,6 +51,29 @@ fn main() {
             .show();
         std::process::exit(1);
     }
+}
+
+fn run_windows_product_check_if_requested() -> Option<i32> {
+    let request =
+        match mistake_trainer_next_lib::modules::product_check::parse_windows_product_check_request(
+            std::env::args_os().skip(1),
+        ) {
+            Ok(Some(request)) => request,
+            Ok(None) => return None,
+            Err(_) => return Some(11),
+        };
+    Some(
+        match mistake_trainer_next_lib::modules::product_check::write_windows_product_check(
+            &request.output_path,
+            &request.scratch_root,
+            env!("CARGO_PKG_VERSION"),
+            current_utc_millis(),
+        ) {
+            Ok(true) => 0,
+            Ok(false) => 12,
+            Err(_) => 11,
+        },
+    )
 }
 
 fn run_windows_self_check_if_requested() -> Option<i32> {
@@ -59,13 +94,8 @@ fn run_windows_self_check_if_requested() -> Option<i32> {
                 env!("CARGO_PKG_VERSION"),
                 current_utc_millis(),
             ) {
-                Ok(
-                    mistake_trainer_next_lib::modules::windows_compatibility::WindowsSupportLevel::Supported
-                    | mistake_trainer_next_lib::modules::windows_compatibility::WindowsSupportLevel::Extended,
-                ) => 0,
-                Ok(
-                    mistake_trainer_next_lib::modules::windows_compatibility::WindowsSupportLevel::Unsupported,
-                ) => 10,
+                Ok(true) => 0,
+                Ok(false) => 10,
                 Err(_) => 11,
             },
         );

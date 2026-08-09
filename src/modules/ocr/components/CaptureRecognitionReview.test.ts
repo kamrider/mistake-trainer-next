@@ -47,6 +47,38 @@ function job(): CaptureRecognitionJob {
 }
 
 describe('CaptureRecognitionReview', () => {
+  it('contains outer modal focus and restores scroll ownership on unmount', async () => {
+    const launcher = document.createElement('button')
+    document.body.append(launcher)
+    launcher.focus()
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'auto'
+    const view = render(CaptureRecognitionReview, { props: { job: job(), previews: {} } })
+
+    try {
+      const dialog = screen.getByRole('dialog', { name: '快速确认，不替你做决定' })
+      await waitFor(() => expect(dialog).toHaveFocus())
+      expect(document.body.style.overflow).toBe('hidden')
+
+      const buttons = within(dialog).getAllByRole('button').filter(button => !button.hasAttribute('disabled'))
+      const first = buttons[0]!
+      const last = buttons.at(-1)!
+      first.focus()
+      await fireEvent.keyDown(first, { key: 'Tab', shiftKey: true })
+      expect(last).toHaveFocus()
+      await fireEvent.keyDown(last, { key: 'Tab' })
+      expect(first).toHaveFocus()
+
+      view.unmount()
+      expect(document.body.style.overflow).toBe('auto')
+    }
+    finally {
+      view.unmount()
+      document.body.style.overflow = previousOverflow
+      launcher.remove()
+    }
+  })
+
   it('starts with items needing review and exposes all confidence groups', () => {
     render(CaptureRecognitionReview, { props: { job: job(), previews: {} } })
 
@@ -55,6 +87,10 @@ describe('CaptureRecognitionReview', () => {
     expect(screen.getByRole('button', { name: /无法安全切分 1/ })).toBeVisible()
     expect(screen.getByRole('button', { name: /已过期 1/ })).toBeVisible()
     expect(screen.getByText('题号不够清晰')).toBeVisible()
+    expect(screen.getByRole('button', { name: '调整边界' })).toHaveAttribute(
+      'data-recognition-edit-suggestion-id',
+      'review',
+    )
   })
 
   it('requests the current source preview when review opens and navigation changes', async () => {
@@ -94,6 +130,46 @@ describe('CaptureRecognitionReview', () => {
     ])
   })
 
+  it('keeps the current suggestion when the same job saves a decision', async () => {
+    const user = userEvent.setup()
+    const fixture = job()
+    fixture.suggestions = [
+      suggestion('review-1', 'review'),
+      suggestion('review-2', 'review'),
+    ]
+    const view = render(CaptureRecognitionReview, { props: { job: fixture, previews: {} } })
+
+    await user.click(screen.getByRole('button', { name: '接受建议' }))
+    expect(screen.getByText('2 / 2')).toBeVisible()
+
+    const saved = {
+      ...fixture,
+      suggestions: fixture.suggestions.map((item, index) => index === 0
+        ? { ...item, state: 'accepted' as const }
+        : item),
+    }
+    await view.rerender({ job: saved })
+
+    expect(screen.getByText('2 / 2')).toBeVisible()
+    expect(screen.getByRole('button', { name: /需要检查 2/ })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+  })
+
+  it('opens the stale category when a new job has only stale suggestions', () => {
+    const fixture = job()
+    fixture.suggestions = [suggestion('only-stale', 'high', 'stale')]
+
+    render(CaptureRecognitionReview, { props: { job: fixture, previews: {} } })
+
+    expect(screen.getByRole('button', { name: /已过期 1/ })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+    expect(screen.getByRole('button', { name: '忽略已过期建议' })).toBeVisible()
+  })
+
   it('keeps low and stale suggestions unacceptably safe', async () => {
     const user = userEvent.setup()
     const view = render(CaptureRecognitionReview, { props: { job: job(), previews: {} } })
@@ -102,7 +178,9 @@ describe('CaptureRecognitionReview', () => {
     expect(screen.queryByRole('button', { name: '接受建议' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '调整边界' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: '保留原图' })).toBeVisible()
-    await user.click(screen.getByRole('button', { name: '手工裁剪' }))
+    const manualCrop = screen.getByRole('button', { name: '手工裁剪' })
+    expect(manualCrop).toHaveAttribute('data-recognition-edit-suggestion-id', 'low')
+    await user.click(manualCrop)
     expect(view.emitted('edit')).toEqual([[expect.objectContaining({ id: 'low' })]])
     expect(screen.getByText(/依据不足/)).toBeVisible()
 
@@ -151,6 +229,39 @@ describe('CaptureRecognitionReview', () => {
     const input = document.createElement('input')
     surface.append(input)
     await fireEvent.keyDown(input, { key: 's' })
+    expect(view.emitted('review')).toHaveLength(2)
+  })
+
+  it('keeps pointer and keyboard decisions available only during queue saving', async () => {
+    const user = userEvent.setup()
+    const fixture = job()
+    fixture.suggestions = [
+      suggestion('review-1', 'review'),
+      suggestion('review-2', 'review'),
+    ]
+    const view = render(CaptureRecognitionReview, {
+      props: { job: fixture, previews: {}, busy: true, operationBusy: false },
+    })
+    const surface = screen.getByRole('dialog', { name: '快速确认，不替你做决定' })
+
+    expect(screen.getByText(
+      '正在后台保存审核决定；你可以继续确认下一条，应用切图需等待保存完成。',
+    )).toBeVisible()
+    expect(screen.getByRole('button', { name: '接受建议' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '调整边界' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '跳过' })).toBeEnabled()
+
+    await user.click(screen.getByRole('button', { name: '接受建议' }))
+    await fireEvent.keyDown(surface, { key: 's' })
+    expect(view.emitted('review')).toHaveLength(2)
+
+    await view.rerender({ busy: false, operationBusy: true })
+    expect(screen.getByRole('button', { name: '接受建议' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '调整边界' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '跳过' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /把切图放入素材牌库/ })).toBeDisabled()
+    await fireEvent.keyDown(surface, { key: 'Enter' })
+    await fireEvent.keyDown(surface, { key: 's' })
     expect(view.emitted('review')).toHaveLength(2)
   })
 
@@ -208,6 +319,42 @@ describe('CaptureRecognitionReview', () => {
     await fireEvent.keyDown(dialog, { key: 'Escape' })
     await waitFor(() => expect(apply).toHaveFocus())
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  })
+
+  it('keeps review shortcuts and outer close isolated from the impact dialog', async () => {
+    const user = userEvent.setup()
+    const fixture = job()
+    fixture.suggestions = [
+      suggestion('review-1', 'review'),
+      suggestion('review-2', 'review'),
+    ]
+    const view = render(CaptureRecognitionReview, { props: { job: fixture, previews: {} } })
+    await user.click(screen.getByRole('button', { name: '接受建议' }))
+    expect(screen.getByText('2 / 2')).toBeVisible()
+    const apply = screen.getByRole('button', { name: /把切图放入素材牌库/ })
+    await user.click(apply)
+    const dialog = screen.getByRole('alertdialog')
+    const dialogButtons = within(dialog).getAllByRole('button')
+    dialogButtons[0]!.focus()
+    await fireEvent.keyDown(dialogButtons[0]!, { key: 'Tab', shiftKey: true })
+    expect(dialogButtons.at(-1)).toHaveFocus()
+    await fireEvent.keyDown(dialogButtons.at(-1)!, { key: 'Tab' })
+    expect(dialogButtons[0]).toHaveFocus()
+
+    await fireEvent.keyDown(dialog, { key: 'k' })
+    await fireEvent.keyDown(dialog, { key: 's' })
+    await fireEvent.keyDown(dialog, { key: 'Enter' })
+    await fireEvent.keyDown(dialog, { key: 'e' })
+
+    expect(screen.getByText('2 / 2')).toBeVisible()
+    expect(view.emitted('review')).toHaveLength(1)
+    expect(view.emitted('edit')).toBeUndefined()
+
+    await fireEvent.keyDown(dialog, { key: 'Escape' })
+    await waitFor(() => expect(apply).toHaveFocus())
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: '快速确认，不替你做决定' })).toBeVisible()
+    expect(view.emitted('close')).toBeUndefined()
   })
 
   it('closes the modal review surface with Escape', async () => {

@@ -14,16 +14,19 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Verify GitHub Actions pin contract
+        shell: powershell
+        run: .\scripts\github-actions-pin-contract.ps1
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: 11.11.0
           run_install: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24.15.0
           cache: pnpm
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: 1.97.0
           components: rustfmt, clippy
@@ -31,10 +34,12 @@ jobs:
         shell: powershell
         run: choco install strawberryperl --no-progress -y
       - run: pnpm install --frozen-lockfile
+      - run: pnpm security:audit
       - run: pnpm lint
       - run: pnpm typecheck
-      - run: pnpm test
+      - run: pnpm test:coverage
       - run: pnpm build
+      - run: pnpm contract:rust-boundaries
       - run: pnpm bindings:check
       - name: Rust format
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
@@ -47,16 +52,16 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: 11.11.0
           run_install: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24.15.0
           cache: pnpm
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: 1.97.0
       - name: Install native build prerequisite
@@ -66,8 +71,11 @@ jobs:
       - name: Verify Windows release contract
         shell: powershell
         run: .\scripts\windows-release-contract.ps1
+      - name: Test signed-release source contract
+        shell: powershell
+        run: .\scripts\windows-release-source-contract.tests.ps1
       - run: pnpm tauri build
-      - name: Smoke test installed application
+      - name: Smoke test installed GUI and single instance
         shell: powershell
         run: .\scripts\windows-installer-smoke.ps1
 
@@ -75,16 +83,16 @@ jobs:
     runs-on: windows-11-arm
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: 11.11.0
           run_install: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24.15.0
           cache: pnpm
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: 1.97.0
           targets: aarch64-pc-windows-msvc
@@ -99,7 +107,7 @@ jobs:
         run: pnpm tauri build --target aarch64-pc-windows-msvc
       - name: Rust ARM64 compatibility tests
         run: cargo test --release --manifest-path src-tauri/Cargo.toml --test windows_compatibility --test startup_safety
-      - name: Smoke test native ARM64 installation
+      - name: Smoke test native ARM64 GUI and single instance
         shell: powershell
         run: .\scripts\windows-installer-smoke.ps1 -InstallerDirectory src-tauri\target\aarch64-pc-windows-msvc\release\bundle\nsis -ExpectedArchitecture arm64
 
@@ -107,9 +115,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: supabase/setup-cli@v1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: supabase/setup-cli@ab058987d8d6c725971f6cf9d0b5c98467e30bd1 # v1.7.1
         with:
-          version: latest
+          version: 2.109.1
       - run: supabase start
       - run: supabase test db

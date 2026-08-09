@@ -178,3 +178,59 @@ fn diagnostic_export_receipt_contains_only_safe_correlation_metadata() {
         assert!(!serialized.contains(forbidden));
     }
 }
+
+#[test]
+fn windows_update_contract_exposes_only_safe_release_metadata() {
+    use mistake_trainer_next_lib::commands::updates::{
+        WindowsUpdateCheckReport, WindowsUpdateInstallReceipt, WindowsUpdateStatus,
+    };
+
+    let status = serde_json::to_value(WindowsUpdateStatus {
+        enabled: false,
+        current_version: "0.1.0".to_owned(),
+    })
+    .expect("serialize Windows update status");
+    assert_eq!(
+        status,
+        json!({
+            "enabled": false,
+            "currentVersion": "0.1.0"
+        })
+    );
+
+    let report = serde_json::to_value(WindowsUpdateCheckReport {
+        available: true,
+        current_version: "0.1.0".to_owned(),
+        version: Some("0.2.0".to_owned()),
+        published_at: Some("2026-07-28T00:00:00Z".to_owned()),
+    })
+    .expect("serialize Windows update check report");
+    assert_eq!(
+        report,
+        json!({
+            "available": true,
+            "currentVersion": "0.1.0",
+            "version": "0.2.0",
+            "publishedAt": "2026-07-28T00:00:00Z"
+        })
+    );
+
+    let receipt = serde_json::to_value(WindowsUpdateInstallReceipt {
+        accepted_version: "0.2.0".to_owned(),
+    })
+    .expect("serialize Windows update install receipt");
+    assert_eq!(receipt, json!({ "acceptedVersion": "0.2.0" }));
+
+    let public_payload = format!("{status}{report}{receipt}");
+    for forbidden in [
+        "endpoint",
+        "publicKey",
+        "signature",
+        "downloadUrl",
+        "localPath",
+        "notes",
+        "rawError",
+    ] {
+        assert!(!public_payload.contains(forbidden));
+    }
+}

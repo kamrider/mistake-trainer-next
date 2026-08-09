@@ -1,8 +1,16 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
+import { createMemoryHistory, RouterView } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AppResult } from '../../shared/api/app-result'
+import type { OcrComponentStatus, SyncNowReport } from '../../shared/api/bindings'
+import { createAppRouter } from '../router'
 import { libraryAccessControllerKey } from '../library-access-controller'
 import { syncControllerKey } from '../sync-controller'
+import {
+  createWorkspaceTransitionGuard,
+  workspaceTransitionGuardKey,
+} from '../workspace-transition-guard'
 import SettingsView from './SettingsView.vue'
 
 const api = vi.hoisted(() => ({
@@ -10,6 +18,8 @@ const api = vi.hoisted(() => ({
   syncBackendStatus: vi.fn(),
   syncBackendSet: vi.fn(),
   authStatusCommand: vi.fn(),
+  authSignIn: vi.fn(),
+  authSignUp: vi.fn(),
   authDisconnect: vi.fn(),
   libraryAccessStatus: vi.fn(),
   libraryLock: vi.fn(),
@@ -29,6 +39,9 @@ const api = vi.hoisted(() => ({
   storageMigrationReceipt: vi.fn(),
   diagnosticsExport: vi.fn(),
   compatibilityStatus: vi.fn(),
+  windowsUpdateStatus: vi.fn(),
+  windowsUpdateCheck: vi.fn(),
+  windowsUpdateInstall: vi.fn(),
   ocrCapabilityStatus: vi.fn(),
   ocrComponentInstall: vi.fn(),
   ocrComponentRemove: vi.fn(),
@@ -39,6 +52,96 @@ const api = vi.hoisted(() => ({
 }))
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => true }))
 vi.mock('../../shared/api/bindings', () => ({ commands: api }))
+
+const ocrNotInstalledComponent = {
+  id: 'ppocrv6_small' as const,
+  displayName: 'PP‑OCRv6 small',
+  description: '约 31 MB，面向题号与文字框检测。',
+  state: 'not_installed' as const,
+  downloadBytes: 31_163_977,
+  installedBytes: 0,
+  recommended: true,
+  installAllowed: true,
+  statusDetail: '尚未下载；不会影响现有功能。',
+  sourceLabel: 'ModelScope · RapidAI/RapidOCR 3.9.2',
+  licenseLabel: 'PaddleOCR · Apache-2.0',
+}
+const ocrInstalledComponent = {
+  ...ocrNotInstalledComponent,
+  state: 'installed' as const,
+  installedBytes: 31_163_977,
+  statusDetail: '模型文件已经校验。',
+}
+
+function ocrCapabilityStatus(
+  component: OcrComponentStatus = ocrNotInstalledComponent,
+  automaticRecognitionEnabled = false,
+) {
+  return {
+    assessment: {
+      tier: 'balanced' as const,
+      logicalProcessorCount: 4,
+      totalMemoryMb: 8192,
+      availableComponentStorageMb: 8192,
+      avx2Supported: true,
+      estimatedSuitable: true,
+      recommendedComponentId: 'ppocrv6_small' as const,
+      summary: '本机预检通过，推荐使用 PP‑OCRv6 small。',
+    },
+    components: [component, {
+      id: 'opencv_preprocess' as const,
+      displayName: 'OpenCV 图像预处理',
+      description: '产品运行时尚未发布。',
+      state: 'unavailable' as const,
+      downloadBytes: 0,
+      installedBytes: 0,
+      recommended: false,
+      installAllowed: false,
+      statusDetail: '产品运行时尚未发布；当前不会下载或启用。',
+      sourceLabel: 'OpenCV 官方项目',
+      licenseLabel: 'Apache-2.0',
+    }],
+    recognitionFeature: {
+      state: automaticRecognitionEnabled ? 'ready' as const : 'evidence_gate_pending' as const,
+      requiredComponentId: 'ppocrv6_small' as const,
+      detail: automaticRecognitionEnabled
+        ? '题号定位增强可用。'
+        : '智能分题仍在真实题图验证中；顺序模板和手工整理可继续使用。',
+    },
+    automaticRecognitionEnabled,
+  }
+}
+
+function deferred<T = unknown>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((finish, fail) => { resolve = finish; reject = fail })
+  return { promise, resolve, reject }
+}
+
+async function renderRoutedSettings() {
+  const router = createAppRouter(createMemoryHistory())
+  await router.push('/settings')
+  await router.isReady()
+  render(RouterView, { global: { plugins: [router] } })
+  return router
+}
+
+async function renderGuardedRoutedSettings() {
+  const router = createAppRouter(createMemoryHistory())
+  const workspaceTransitionGuard = createWorkspaceTransitionGuard()
+  await router.push('/settings')
+  await router.isReady()
+  render(RouterView, {
+    global: {
+      plugins: [router],
+      provide: {
+        [workspaceTransitionGuardKey as symbol]: workspaceTransitionGuard,
+      },
+    },
+  })
+  return { router, workspaceTransitionGuard }
+}
 
 describe('SettingsView', () => {
   beforeEach(() => {
@@ -94,49 +197,23 @@ describe('SettingsView', () => {
       minimumWindowsBuild: 17763,
       summary: '当前设备处于完整支持范围。',
     } } })
-    api.ocrCapabilityStatus.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
-      assessment: {
-        tier: 'balanced',
-        logicalProcessorCount: 4,
-        totalMemoryMb: 8192,
-        availableComponentStorageMb: 8192,
-        avx2Supported: true,
-        estimatedSuitable: true,
-        recommendedComponentId: 'ppocrv6_small',
-        summary: '本机预检通过，推荐使用 PP‑OCRv6 small。',
-      },
-      components: [{
-        id: 'ppocrv6_small',
-        displayName: 'PP‑OCRv6 small',
-        description: '约 31 MB，面向题号与文字框检测。',
-        state: 'not_installed',
-        downloadBytes: 31_163_977,
-        installedBytes: 0,
-        recommended: true,
-        installAllowed: true,
-        statusDetail: '尚未下载；不会影响现有功能。',
-        sourceLabel: 'ModelScope · RapidAI/RapidOCR 3.9.2',
-        licenseLabel: 'PaddleOCR · Apache-2.0',
-      }, {
-        id: 'opencv_preprocess',
-        displayName: 'OpenCV 图像预处理',
-        description: '产品运行时尚未发布。',
-        state: 'unavailable',
-        downloadBytes: 0,
-        installedBytes: 0,
-        recommended: false,
-        installAllowed: false,
-        statusDetail: '产品运行时尚未发布；当前不会下载或启用。',
-        sourceLabel: 'OpenCV 官方项目',
-        licenseLabel: 'Apache-2.0',
-      }],
-      recognitionFeature: {
-        state: 'evidence_gate_pending',
-        requiredComponentId: 'ppocrv6_small',
-        detail: '智能分题仍在真实题图验证中；顺序模板和手工整理可继续使用。',
-      },
-      automaticRecognitionEnabled: false,
+    api.windowsUpdateStatus.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      enabled: false,
+      currentVersion: '0.1.0',
     } } })
+    api.windowsUpdateCheck.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      available: false,
+      currentVersion: '0.1.0',
+      version: null,
+      publishedAt: null,
+    } } })
+    api.windowsUpdateInstall.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      acceptedVersion: '0.2.0',
+    } } })
+    api.ocrCapabilityStatus.mockResolvedValue({
+      status: 'ok',
+      data: { ok: true, data: ocrCapabilityStatus() },
+    })
     api.ocrComponentInstall.mockResolvedValue({ status: 'ok', data: { ok: false, error: {
       code: 'not_expected',
       userMessage: 'not expected',
@@ -176,13 +253,37 @@ describe('SettingsView', () => {
 
     render(SettingsView)
 
+    expect(await screen.findByRole('heading', { level: 1, name: '设置' })).toBeVisible()
+    expect(screen.getByText(/数据安静地待在该在的地方/)).toBeVisible()
     const card = await screen.findByRole('article', { name: 'Windows 兼容性' })
     expect(card).toHaveTextContent('完整支持')
     expect(card).toHaveTextContent('Windows 11 Pro')
     expect(card).toHaveTextContent('Build 26100.1000')
     expect(card).toHaveTextContent('x86_64')
     expect(card).toHaveTextContent('WebView2 138.0.3351.83')
+    expect(screen.getByRole('group', { name: '账户与同步' })).toHaveTextContent('同步账户')
+    expect(screen.getByRole('group', { name: '学习体验' })).toHaveTextContent('科目配置')
+    expect(screen.getByRole('group', { name: '数据与安全' })).toHaveTextContent('备份恢复')
+    expect(screen.getByRole('group', { name: '应用维护' })).toHaveTextContent('安全诊断')
     expect(api.compatibilityStatus).toHaveBeenCalledOnce()
+  })
+
+  it('keeps healthy settings sections usable when the overview read rejects', async () => {
+    api.settingsOverview.mockRejectedValueOnce(new Error('overview offline'))
+
+    render(SettingsView)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      '部分设置暂时无法读取：资料库概览。其他设置仍可使用',
+    )
+    expect(await screen.findByRole('region', { name: '常用科目' })).toBeVisible()
+    expect(await screen.findByRole('region', { name: '训练间的专注插曲' })).toBeVisible()
+    expect(await screen.findByRole('region', { name: '智能功能模式' })).toBeVisible()
+    expect(await screen.findByRole('region', { name: '资料库存储位置' })).toBeVisible()
+    expect(api.subjectPreferencesGet).toHaveBeenCalledOnce()
+    expect(api.reviewPreferencesGet).toHaveBeenCalledOnce()
+    expect(api.ocrCapabilityStatus).toHaveBeenCalledOnce()
+    expect(api.storageStatus).toHaveBeenCalledOnce()
   })
 
   it('keeps the two smart modes clear and reachable from the settings directory', async () => {
@@ -244,6 +345,180 @@ describe('SettingsView', () => {
     expect(await screen.findByText('同步完成：上传 1 项，拉取 2 项。')).toBeVisible()
   })
 
+  it('keeps successful sync truthful when only the overview refresh fails', async () => {
+    const initialOverview = {
+      activeProblemCount: 1, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 1, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: true,
+    }
+    api.settingsOverview
+      .mockResolvedValueOnce({ ok: true, data: initialOverview })
+      .mockRejectedValueOnce(new Error('overview offline'))
+    api.authStatusCommand.mockResolvedValue({ ok: true, data: {
+      configured: true, status: { kind: 'connected', emailHint: 's***@example.test' },
+    } })
+    const run = vi.fn().mockResolvedValue({
+      ok: true,
+      data: {
+        pushedOperationCount: 1,
+        uploadedAssetCount: 0,
+        pulledChangeCount: 2,
+        downloadedAssetCount: 0,
+        finalCursor: 3,
+      },
+    })
+    render(SettingsView, {
+      global: { provide: { [syncControllerKey as symbol]: { run } } },
+    })
+
+    await userEvent.click(await screen.findByRole('button', { name: '立即同步' }))
+
+    expect(await screen.findByText(
+      '同步完成：上传 1 项，拉取 2 项；顶部资料库统计暂时没有刷新。',
+    )).toBeVisible()
+    expect(screen.queryByText(/同步请求没有完成/)).not.toBeInTheDocument()
+  })
+
+  it('disables settings refresh while manual sync is pending', async () => {
+    const currentOverview = {
+      activeProblemCount: 1, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 1, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: true,
+    }
+    api.settingsOverview.mockResolvedValue({ ok: true, data: currentOverview })
+    api.authStatusCommand.mockResolvedValue({ ok: true, data: {
+      configured: true, status: { kind: 'connected', emailHint: 's***@example.test' },
+    } })
+    const syncGate = deferred<AppResult<SyncNowReport>>()
+    const run = vi.fn().mockReturnValueOnce(syncGate.promise)
+    render(SettingsView, {
+      global: { provide: { [syncControllerKey as symbol]: { run } } },
+    })
+
+    await userEvent.click(await screen.findByRole('button', { name: '立即同步' }))
+    await waitFor(() => expect(run).toHaveBeenCalledOnce())
+    const refreshButton = screen.getByRole('button', { name: '刷新' })
+    expect(refreshButton).toHaveClass('settings-refresh')
+    expect(refreshButton).toBeDisabled()
+
+    syncGate.resolve({
+      ok: true,
+      data: {
+        pushedOperationCount: 0,
+        uploadedAssetCount: 0,
+        pulledChangeCount: 0,
+        downloadedAssetCount: 0,
+        finalCursor: 0,
+      },
+    })
+    await waitFor(() => expect(screen.getByRole('button', { name: '刷新' })).toBeEnabled())
+  })
+
+  it('keeps the confirmed installed state when the full capability refresh fails', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    api.ocrCapabilityStatus
+      .mockResolvedValueOnce({ status: 'ok', data: { ok: true, data: ocrCapabilityStatus() } })
+      .mockResolvedValueOnce({ status: 'ok', data: { ok: false, error: {
+        code: 'ocr_status_failed',
+        userMessage: '完整状态读取失败。',
+        retryable: true,
+        diagnosticId: 'diag-status',
+      } } })
+    api.ocrComponentInstall.mockResolvedValueOnce({
+      status: 'ok',
+      data: { ok: true, data: ocrInstalledComponent },
+    })
+    render(SettingsView)
+
+    const panel = await screen.findByRole('region', { name: '智能功能模式' })
+    await userEvent.click(await within(panel).findByRole('button', { name: '启用更准切题' }))
+
+    expect(await within(panel).findByRole('button', { name: '移除模型' })).toBeEnabled()
+    expect(within(panel).getByRole('status')).toHaveTextContent('本地模型已安装，但完整能力状态暂时未刷新')
+    expect(panel).toHaveTextContent('基础版已开放')
+    expect(panel).not.toHaveTextContent('题号增强已启用')
+  })
+
+  it('does not claim enhancement readiness when installation leaves the full capability disabled', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    api.ocrCapabilityStatus
+      .mockResolvedValueOnce({ status: 'ok', data: { ok: true, data: ocrCapabilityStatus() } })
+      .mockResolvedValueOnce({
+        status: 'ok',
+        data: { ok: true, data: ocrCapabilityStatus(ocrInstalledComponent, false) },
+      })
+    api.ocrComponentInstall.mockResolvedValueOnce({
+      status: 'ok',
+      data: { ok: true, data: ocrInstalledComponent },
+    })
+    render(SettingsView)
+
+    const panel = await screen.findByRole('region', { name: '智能功能模式' })
+    await userEvent.click(await within(panel).findByRole('button', { name: '启用更准切题' }))
+
+    expect(await within(panel).findByRole('status')).toHaveTextContent('本地模型已安装；当前仍使用基础预切。')
+    expect(panel).toHaveTextContent('基础版已开放')
+    expect(panel).not.toHaveTextContent('增强已就绪')
+  })
+
+  it('clears the password from view state after a successful authentication request', async () => {
+    api.authStatusCommand.mockResolvedValue({ ok: true, data: {
+      configured: true, status: { kind: 'signed_out', emailHint: null },
+    } })
+    api.authSignUp.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      configured: true, status: { kind: 'verification_required', emailHint: 'u***@example.com' },
+    } } })
+    const user = userEvent.setup()
+    render(SettingsView)
+
+    await user.click(await screen.findByRole('button', { name: '还没有账户？注册' }))
+    await user.type(screen.getByRole('textbox', { name: '邮箱' }), 'user@example.com')
+    const password = screen.getByLabelText('密码')
+    await user.type(password, 'secret-123')
+    await user.click(screen.getByRole('button', { name: '注册并连接' }))
+
+    expect(api.authSignUp).toHaveBeenCalledWith({
+      email: 'user@example.com',
+      password: 'secret-123',
+    })
+    expect(await screen.findByText(/注册成功，请先完成邮箱验证/)).toBeVisible()
+    expect(password).toHaveValue('')
+    expect(document.body).not.toHaveTextContent('secret-123')
+  })
+
+  it('disables settings refresh while authentication is pending', async () => {
+    api.authStatusCommand.mockResolvedValue({ ok: true, data: {
+      configured: true, status: { kind: 'signed_out', emailHint: null },
+    } })
+    const signInGate = deferred<Awaited<ReturnType<typeof api.authSignIn>>>()
+    api.authSignIn.mockReturnValueOnce(signInGate.promise)
+    const user = userEvent.setup()
+    render(SettingsView)
+
+    await user.type(await screen.findByRole('textbox', { name: '邮箱' }), 'user@example.com')
+    const password = screen.getByLabelText('密码')
+    await user.type(password, 'secret-123')
+    await user.click(screen.getByRole('button', { name: '登录并连接' }))
+
+    await waitFor(() => expect(api.authSignIn).toHaveBeenCalledOnce())
+    expect(screen.getByRole('button', { name: '刷新' })).toBeDisabled()
+
+    signInGate.resolve({ status: 'ok', data: { ok: true, data: {
+      configured: true, status: { kind: 'connected', emailHint: 'u***@example.com' },
+    } } })
+    await waitFor(() => expect(screen.getByRole('button', { name: '刷新' })).toBeEnabled())
+    expect(await screen.findByRole('button', { name: '立即同步' })).toBeVisible()
+    expect(document.body).not.toHaveTextContent('secret-123')
+  })
+
   it('places real unresolved sync choices below the library overview', async () => {
     api.settingsOverview.mockResolvedValue({ ok: true, data: {
       activeProblemCount: 1, archivedProblemCount: 0, trashedProblemCount: 0,
@@ -263,7 +538,7 @@ describe('SettingsView', () => {
     render(SettingsView)
 
     expect(await screen.findByRole('heading', { name: '本机和云端改了同一处内容' })).toBeVisible()
-    expect(screen.getByText('本机笔记')).toBeVisible()
+    expect(await screen.findByText('本机笔记')).toBeVisible()
     expect(screen.getByText('云端笔记')).toBeVisible()
     expect(screen.queryByText('opaque-problem')).not.toBeInTheDocument()
     expect(screen.queryByText('只呈现同字段真冲突；不同字段自动合并。')).not.toBeInTheDocument()
@@ -297,6 +572,85 @@ describe('SettingsView', () => {
     expect(await screen.findByText('科目配置已保存')).toBeVisible()
   })
 
+  it('explains duplicate built-in subjects without dirtying the draft', async () => {
+    render(SettingsView)
+
+    await userEvent.type(
+      await screen.findByRole('textbox', { name: '自定义科目名称' }),
+      '数学',
+    )
+    await userEvent.click(screen.getByRole('button', { name: '添加自定义科目' }))
+
+    expect(await screen.findByText('“数学”已在科目列表中。')).toBeVisible()
+    expect(screen.queryByRole('button', { name: '删除自定义科目 数学' })).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '刷新' }))
+    await waitFor(() => expect(api.subjectPreferencesGet).toHaveBeenCalledTimes(2))
+    expect(api.subjectPreferencesSave).not.toHaveBeenCalled()
+  })
+
+  it('keeps the only enabled custom subject and gives actionable deletion guidance', async () => {
+    api.subjectPreferencesGet.mockResolvedValueOnce({ ok: true, data: {
+      enabledSubjects: ['编程'],
+      customSubjects: ['编程'],
+      captureSoundEnabled: true,
+    } })
+    render(SettingsView)
+
+    const remove = await screen.findByRole('button', { name: '删除自定义科目 编程' })
+    await userEvent.click(remove)
+
+    expect(remove).toBeVisible()
+    expect(await screen.findByText(
+      '至少保留一个常用科目；请先启用其他科目，再删除“编程”。',
+    )).toBeVisible()
+    expect(api.subjectPreferencesSave).not.toHaveBeenCalled()
+  })
+
+  it('automatically persists the latest subject draft without applying an older response', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    const firstSave = deferred()
+    api.subjectPreferencesSave
+      .mockReturnValueOnce(firstSave.promise)
+      .mockResolvedValueOnce({ ok: true, data: {
+        enabledSubjects: ['语文', '数学'],
+        customSubjects: [],
+        captureSoundEnabled: false,
+      } })
+    render(SettingsView)
+
+    const subjectPanel = await screen.findByRole('region', { name: '常用科目' })
+    await userEvent.click(screen.getByRole('checkbox', { name: '英语' }))
+    await userEvent.click(screen.getByRole('button', { name: '保存科目配置' }))
+    const sound = screen.getByRole('checkbox', { name: /拖放成功音效/ })
+    await userEvent.click(sound)
+    expect(sound).not.toBeChecked()
+    expect(within(subjectPanel).getByRole('status')).toHaveTextContent('完成当前保存后会自动继续')
+
+    firstSave.resolve({ ok: true, data: {
+      enabledSubjects: ['语文', '数学'],
+      customSubjects: [],
+      captureSoundEnabled: true,
+    } })
+
+    await waitFor(() => expect(api.subjectPreferencesSave).toHaveBeenCalledTimes(2))
+    expect(api.subjectPreferencesSave).toHaveBeenNthCalledWith(1, {
+      enabledSubjects: ['语文', '数学'],
+      customSubjects: [],
+      captureSoundEnabled: true,
+    })
+    expect(api.subjectPreferencesSave).toHaveBeenNthCalledWith(2, {
+      enabledSubjects: ['语文', '数学'],
+      customSubjects: [],
+      captureSoundEnabled: false,
+    })
+    expect(sound).not.toBeChecked()
+    expect(await screen.findByText('科目配置已保存')).toBeVisible()
+  })
+
   it('jumps directly to frequently used subject settings from the sticky directory', async () => {
     api.settingsOverview.mockResolvedValue({ ok: true, data: {
       activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
@@ -319,6 +673,28 @@ describe('SettingsView', () => {
     })
   })
 
+  it('jumps directly to review rhythm settings from the sticky directory', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    render(SettingsView)
+
+    expect(await screen.findByRole('heading', { name: '训练间的专注插曲' })).toBeVisible()
+    const reviewPanel = screen.getByRole('region', { name: '训练间的专注插曲' })
+    const scrollIntoView = vi.fn()
+    reviewPanel.scrollIntoView = scrollIntoView
+    const directory = screen.getByRole('navigation', { name: '设置目录' })
+    await userEvent.click(within(directory).getByRole('button', { name: /训练节奏/ }))
+
+    expect(reviewPanel).toHaveAttribute('id', 'settings-review')
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      block: 'start',
+      behavior: 'smooth',
+    })
+  })
+
   it('configures a skippable focus rhythm for new ordinary sessions', async () => {
     api.settingsOverview.mockResolvedValue({ ok: true, data: {
       activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
@@ -335,6 +711,179 @@ describe('SettingsView', () => {
     expect(await screen.findByText('训练节奏已保存，将从下一轮普通训练开始生效。')).toBeVisible()
     expect(screen.getByText(/模拟考试不会插入专注环节/)).toBeVisible()
     expect(screen.getByRole('radio', { name: /每轮开始前 · 推荐/ })).toBeInTheDocument()
+  })
+
+  it('automatically persists the latest review rhythm without reverting the selected option', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    const firstSave = deferred()
+    api.reviewPreferencesSave
+      .mockReturnValueOnce(firstSave.promise)
+      .mockResolvedValueOnce({ ok: true, data: { focusPolicy: 'session_start' } })
+    render(SettingsView)
+
+    const reviewPanel = await screen.findByRole('region', { name: '训练间的专注插曲' })
+    const everyTen = screen.getByRole('radio', { name: /每完成 10 题/ })
+    const sessionStart = screen.getByRole('radio', { name: /每轮开始前 · 推荐/ })
+    await userEvent.click(everyTen)
+    await userEvent.click(screen.getByRole('button', { name: '保存训练节奏' }))
+    await userEvent.click(sessionStart)
+    expect(sessionStart).toBeChecked()
+    expect(within(reviewPanel).getByRole('status')).toHaveTextContent('完成当前保存后会自动继续')
+
+    firstSave.resolve({ ok: true, data: { focusPolicy: 'every_10' } })
+
+    await waitFor(() => expect(api.reviewPreferencesSave).toHaveBeenCalledTimes(2))
+    expect(api.reviewPreferencesSave).toHaveBeenNthCalledWith(1, { focusPolicy: 'every_10' })
+    expect(api.reviewPreferencesSave).toHaveBeenNthCalledWith(2, { focusPolicy: 'session_start' })
+    expect(sessionStart).toBeChecked()
+    expect(everyTen).not.toBeChecked()
+    expect(await screen.findByText('训练节奏已保存，将从下一轮普通训练开始生效。')).toBeVisible()
+  })
+
+  it('protects an unsaved preference draft from the settings refresh', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    api.subjectPreferencesSave.mockResolvedValue({ ok: true, data: {
+      enabledSubjects: ['语文', '数学'],
+      customSubjects: [],
+      captureSoundEnabled: true,
+    } })
+    render(SettingsView)
+
+    const english = await screen.findByRole('checkbox', { name: '英语' })
+    await userEvent.click(english)
+    expect(english).not.toBeChecked()
+    await userEvent.click(screen.getByRole('button', { name: '刷新' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('请先保存偏好')
+    expect(api.subjectPreferencesGet).toHaveBeenCalledTimes(1)
+    expect(english).not.toBeChecked()
+
+    await userEvent.click(screen.getByRole('button', { name: '保存科目配置' }))
+    expect(await screen.findByText('科目配置已保存')).toBeVisible()
+    await userEvent.click(screen.getByRole('button', { name: '刷新' }))
+    await waitFor(() => expect(api.subjectPreferencesGet).toHaveBeenCalledTimes(2))
+  })
+
+  it('does not let an in-flight refresh overwrite a preference saved after that refresh started', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    const initialSubjects = {
+      enabledSubjects: ['语文', '数学', '英语'],
+      customSubjects: [],
+      captureSoundEnabled: true,
+    }
+    const staleRefresh = deferred()
+    api.subjectPreferencesGet
+      .mockResolvedValueOnce({ ok: true, data: initialSubjects })
+      .mockReturnValueOnce(staleRefresh.promise)
+    api.subjectPreferencesSave.mockResolvedValue({ ok: true, data: {
+      enabledSubjects: ['语文', '数学'],
+      customSubjects: [],
+      captureSoundEnabled: true,
+    } })
+    render(SettingsView)
+
+    const english = await screen.findByRole('checkbox', { name: '英语' })
+    await userEvent.click(screen.getByRole('button', { name: '刷新' }))
+    await waitFor(() => expect(api.subjectPreferencesGet).toHaveBeenCalledTimes(2))
+    await userEvent.click(english)
+    await userEvent.click(screen.getByRole('button', { name: '保存科目配置' }))
+    expect(await screen.findByText('科目配置已保存')).toBeVisible()
+    expect(english).not.toBeChecked()
+
+    staleRefresh.resolve({ ok: true, data: initialSubjects })
+    await waitFor(() => expect(screen.getByRole('button', { name: '刷新' })).toBeEnabled())
+    expect(english).not.toBeChecked()
+  })
+
+  it('confirms before leaving dirty settings and allows same-page query navigation', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    const router = await renderRoutedSettings()
+    const user = userEvent.setup()
+
+    const english = await screen.findByRole('checkbox', { name: '英语' })
+    await user.click(english)
+    expect(english).not.toBeChecked()
+    await router.push({ name: 'settings', query: { section: 'ocr' } })
+    expect(router.currentRoute.value.name).toBe('settings')
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(english).not.toBeChecked()
+
+    const cancelledNavigation = router.push('/missing-page')
+    expect(await screen.findByRole('alertdialog', { name: '放弃设置修改并离开？' })).toBeVisible()
+    expect(router.currentRoute.value.name).toBe('settings')
+    await waitFor(() => expect(screen.getByRole('button', { name: '继续编辑' })).toHaveFocus())
+    await user.click(screen.getByRole('button', { name: '继续编辑' }))
+    await cancelledNavigation
+    expect(router.currentRoute.value.name).toBe('settings')
+    expect(english).not.toBeChecked()
+    expect(english).toHaveFocus()
+
+    const confirmedNavigation = router.push('/missing-page')
+    await user.click(await screen.findByRole('button', { name: '放弃修改并离开' }))
+    await confirmedNavigation
+    expect(router.currentRoute.value.name).toBe('not-found')
+  })
+
+  it('blocks navigation while preferences are saving and allows it after persistence finishes', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    const saveGate = deferred()
+    api.subjectPreferencesSave.mockReturnValueOnce(saveGate.promise)
+    const router = await renderRoutedSettings()
+
+    await userEvent.click(await screen.findByRole('checkbox', { name: '英语' }))
+    await userEvent.click(screen.getByRole('button', { name: '保存科目配置' }))
+    await router.push('/missing-page')
+
+    expect(router.currentRoute.value.name).toBe('settings')
+    expect(await screen.findByRole('alert')).toHaveTextContent('偏好正在保存')
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+
+    saveGate.resolve({ ok: true, data: {
+      enabledSubjects: ['语文', '数学'],
+      customSubjects: [],
+      captureSoundEnabled: true,
+    } })
+    expect(await screen.findByText('科目配置已保存')).toBeVisible()
+    await router.push('/missing-page')
+    expect(router.currentRoute.value.name).toBe('not-found')
+  })
+
+  it('uses one confirmation decision for repeated navigation attempts', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    const router = await renderRoutedSettings()
+
+    await userEvent.click(await screen.findByRole('checkbox', { name: '英语' }))
+    const firstNavigation = router.push('/missing-one')
+    await screen.findByRole('alertdialog', { name: '放弃设置修改并离开？' })
+    const latestNavigation = router.push('/missing-two')
+    await userEvent.click(screen.getByRole('button', { name: '放弃修改并离开' }))
+    await Promise.all([firstNavigation, latestNavigation])
+
+    expect(router.currentRoute.value.path).toBe('/missing-two')
   })
 
   it('keeps the selected focus rhythm visible when persistence fails', async () => {
@@ -432,6 +981,25 @@ describe('SettingsView', () => {
     expect(api.authDisconnect.mock.invocationCallOrder[0]!).toBeLessThan(api.libraryLock.mock.invocationCallOrder[0]!)
   })
 
+  it('restores focus to the extracted sign-out action when its lock dialog is cancelled', async () => {
+    api.authStatusCommand.mockResolvedValue({ ok: true, data: {
+      configured: true, status: { kind: 'connected', emailHint: 'u***@example.com' },
+    } })
+    const user = userEvent.setup()
+    render(SettingsView)
+
+    const trigger = await screen.findByRole('button', { name: '退出云端并锁定' })
+    await user.click(trigger)
+    expect(screen.getByRole('heading', { name: '退出云端并锁定本机？' })).toBeVisible()
+
+    await user.keyboard('{Escape}')
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(trigger).toHaveFocus()
+    expect(api.authDisconnect).not.toHaveBeenCalled()
+    expect(api.libraryLock).not.toHaveBeenCalled()
+  })
+
   it('explains regional cloud limits while keeping local-first recovery visible', async () => {
     api.settingsOverview.mockResolvedValue({ ok: true, data: {
       activeProblemCount: 2, archivedProblemCount: 0, trashedProblemCount: 0,
@@ -448,7 +1016,7 @@ describe('SettingsView', () => {
 
     expect(await screen.findByText('国内网络提示')).toBeVisible()
     expect(screen.getByText(/Supabase 在中国大陆可能出现连接超时/)).toBeVisible()
-    expect(screen.getAllByText('离线模式')).toHaveLength(2)
+    await waitFor(() => expect(screen.getAllByText('离线模式')).toHaveLength(2))
     expect(await screen.findByText('退出云端只影响这台电脑，其他设备保持登录。')).toBeVisible()
   })
 
@@ -488,6 +1056,26 @@ describe('SettingsView', () => {
     expect(api.syncBackendSet).toHaveBeenCalledWith({ kind: 'supabase' })
     expect(await screen.findByText('该同步服务尚未配置，已保持本地模式')).toBeVisible()
     expect(screen.getByRole('button', { name: /^仅本地/ })).toHaveClass('selected')
+  })
+
+  it('disables refresh and backend choices while a backend selection is pending', async () => {
+    const selection = deferred<Awaited<ReturnType<typeof api.syncBackendSet>>>()
+    api.syncBackendSet.mockReturnValueOnce(selection.promise)
+    render(SettingsView)
+
+    const supabase = await screen.findByRole('button', { name: /^Supabase/ })
+    await userEvent.click(supabase)
+
+    await waitFor(() => expect(api.syncBackendSet).toHaveBeenCalledWith({ kind: 'supabase' }))
+    expect(screen.getByRole('button', { name: '刷新' })).toBeDisabled()
+    expect(supabase).toBeDisabled()
+    expect(screen.getByRole('button', { name: /^仅本地/ })).toBeDisabled()
+
+    selection.resolve({ ok: true, data: {
+      kind: 'supabase', configured: true, ready: true, syncEnabled: true,
+    } })
+    expect(await screen.findByText('已选择 Supabase（海外/开发）')).toBeVisible()
+    await waitFor(() => expect(screen.getByRole('button', { name: '刷新' })).toBeEnabled())
   })
 
   it('marks the unavailable Tencent backend as planned and never selects it', async () => {
@@ -604,6 +1192,113 @@ describe('SettingsView', () => {
 
     expect(api.backupRestore).toHaveBeenCalledWith('candidate-opaque-id')
     expect(await screen.findByText('正在准备重启…')).toBeVisible()
+  })
+
+  it('admits only one native backup operation before disabled state renders', async () => {
+    const creation = deferred()
+    api.backupCreate.mockReturnValue(creation.promise)
+    api.backupPrepareRestore.mockResolvedValue({ status: 'ok', data: { ok: true, data: null } })
+    render(SettingsView)
+
+    const createButton = await screen.findByRole('button', { name: /创建加密备份/ })
+    const prepareButton = screen.getByRole('button', { name: /选择备份并准备恢复/ })
+    createButton.click()
+    createButton.click()
+    prepareButton.click()
+    await waitFor(() => expect(api.backupCreate).toHaveBeenCalled())
+
+    expect(api.backupCreate).toHaveBeenCalledOnce()
+    expect(api.backupPrepareRestore).not.toHaveBeenCalled()
+
+    creation.resolve({ status: 'ok', data: { ok: true, data: null } })
+    await waitFor(() => expect(createButton).toBeEnabled())
+  })
+
+  it('admits only one restore-package preparation before disabled state renders', async () => {
+    const preparation = deferred()
+    api.backupPrepareRestore.mockReturnValue(preparation.promise)
+    api.backupCreate.mockResolvedValue({ status: 'ok', data: { ok: true, data: null } })
+    render(SettingsView)
+
+    const prepareButton = await screen.findByRole('button', { name: /选择备份并准备恢复/ })
+    const createButton = screen.getByRole('button', { name: /创建加密备份/ })
+    prepareButton.click()
+    prepareButton.click()
+    createButton.click()
+    await waitFor(() => expect(api.backupPrepareRestore).toHaveBeenCalled())
+
+    expect(api.backupPrepareRestore).toHaveBeenCalledOnce()
+    expect(api.backupCreate).not.toHaveBeenCalled()
+
+    preparation.resolve({ status: 'ok', data: { ok: true, data: null } })
+    await waitFor(() => expect(prepareButton).toBeEnabled())
+  })
+
+  it('blocks route, workspace, and window transitions during a backup operation', async () => {
+    const creation = deferred()
+    api.backupCreate.mockReturnValue(creation.promise)
+    const { router, workspaceTransitionGuard } = await renderGuardedRoutedSettings()
+
+    await userEvent.click(await screen.findByRole('button', { name: /创建加密备份/ }))
+    await waitFor(() => expect(api.backupCreate).toHaveBeenCalledOnce())
+    await router.push({ name: 'dashboard' })
+    const workspaceAllowed = await workspaceTransitionGuard.attempt()
+    const busyUnload = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(busyUnload)
+    const blockedMessage = screen.queryByText('备份操作正在完成，请等待完成后再离开设置。')
+
+    creation.resolve({ status: 'ok', data: { ok: true, data: null } })
+
+    expect(router.currentRoute.value.name).toBe('settings')
+    expect(workspaceAllowed).toBe(false)
+    expect(busyUnload.defaultPrevented).toBe(true)
+    expect(blockedMessage).toBeVisible()
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /创建加密备份/ })).toBeEnabled())
+    await expect(workspaceTransitionGuard.attempt()).resolves.toBe(true)
+    const idleUnload = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(idleUnload)
+    expect(idleUnload.defaultPrevented).toBe(false)
+    await router.push({ name: 'dashboard' })
+    expect(router.currentRoute.value.name).toBe('dashboard')
+  })
+
+  it('keeps a validated candidate retryable and restores focus when restore startup fails', async () => {
+    api.backupPrepareRestore.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      id: 'candidate-retry',
+      expiresAtUtcMs: 1_725_086_400_000,
+      summary: {
+        formatVersion: 1,
+        createdAtUtcMs: 1_725_000_000_000,
+        assetCount: 4,
+        encryptedBytes: 2_097_152,
+        label: 'retryable-backup',
+        readyForRestore: true,
+      },
+    } } })
+    api.backupRestore.mockResolvedValue({ status: 'ok', data: {
+      ok: false,
+      error: {
+        code: 'backup_restore_failed',
+        userMessage: '恢复任务没有开始，候选仍可重试。',
+        retryable: true,
+        diagnosticId: 'restore-retry',
+      },
+    } })
+    const user = userEvent.setup()
+    render(SettingsView)
+
+    await user.click(await screen.findByRole('button', { name: /选择备份并准备恢复/ }))
+    const restoreTrigger = await screen.findByRole('button', { name: '查看风险并确认恢复' })
+    await user.click(restoreTrigger)
+    await user.click(screen.getByRole('checkbox', { name: /我明白：确认后当前题库/ }))
+    await user.click(screen.getByRole('button', { name: /确认恢复并重启/ }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('候选仍可重试')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.getByText('retryable-backup')).toBeVisible()
+    expect(restoreTrigger).toHaveFocus()
+    expect(api.backupRestore).toHaveBeenCalledWith('candidate-retry')
   })
 
   it('clears stale backup validation when a later package fails integrity checks', async () => {
@@ -862,5 +1557,118 @@ describe('SettingsView', () => {
     await userEvent.click(trigger)
     expect(await screen.findByRole('alert', { name: '诊断报告未生成' })).toBeVisible()
     expect(screen.queryByRole('status', { name: '诊断报告已生成' })).not.toBeInTheDocument()
+  })
+
+  it('shows ordinary builds as update-disabled without making a network check', async () => {
+    render(SettingsView)
+
+    expect(await screen.findByText('当前安装包未接入自动更新')).toBeVisible()
+    expect(screen.getByText('当前版本 0.1.0')).toBeVisible()
+    expect(screen.queryByRole('button', { name: '检查更新' })).not.toBeInTheDocument()
+    expect(api.windowsUpdateStatus).toHaveBeenCalledOnce()
+    expect(api.windowsUpdateCheck).not.toHaveBeenCalled()
+  })
+
+  it('checks once at a time and reports that the signed build is current', async () => {
+    api.windowsUpdateStatus.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      enabled: true,
+      currentVersion: '0.1.0',
+    } } })
+    let resolveCheck!: (value: unknown) => void
+    api.windowsUpdateCheck.mockReturnValue(new Promise(resolve => {
+      resolveCheck = resolve
+    }))
+    render(SettingsView)
+
+    const trigger = await screen.findByRole('button', { name: '检查更新' })
+    await fireEvent.click(trigger)
+    await fireEvent.click(trigger)
+
+    expect(api.windowsUpdateCheck).toHaveBeenCalledOnce()
+    expect(screen.getByRole('button', { name: '正在检查…' })).toBeDisabled()
+    resolveCheck({ status: 'ok', data: { ok: true, data: {
+      available: false,
+      currentVersion: '0.1.0',
+      version: null,
+      publishedAt: null,
+    } } })
+    expect(await screen.findByRole('status', { name: '应用更新状态' })).toHaveTextContent('当前已经是最新版本')
+    await waitFor(() => expect(trigger).toHaveFocus())
+  })
+
+  it('installs only the exact version returned by the verified update check', async () => {
+    api.windowsUpdateStatus.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      enabled: true,
+      currentVersion: '0.1.0',
+    } } })
+    api.windowsUpdateCheck.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      available: true,
+      currentVersion: '0.1.0',
+      version: '0.2.0',
+      publishedAt: '2026-07-28T00:00:00Z',
+      endpoint: 'https://private.example/latest.json',
+      signature: 'must-not-render',
+    } } })
+    render(SettingsView)
+
+    await userEvent.click(await screen.findByRole('button', { name: '检查更新' }))
+    const available = await screen.findByRole('status', { name: '应用更新状态' })
+    expect(available).toHaveTextContent('发现已签名版本 0.2.0')
+    expect(available).not.toHaveTextContent(/private\.example|must-not-render/)
+
+    await userEvent.click(screen.getByRole('button', { name: '安装 0.2.0' }))
+    expect(api.windowsUpdateInstall).toHaveBeenCalledWith('0.2.0')
+    expect(await screen.findByRole('status', { name: '应用更新状态' })).toHaveTextContent('安装程序已启动')
+  })
+
+  it('keeps update failures retryable and never renders private updater details', async () => {
+    api.windowsUpdateStatus.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      enabled: true,
+      currentVersion: '0.1.0',
+    } } })
+    api.windowsUpdateCheck.mockResolvedValue({ status: 'ok', data: { ok: false, error: {
+      code: 'update_check_failed',
+      userMessage: '暂时无法检查更新，请稍后重试。',
+      retryable: true,
+      diagnosticId: 'private-diagnostic',
+      rawError: 'https://private.example/latest.json?token=secret',
+    } } })
+    render(SettingsView)
+
+    const trigger = await screen.findByRole('button', { name: '检查更新' })
+    await userEvent.click(trigger)
+
+    const status = await screen.findByRole('status', { name: '应用更新状态' })
+    expect(status).toHaveTextContent('暂时无法检查更新，请稍后重试。')
+    expect(status).not.toHaveTextContent(/private-diagnostic|private\.example|token=secret/)
+    expect(trigger).toBeEnabled()
+    expect(trigger).toHaveFocus()
+  })
+
+  it('discards a stale available version when installation reports a version change', async () => {
+    api.windowsUpdateStatus.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      enabled: true,
+      currentVersion: '0.1.0',
+    } } })
+    api.windowsUpdateCheck.mockResolvedValue({ status: 'ok', data: { ok: true, data: {
+      available: true,
+      currentVersion: '0.1.0',
+      version: '0.2.0',
+      publishedAt: null,
+    } } })
+    api.windowsUpdateInstall.mockResolvedValue({ status: 'ok', data: { ok: false, error: {
+      code: 'update_version_changed',
+      userMessage: '可用版本已经变化，请重新检查。',
+      retryable: true,
+      diagnosticId: 'update-version',
+    } } })
+    render(SettingsView)
+
+    await userEvent.click(await screen.findByRole('button', { name: '检查更新' }))
+    await userEvent.click(await screen.findByRole('button', { name: '安装 0.2.0' }))
+
+    expect(await screen.findByRole('status', { name: '应用更新状态' })).toHaveTextContent('可用版本已经变化，请重新检查。')
+    expect(screen.queryByRole('button', { name: '安装 0.2.0' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '检查更新' })).toBeEnabled()
   })
 })

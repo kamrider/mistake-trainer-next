@@ -95,7 +95,10 @@ describe('ReviewRoom', () => {
     const view = render(ReviewRoom, { props: { ...baseProps, submitting: true } })
     await user.keyboard(' ')
     await user.keyboard('2')
+    await user.keyboard('{Escape}')
     expect(view.emitted('rate')).toBeUndefined()
+    expect(view.emitted('exit')).toBeUndefined()
+    expect(screen.getByRole('button', { name: '正在保存训练进度' })).toBeDisabled()
   })
 
   it('labels a user-selected deck without changing the review controls', () => {
@@ -126,6 +129,33 @@ describe('ReviewRoom', () => {
 
     await user.keyboard('{ArrowLeft}')
     expect(view.emitted('previous')).toHaveLength(1)
+  })
+
+  it('moves context to the entered stage without stealing deliberate focus during a real transition', async () => {
+    const user = userEvent.setup()
+    const view = render(ReviewRoom, {
+      props: { ...baseProps, mode: 'exam', examPhase: 'answering', current: 1, total: 3 },
+      global: { stubs: { transition: false } },
+    })
+
+    const headingName = '先独立完成整组，再统一看答案'
+    const firstHeading = screen.getByRole('heading', { name: headingName })
+    await waitFor(() => expect(firstHeading).toHaveFocus())
+
+    await user.click(screen.getByRole('button', { name: '下一题' }))
+    await view.rerender({ current: 2 })
+    await waitFor(() => {
+      const enteredHeading = screen.getByRole('heading', { name: headingName })
+      expect(enteredHeading).not.toBe(firstHeading)
+      expect(enteredHeading).toHaveFocus()
+    })
+
+    const secondHeading = screen.getByRole('heading', { name: headingName })
+    await view.rerender({ current: 3 })
+    const exit = screen.getByRole('button', { name: '退出训练' })
+    exit.focus()
+    await waitFor(() => expect(screen.getByRole('heading', { name: headingName })).not.toBe(secondHeading))
+    expect(exit).toHaveFocus()
   })
 
   it('shows answers immediately in exam grading and only exposes right or wrong', async () => {

@@ -1,12 +1,13 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import SettingsSectionNav, { type SettingsSectionLink } from './SettingsSectionNav.vue'
+import type { SettingsSectionLink } from '../settings-section-catalog'
+import SettingsSectionNav from './SettingsSectionNav.vue'
 
 const sections: SettingsSectionLink[] = [
-  { id: 'settings-sync', label: '同步账户', hint: '本地与云端' },
-  { id: 'settings-subjects', label: '科目配置', hint: '采集常用项' },
-  { id: 'settings-review', label: '训练节奏', hint: '专注插曲' },
+  { id: 'settings-sync', label: '同步账户', hint: '本地与云端', group: '账户与同步' },
+  { id: 'settings-subjects', label: '科目配置', hint: '采集常用项', group: '学习体验' },
+  { id: 'settings-review', label: '训练节奏', hint: '专注插曲', group: '学习体验' },
 ]
 
 let observerCallback: IntersectionObserverCallback
@@ -90,12 +91,18 @@ describe('SettingsSectionNav', () => {
 
   it('smoothly jumps to a section and exposes the active location', async () => {
     const anchors = addAnchors()
-    render(SettingsSectionNav, { props: { sections } })
+    const view = render(SettingsSectionNav, { props: { sections } })
 
     expect(screen.getByRole('navigation', { name: '设置目录' })).toBeVisible()
     expect(screen.getByRole('button', { name: '查看更多设置' })).toBeVisible()
     expect(screen.getByRole('button', { name: '查看前面的设置' })).toBeVisible()
     expect(document.querySelector('.settings-section-indicator')).toHaveAttribute('aria-hidden', 'true')
+    expect(screen.getByRole('group', { name: '账户与同步' })).toBeVisible()
+    expect(screen.getByRole('group', { name: '学习体验' })).toBeVisible()
+    expect(screen.getByRole('button', { name: /科目配置/ }))
+      .toHaveAttribute('aria-controls', 'settings-subjects')
+    expect(view.container.querySelector('.settings-section-scroller'))
+      .toHaveAttribute('tabindex', '0')
     await userEvent.click(screen.getByRole('button', { name: /科目配置/ }))
 
     expect(anchors[1]!.scrollIntoView).toHaveBeenCalledWith({

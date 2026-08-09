@@ -12,6 +12,7 @@ const props = defineProps<{
   errorMessage?: string
   selectedProblemIds?: string[]
   startingExperience?: 'review' | 'exam' | null
+  changingBatchStatus?: ProblemStatusFilter | null
 }>()
 
 const emit = defineEmits<{
@@ -35,6 +36,7 @@ const filters: Array<{ value: ProblemStatusFilter; label: string }> = [
 
 const selectionMode = ref(false)
 const isSelecting = computed(() => selectionMode.value || Boolean(props.selectedProblemIds?.length))
+const batchInteractionBusy = computed(() => Boolean(props.startingExperience || props.changingBatchStatus))
 
 function toggleBatchManagement() {
   if (isSelecting.value) {
@@ -87,6 +89,7 @@ function toggleBatchManagement() {
           type="button"
           :class="{ active: status === filter.value }"
           :aria-pressed="status === filter.value"
+          :disabled="batchInteractionBusy"
           @click="$emit('statusChange', filter.value)"
         >
           {{ filter.label }}
@@ -101,6 +104,7 @@ function toggleBatchManagement() {
         <input
           type="search"
           :value="search"
+          :disabled="batchInteractionBusy"
           placeholder="搜索科目、标签或复盘笔记"
           @input="$emit('searchChange', ($event.target as HTMLInputElement).value)"
         >
@@ -113,7 +117,7 @@ function toggleBatchManagement() {
           v-if="isSelecting"
           class="select-all-action"
           type="button"
-          :disabled="Boolean(startingExperience)"
+          :disabled="batchInteractionBusy"
           @click="$emit('selectAll')"
         >
           <CheckCheck
@@ -126,7 +130,7 @@ function toggleBatchManagement() {
           class="select-all-action"
           type="button"
           :aria-pressed="isSelecting"
-          :disabled="Boolean(startingExperience)"
+          :disabled="batchInteractionBusy"
           @click="toggleBatchManagement"
         >
           <ListChecks
@@ -144,7 +148,12 @@ function toggleBatchManagement() {
         class="batch-bar"
         aria-label="所选题目操作"
       >
-        <div class="selection-summary">
+        <div
+          class="selection-summary"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
           <span class="selection-count">{{ selectedProblemIds.length }}</span>
           <span>道题已放入本轮卡组</span>
         </div>
@@ -153,7 +162,7 @@ function toggleBatchManagement() {
             v-if="status === 'active'"
             class="start-review-action"
             type="button"
-            :disabled="Boolean(startingExperience)"
+            :disabled="batchInteractionBusy"
             @click="$emit('trainSelection')"
           >
             <LoaderCircle
@@ -173,7 +182,7 @@ function toggleBatchManagement() {
             v-if="status === 'active'"
             type="button"
             class="start-exam-action"
-            :disabled="Boolean(startingExperience)"
+            :disabled="batchInteractionBusy"
             @click="$emit('startExam')"
           >
             <LoaderCircle
@@ -192,40 +201,61 @@ function toggleBatchManagement() {
           <button
             v-if="status === 'active'"
             type="button"
-            :disabled="Boolean(startingExperience)"
+            :disabled="batchInteractionBusy"
             @click="$emit('batchStatus', 'archived')"
           >
-            <Archive
+            <LoaderCircle
+              v-if="changingBatchStatus === 'archived'"
+              class="spin"
               :size="15"
               aria-hidden="true"
-            />归档
+            />
+            <Archive
+              v-else
+              :size="15"
+              aria-hidden="true"
+            />{{ changingBatchStatus === 'archived' ? '正在归档…' : '归档' }}
           </button>
           <button
             v-if="status !== 'trashed'"
             type="button"
-            :disabled="Boolean(startingExperience)"
+            :disabled="batchInteractionBusy"
             @click="$emit('batchStatus', 'trashed')"
           >
-            <Trash2
+            <LoaderCircle
+              v-if="changingBatchStatus === 'trashed'"
+              class="spin"
               :size="15"
               aria-hidden="true"
-            />移入回收站
+            />
+            <Trash2
+              v-else
+              :size="15"
+              aria-hidden="true"
+            />{{ changingBatchStatus === 'trashed' ? '正在移入回收站…' : '移入回收站' }}
           </button>
           <button
             v-else
             type="button"
-            :disabled="Boolean(startingExperience)"
+            :disabled="batchInteractionBusy"
             @click="$emit('batchStatus', 'active')"
           >
-            <RotateCcw
+            <LoaderCircle
+              v-if="changingBatchStatus === 'active'"
+              class="spin"
               :size="15"
               aria-hidden="true"
-            />恢复学习
+            />
+            <RotateCcw
+              v-else
+              :size="15"
+              aria-hidden="true"
+            />{{ changingBatchStatus === 'active' ? '正在恢复学习…' : '恢复学习' }}
           </button>
           <button
             class="clear-selection"
             type="button"
-            :disabled="Boolean(startingExperience)"
+            :disabled="batchInteractionBusy"
             @click="$emit('clearSelection')"
           >
             <X
@@ -264,7 +294,6 @@ function toggleBatchManagement() {
         :key="problem.id"
         class="problem-card"
         :class="{ selected: selectedProblemIds?.includes(problem.id) }"
-        :aria-selected="selectedProblemIds?.includes(problem.id)"
       >
         <div class="problem-card__topline">
           <label
@@ -274,6 +303,7 @@ function toggleBatchManagement() {
             <input
               type="checkbox"
               :checked="selectedProblemIds?.includes(problem.id)"
+              :disabled="batchInteractionBusy"
               :aria-label="`选择 ${problem.subject || '未分类'} 错题`"
               @change="$emit('toggleSelection', problem.id)"
             >
@@ -285,6 +315,7 @@ function toggleBatchManagement() {
         <button
           class="problem-preview"
           type="button"
+          :disabled="batchInteractionBusy"
           :aria-label="`打开 ${problem.subject || '未分类'} 错题详情`"
           @click="$emit('openDetail', problem.id)"
         >
@@ -386,16 +417,16 @@ h1 { margin: 0; font-size: clamp(42px,5vw,64px); letter-spacing: -.055em; line-h
 .primary-action:active { transform: scale(.98); }
 .library-toolbar { display: flex; justify-content: space-between; gap: 12px; margin-top: 42px; padding-bottom: 17px; border-bottom: 1px solid var(--line); }
 .selection-tools { display: flex; gap: 8px; align-items: center; }
-.select-all-action { display: inline-flex; gap: 6px; align-items: center; min-height: 38px; padding: 0 13px; color: var(--green-deep); border: 1px solid var(--line); border-radius: 999px; background: rgba(255,253,247,.65); cursor: pointer; white-space: nowrap; }
+.select-all-action { display: inline-flex; gap: 6px; align-items: center; min-height: 44px; padding: 0 13px; color: var(--green-deep); border: 1px solid var(--line); border-radius: 999px; background: rgba(255,253,247,.65); cursor: pointer; white-space: nowrap; }
 .batch-bar { position: sticky; z-index: 12; bottom: 18px; display: flex; justify-content: space-between; gap: 16px; align-items: center; margin-top: 16px; padding: 11px 12px 11px 16px; border: 1px solid rgba(33,51,45,.22); border-radius: 17px; background: rgba(246,241,231,.95); box-shadow: 0 18px 46px rgba(34,48,43,.18); backdrop-filter: blur(14px); font-size: 13px; font-weight: 720; }
 .selection-summary, .batch-actions { display: flex; gap: 8px; align-items: center; }
 .selection-count { display: grid; width: 30px; height: 30px; place-items: center; color: var(--paper); border-radius: 10px 3px 10px 10px; background: var(--cinnabar); font-family: var(--font-serif); font-size: 16px; }
-.batch-bar button { display: inline-flex; gap: 6px; align-items: center; min-height: 36px; padding: 0 12px; color: var(--green-deep); border: 1px solid rgba(33,51,45,.16); border-radius: 999px; background: rgba(255,253,247,.78); cursor: pointer; transition: transform var(--motion-feedback) var(--ease-standard), background var(--motion-standard) var(--ease-standard), opacity var(--motion-feedback) var(--ease-standard); }
+.batch-bar button { display: inline-flex; gap: 6px; align-items: center; min-height: 44px; padding: 0 12px; color: var(--green-deep); border: 1px solid rgba(33,51,45,.16); border-radius: 999px; background: rgba(255,253,247,.78); cursor: pointer; transition: transform var(--motion-feedback) var(--ease-standard), background var(--motion-standard) var(--ease-standard), opacity var(--motion-feedback) var(--ease-standard); }
 .batch-bar button:hover:not(:disabled) { transform: translateY(-1px); background: #fffdf7; }
 .batch-bar button:disabled, .select-all-action:disabled { opacity: .58; cursor: wait; }
-.batch-bar .start-review-action { min-height: 40px; padding-inline: 16px; color: var(--paper); border-color: var(--green-deep); background: var(--green-deep); box-shadow: 0 7px 18px rgba(33,51,45,.18); }
+.batch-bar .start-review-action { min-height: 44px; padding-inline: 16px; color: var(--paper); border-color: var(--green-deep); background: var(--green-deep); box-shadow: 0 7px 18px rgba(33,51,45,.18); }
 .batch-bar .start-review-action:hover:not(:disabled) { background: #182923; }
-.batch-bar .start-exam-action { min-height: 40px; padding-inline: 16px; color: #873e2f; border-color: rgba(185,88,63,.42); background: #fff6ed; box-shadow: 0 7px 18px rgba(185,88,63,.1); }
+.batch-bar .start-exam-action { min-height: 44px; padding-inline: 16px; color: #873e2f; border-color: rgba(185,88,63,.42); background: #fff6ed; box-shadow: 0 7px 18px rgba(185,88,63,.1); }
 .batch-bar .start-exam-action:hover:not(:disabled) { color: #713123; border-color: var(--cinnabar); background: #fffaf3; }
 .batch-bar .start-review-action:not(:disabled):active,
 .batch-bar .start-exam-action:not(:disabled):active { transform: scale(.975); }
@@ -403,10 +434,10 @@ h1 { margin: 0; font-size: clamp(42px,5vw,64px); letter-spacing: -.055em; line-h
 .deck-dock-enter-from, .deck-dock-leave-to { opacity: 0; transform: translateY(12px) scale(.98); }
 .spin { animation: spin .8s linear infinite; }
 .filter-tabs { display: flex; gap: 5px; }
-.filter-tabs button { min-height: 37px; padding: 0 14px; color: var(--ink-muted); border: 0; border-radius: 999px; background: transparent; cursor: pointer; }
+.filter-tabs button { min-height: 44px; padding: 0 14px; color: var(--ink-muted); border: 0; border-radius: 999px; background: transparent; cursor: pointer; }
 .filter-tabs button.active { color: var(--green-deep); background: var(--green-soft); font-weight: 720; }
 .search-field { display: flex; gap: 8px; align-items: center; min-width: 240px; padding: 0 13px; color: var(--ink-muted); border: 1px solid var(--line); border-radius: 999px; background: rgba(255,253,247,.55); }
-.search-field input { width: 100%; min-height: 36px; border: 0; outline: 0; background: transparent; }
+.search-field input { width: 100%; min-height: 44px; border: 0; outline: 0; background: transparent; }
 .search-field:focus-within { border-color: var(--green-deep); box-shadow: 0 0 0 3px rgba(33,51,45,.1); }
 .error-banner { margin: 20px 0 0; padding: 12px 15px; color: #7f3829; border: 1px solid rgba(185,88,63,.28); border-radius: 10px; background: rgba(185,88,63,.08); }
 .loading-state { display: grid; gap: 12px; padding: 42px 0; }
@@ -418,18 +449,18 @@ h1 { margin: 0; font-size: clamp(42px,5vw,64px); letter-spacing: -.055em; line-h
 .problem-card__topline, .asset-counts { display: flex; gap: 9px; align-items: center; }
 .problem-card__topline { justify-content: flex-start; }
 .problem-card__topline .status-dot { margin-left: auto; }
-.select-problem { display: inline-flex; gap: 9px; align-items: center; cursor: pointer; }
+.select-problem { display: inline-flex; min-width: 44px; min-height: 44px; gap: 9px; align-items: center; justify-content: center; cursor: pointer; }
 .select-problem input { width: 16px; height: 16px; accent-color: var(--green-deep); }
 .subject { font-weight: 760; }
-.status-dot { color: #567064; font-size: 11px; }
+.status-dot { color: #567064; font-size: 12px; }
 .problem-preview { position: relative; display: grid; width: 100%; aspect-ratio: 4 / 3; margin-top: 18px; overflow: hidden; place-items: center; color: var(--ink-muted); border: 1px solid rgba(33,51,45,.12); border-radius: 14px; background: linear-gradient(145deg,rgba(232,221,199,.64),rgba(255,253,247,.92)); cursor: pointer; transition: transform var(--motion-standard) var(--ease-standard), border-color var(--motion-standard) var(--ease-standard), box-shadow var(--motion-standard) var(--ease-standard); }
 .problem-preview:hover { border-color: rgba(185,88,63,.48); box-shadow: 0 12px 26px rgba(34,48,43,.11); transform: translateY(-2px); }
 .problem-preview:focus-visible { outline: 3px solid rgba(185,88,63,.34); outline-offset: 2px; }
 .problem-preview img { width: 100%; height: 100%; object-fit: contain; background: #fff; }
 .problem-preview > span { display: grid; gap: 8px; place-items: center; padding: 24px; font-size: 12px; }
-.problem-preview small { position: absolute; right: 9px; bottom: 8px; padding: 5px 8px; color: var(--paper); border-radius: 999px; background: rgba(33,51,45,.76); font-size: 10px; font-weight: 720; }
+.problem-preview small { position: absolute; right: 9px; bottom: 8px; padding: 5px 8px; color: var(--paper); border-radius: 999px; background: rgba(33,51,45,.76); font-size: 12px; font-weight: 720; }
 .problem-tags { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 14px; }
-.problem-tags span { max-width: 150px; padding: 5px 9px; overflow: hidden; color: var(--green-deep); border: 1px solid rgba(33,51,45,.12); border-radius: 999px; background: var(--green-soft); font-size: 11px; font-weight: 720; text-overflow: ellipsis; white-space: nowrap; animation: tag-rise var(--motion-standard) var(--ease-standard); }
+.problem-tags span { max-width: 150px; padding: 5px 9px; overflow: hidden; color: var(--green-deep); border: 1px solid rgba(33,51,45,.12); border-radius: 999px; background: var(--green-soft); font-size: 12px; font-weight: 720; text-overflow: ellipsis; white-space: nowrap; animation: tag-rise var(--motion-standard) var(--ease-standard); }
 .problem-note { min-height: 48px; margin: 20px 0; font-size: 16px; line-height: 1.55; }
 .asset-counts { color: var(--ink-muted); font-size: 12px; }
 .asset-counts span { display: inline-flex; gap: 5px; align-items: center; }
@@ -438,7 +469,7 @@ h1 { margin: 0; font-size: clamp(42px,5vw,64px); letter-spacing: -.055em; line-h
 .empty-kicker { margin: 24px 0 7px; color: var(--cinnabar); font-size: 12px; letter-spacing: .08em; }
 .empty-state h2 { margin: 0; font-size: 30px; letter-spacing: -.03em; }
 .empty-state > p:not(.empty-kicker) { max-width: 480px; margin: 13px 0 24px; color: var(--ink-muted); line-height: 1.65; }
-.empty-footnote { display: inline-flex; gap: 7px; align-items: center; margin-top: 23px; color: var(--ink-muted); font-size: 11px; }
+.empty-footnote { display: inline-flex; gap: 7px; align-items: center; margin-top: 23px; color: var(--ink-muted); font-size: 12px; }
 .search-empty { padding-block: 48px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
 @keyframes pulse { from { opacity: .45; } to { opacity: .8; } }

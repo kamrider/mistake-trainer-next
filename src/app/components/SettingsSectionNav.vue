@@ -1,11 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-
-export interface SettingsSectionLink {
-  id: string
-  label: string
-  hint: string
-}
+import type { SettingsSectionLink } from '../settings-section-catalog'
 
 const props = defineProps<{
   sections: SettingsSectionLink[]
@@ -23,10 +18,22 @@ const sectionKey = computed(() => props.sections.map(section => section.id).join
 const activeIndex = computed(() =>
   Math.max(0, props.sections.findIndex(section => section.id === activeId.value)),
 )
-const trackStyle = computed(() => ({
-  '--section-count': Math.max(1, props.sections.length),
-  '--active-x': `${activeIndex.value * 100}%`,
-}))
+const sectionGroups = computed(() => {
+  const groups: Array<{ label: string, id: string, sections: SettingsSectionLink[] }> = []
+  for (const section of props.sections) {
+    let group = groups.find(candidate => candidate.label === section.group)
+    if (!group) {
+      group = {
+        label: section.group,
+        id: `settings-nav-group-${groups.length + 1}`,
+        sections: [],
+      }
+      groups.push(group)
+    }
+    group.sections.push(section)
+  }
+  return groups
+})
 
 function prefersReducedMotion() {
   return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
@@ -147,27 +154,41 @@ onBeforeUnmount(() => {
     <div
       ref="scroller"
       class="settings-section-scroller"
+      tabindex="0"
+      aria-label="可横向滚动的设置目录"
       @scroll="updateOverflow"
     >
-      <div
-        class="settings-section-track"
-        :style="trackStyle"
-      >
+      <div class="settings-section-track">
         <span
           class="settings-section-indicator"
           aria-hidden="true"
         />
-        <button
-          v-for="section in sections"
-          :key="section.id"
-          type="button"
-          :class="{ active: section.id === activeId }"
-          :aria-current="section.id === activeId ? 'location' : undefined"
-          @click="selectSection(section.id)"
+        <div
+          v-for="group in sectionGroups"
+          :key="group.label"
+          class="settings-section-group"
+          role="group"
+          :aria-labelledby="group.id"
         >
-          <strong>{{ section.label }}</strong>
-          <small>{{ section.hint }}</small>
-        </button>
+          <span
+            :id="group.id"
+            class="settings-section-group-label"
+          >{{ group.label }}</span>
+          <div class="settings-section-group-items">
+            <button
+              v-for="section in group.sections"
+              :key="section.id"
+              type="button"
+              :class="{ active: section.id === activeId }"
+              :aria-current="section.id === activeId ? 'location' : undefined"
+              :aria-controls="section.id"
+              @click="selectSection(section.id)"
+            >
+              <strong>{{ section.label }}</strong>
+              <small>{{ section.hint }}</small>
+            </button>
+          </div>
+        </div>
       </div>
     </div>
     <button
@@ -242,30 +263,39 @@ onBeforeUnmount(() => {
 }
 .settings-section-scroller::-webkit-scrollbar { display: none; }
 .settings-section-track {
-  --section-count: 1;
-  --active-x: 0%;
   position: relative;
   isolation: isolate;
-  display: grid;
-  min-width: 690px;
-  grid-template-columns: repeat(var(--section-count),minmax(108px,1fr));
+  display: flex;
+  min-width: max-content;
+  gap: 4px;
+  align-items: stretch;
 }
 .settings-section-indicator {
   position: absolute;
-  z-index: -1;
-  inset: 0 auto 0 0;
-  width: calc(100% / var(--section-count));
-  border: 1px solid rgba(33,51,45,.16);
-  border-radius: 12px 4px 12px 12px;
-  background: linear-gradient(145deg,rgba(220,228,220,.96),rgba(232,221,199,.72));
-  box-shadow: 0 5px 14px rgba(33,51,45,.08);
-  transform: translate3d(var(--active-x),0,0);
-  transition: transform var(--motion-page) var(--ease-standard);
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
 }
-.settings-section-track button {
+.settings-section-group {
   display: grid;
-  min-width: 0;
-  min-height: 54px;
+  min-width: max-content;
+  grid-template-rows: auto 1fr;
+  padding: 3px;
+  border-right: 1px solid rgba(33,51,45,.1);
+}
+.settings-section-group:last-of-type { border-right: 0; }
+.settings-section-group-label {
+  padding: 2px 10px 3px;
+  color: var(--ink-muted);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .06em;
+}
+.settings-section-group-items { display: flex; }
+.settings-section-group-items button {
+  display: grid;
+  min-width: 108px;
+  min-height: 48px;
   padding: 8px 11px;
   place-items: center;
   align-content: center;
@@ -277,29 +307,28 @@ onBeforeUnmount(() => {
   text-align: center;
   transition: color var(--motion-standard) var(--ease-standard),transform var(--motion-feedback) var(--ease-standard);
 }
-.settings-section-track button:hover { color: var(--green-deep); transform: translateY(-1px); }
-.settings-section-track button.active { color: var(--green-deep); }
-.settings-section-track button strong,.settings-section-track button small {
+.settings-section-group-items button:hover { color: var(--green-deep); background: rgba(255,253,247,.55); transform: translateY(-1px); }
+.settings-section-group-items button.active { color: var(--green-deep); background: rgba(255,253,247,.9); box-shadow: inset 0 -2px var(--cinnabar); }
+.settings-section-group-items button strong,.settings-section-group-items button small {
   display: block;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.settings-section-track button strong { font-size: 12px; font-weight: 790; }
-.settings-section-track button small { margin-top: 3px; color: inherit; font-size: 9px; opacity: .72; }
-.settings-section-track button:focus-visible,.directory-scroll:focus-visible { outline: 3px solid rgba(185,88,63,.28); outline-offset: -2px; }
+.settings-section-group-items button strong { font-size: 13px; font-weight: 790; }
+.settings-section-group-items button small { margin-top: 3px; color: inherit; font-size: 12px; opacity: .72; }
+.settings-section-group-items button:focus-visible,.directory-scroll:focus-visible,.settings-section-scroller:focus-visible { outline: 3px solid rgba(185,88,63,.28); outline-offset: -2px; }
 @media(max-width:760px) {
   .settings-section-nav { top: 8px; margin: -5px 0 16px; padding: 4px; border-radius: 14px; }
-  .settings-section-track { min-width: 650px; }
-  .settings-section-track button { min-height: 50px; padding-inline: 8px; }
+  .settings-section-group-items button { min-height: 48px; padding-inline: 8px; }
+  .directory-scroll { width: 44px; height: 44px; }
 }
 @media(forced-colors:active) {
-  .settings-section-indicator { border-color: Highlight; background: Highlight; forced-color-adjust: auto; }
-  .settings-section-track button.active { color: HighlightText; }
+  .settings-section-group-items button.active { color: Highlight; border: 1px solid Highlight; }
 }
 @media(prefers-reduced-motion:reduce) {
-  .settings-section-indicator,.settings-section-track button { transition: none; }
-  .settings-section-track button:hover { transform: none; }
+  .settings-section-group-items button { transition: none; }
+  .settings-section-group-items button:hover { transform: none; }
 }
 </style>
