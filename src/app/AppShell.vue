@@ -130,7 +130,7 @@ const activeNavigationIndex = computed(() =>
 
 <style scoped>
 .app-frame { display: grid; grid-template-columns: 228px minmax(0,1fr); min-height: 100vh; }
-.side-rail { position: sticky; top: 0; display: flex; height: 100vh; flex-direction: column; padding: 28px 18px 20px; border-right: 1px solid var(--line); background: rgba(246,241,231,.86); backdrop-filter: blur(18px); }
+.side-rail { position: sticky; z-index: 50; top: 0; display: flex; height: 100vh; flex-direction: column; padding: 28px 18px 20px; border-right: 1px solid var(--line); background: rgba(246,241,231,.86); backdrop-filter: blur(18px); }
 .brand { display: flex; gap: 11px; align-items: center; padding: 0 9px 26px; }
 .brand-mark { display: grid; width: 34px; height: 34px; place-items: center; color: var(--white); border-radius: 9px 9px 9px 3px; background: var(--cinnabar); font-family: Georgia, serif; font-weight: 700; }
 .brand strong, .brand small { display: block; }

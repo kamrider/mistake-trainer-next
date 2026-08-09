@@ -51,7 +51,7 @@ function goToDashboard() {
 .not-found-kicker { margin: 4px 0 0; color: var(--cinnabar); font-size: 12px; font-weight: 700; letter-spacing: .08em; }
 .not-found h1 { margin: 0; color: var(--ink); font-family: var(--font-serif); font-size: clamp(26px, 4vw, 36px); }
 .not-found-copy { max-width: 440px; margin: 0; line-height: 1.7; }
-.not-found button { min-height: 42px; margin-top: 8px; padding: 0 18px; color: var(--paper); border: 0; border-radius: 999px; background: var(--green-deep); cursor: pointer; transition: transform var(--motion-feedback) var(--ease-standard), box-shadow var(--motion-feedback) var(--ease-standard); }
+.not-found button { min-height: 44px; margin-top: 8px; padding: 0 18px; color: var(--paper); border: 0; border-radius: 999px; background: var(--green-deep); cursor: pointer; transition: transform var(--motion-feedback) var(--ease-standard), box-shadow var(--motion-feedback) var(--ease-standard); }
 .not-found button:hover { transform: translateY(-1px); box-shadow: 0 8px 18px rgba(33, 51, 45, .18); }
 .not-found button:active { transform: translateY(0); }
 @media (prefers-reduced-motion: reduce) { .not-found button { transition: none; } }
