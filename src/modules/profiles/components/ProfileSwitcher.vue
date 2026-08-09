@@ -470,7 +470,7 @@ onBeforeUnmount(() => {
 .select-profile strong, .select-profile small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .select-profile strong { font-size: 13px; }
 .select-profile small { margin-top: 3px; color: var(--ink-muted); font-size: 12px; }
-.rename-button, .delete-button { width: 44px; height: 44px; flex: 0 0 44px; touch-action: manipulation; }
+.rename-button, .delete-button { width: 44px; height: 44px; touch-action: manipulation; }
 .create-button { display: flex; gap: 8px; align-items: center; justify-content: center; min-height: 44px; margin-top: 3px; color: var(--green-deep); border: 1px dashed rgba(33,51,45,.28); border-radius: 11px; background: transparent; cursor: pointer; font-weight: 700; }
 .create-button:hover { background: var(--green-soft); }
 .profile-form { display: grid; gap: 9px; padding: 16px; }

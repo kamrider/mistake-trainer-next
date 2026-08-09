@@ -134,7 +134,7 @@ Run: `pnpm build`
 
 Expected: exit code 0 and a successful Vite production build.
 
-- [x] **Step 2: Inspect the running app at desktop width**
+- [ ] **Step 2: Inspect the running app at desktop width**
 
 Open the profile menu, verify that main-page text no longer draws over the panel, and click the center and edges of both the rename and delete 44px buttons. Verify the settings directory arrows and not-found return action remain visually balanced after their size adjustment.
 

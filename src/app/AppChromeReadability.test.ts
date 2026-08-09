@@ -23,6 +23,14 @@ function declarations(componentPath: string, selector: string) {
   return (match?.[1] ?? '').replace(/\s+/g, '')
 }
 
+function numericDeclaration(componentPath: string, selector: string, property: string) {
+  const compact = source(componentPath).replace(/\s+/g, ' ')
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const match = compact.match(new RegExp(`${escapedSelector}\\s*\\{[^}]*${property}:\\s*(-?\\d+)`))
+  if (!match?.[1]) throw new Error(`Missing numeric ${property} for ${selector} in ${componentPath}`)
+  return Number(match[1])
+}
+
 describe('application chrome readability contract', () => {
   it('keeps every explicit visible pixel font at 12px or larger', () => {
     const violations = componentPaths.flatMap(componentPath =>
@@ -43,7 +51,14 @@ describe('application chrome readability contract', () => {
   })
 
   it('keeps the profile popover above page chrome with explicit action targets', () => {
-    expect(declarations('src/app/AppShell.vue', '.side-rail')).toContain('z-index:50')
+    const pageChromeLayer = numericDeclaration('src/app/components/SettingsSectionNav.vue', '.settings-section-nav', 'z-index')
+    const railLayer = numericDeclaration('src/app/AppShell.vue', '.side-rail', 'z-index')
+    const noticeLayer = numericDeclaration('src/app/App.vue', '.global-notice-stack', 'z-index')
+    const dialogLayer = numericDeclaration('src/app/BackupRestoreDialog.vue', '.restore-backdrop', 'z-index')
+
+    expect(pageChromeLayer).toBeLessThan(railLayer)
+    expect(railLayer).toBeLessThan(noticeLayer)
+    expect(railLayer).toBeLessThan(dialogLayer)
     expect(declarations('src/modules/profiles/components/ProfileSwitcher.vue', '.rename-button, .delete-button'))
       .toMatch(/width:44px;height:44px/)
   })
