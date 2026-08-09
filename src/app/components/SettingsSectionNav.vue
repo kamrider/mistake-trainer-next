@@ -221,8 +221,8 @@ onBeforeUnmount(() => {
   z-index: 3;
   top: 50%;
   display: grid;
-  width: 30px;
-  height: 38px;
+  width: 44px;
+  height: 44px;
   min-height: 0;
   padding: 0;
   place-items: center;

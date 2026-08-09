@@ -6,6 +6,9 @@ const componentPaths = [
   'src/app/App.vue',
   'src/app/AppShell.vue',
   'src/app/LibraryAccessScreen.vue',
+  'src/app/views/NotFoundView.vue',
+  'src/app/components/SettingsSectionNav.vue',
+  'src/modules/profiles/components/ProfileSwitcher.vue',
 ]
 const tokenPath = 'src/shared/styles/tokens.css'
 
@@ -37,6 +40,19 @@ describe('application chrome readability contract', () => {
     expect(declarations('src/app/App.vue', '.restore-notice button')).toMatch(/width:44px;height:44px/)
     expect(declarations('src/app/App.vue', '.route-error button')).toContain('min-height:44px')
     expect(declarations('src/app/LibraryAccessScreen.vue', '.access-primary, .access-secondary')).toContain('min-height:46px')
+  })
+
+  it('keeps the profile popover above page chrome with explicit action targets', () => {
+    expect(declarations('src/app/AppShell.vue', '.side-rail')).toContain('z-index:50')
+    expect(declarations('src/modules/profiles/components/ProfileSwitcher.vue', '.rename-button, .delete-button'))
+      .toMatch(/width:44px;height:44px/)
+  })
+
+  it('keeps remaining application-chrome actions at the 44px baseline', () => {
+    expect(declarations('src/app/components/SettingsSectionNav.vue', '.directory-scroll'))
+      .toMatch(/width:44px;height:44px/)
+    expect(declarations('src/app/views/NotFoundView.vue', '.not-found button'))
+      .toContain('min-height:44px')
   })
 
   it('stacks simultaneous global notices inside one bounded viewport layer', () => {
