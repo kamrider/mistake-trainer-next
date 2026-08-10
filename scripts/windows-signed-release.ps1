@@ -10,22 +10,13 @@ $ErrorActionPreference = 'Stop'
 function Assert-Release {
   param([bool]$Condition, [string]$Message)
   if (-not $Condition) {
-    throw "Windows signed release blocked: $Message"
+    throw "Windows updater release blocked: $Message"
   }
 }
 
-function Normalize-Thumbprint {
-  param([string]$Value)
-  return ($Value -replace '\s', '').ToUpperInvariant()
-}
-
 $requiredEnvironment = @(
-  'WINDOWS_CERTIFICATE',
-  'WINDOWS_CERTIFICATE_PASSWORD',
-  'WINDOWS_CERTIFICATE_THUMBPRINT',
-  'WINDOWS_TIMESTAMP_URL',
-  'WINDOWS_UPDATE_ENDPOINT',
-  'WINDOWS_UPDATE_ARTIFACT_BASE_URL',
+  'WINDOWS_AUTHENTICODE_MODE',
+  'GITHUB_REPOSITORY',
   'WINDOWS_UPDATER_PUBLIC_KEY',
   'TAURI_SIGNING_PRIVATE_KEY',
   'TAURI_SIGNING_PRIVATE_KEY_PASSWORD'
@@ -51,68 +42,30 @@ Assert-Release ($packageJson.version -eq $releaseVersion) "package.json version 
 Assert-Release ($tauriConfiguration.version -eq $releaseVersion) "tauri.conf.json version '$($tauriConfiguration.version)' does not match '$releaseVersion'."
 Assert-Release ($cargoVersionMatch.Groups[1].Value -eq $releaseVersion) "Cargo.toml version '$($cargoVersionMatch.Groups[1].Value)' does not match '$releaseVersion'."
 
-$timestampUri = $null
-Assert-Release ([uri]::TryCreate($env:WINDOWS_TIMESTAMP_URL, [System.UriKind]::Absolute, [ref]$timestampUri)) 'timestamp URL is invalid.'
-Assert-Release ($timestampUri.Scheme -eq 'https') 'timestamp URL must use HTTPS.'
-
+$repositorySlug = $env:GITHUB_REPOSITORY.Trim()
+Assert-Release ($repositorySlug -eq $env:GITHUB_REPOSITORY) 'GITHUB_REPOSITORY must not contain surrounding whitespace.'
+Assert-Release ($repositorySlug -match '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') 'GITHUB_REPOSITORY must use owner/repository syntax.'
+$updateEndpointValue = "https://github.com/$repositorySlug/releases/latest/download/latest.json"
 $updateEndpoint = $null
-Assert-Release ([uri]::TryCreate($env:WINDOWS_UPDATE_ENDPOINT, [System.UriKind]::Absolute, [ref]$updateEndpoint)) 'update endpoint is invalid.'
+Assert-Release ([uri]::TryCreate($updateEndpointValue, [System.UriKind]::Absolute, [ref]$updateEndpoint)) 'derived update endpoint is invalid.'
 Assert-Release ($updateEndpoint.Scheme -eq 'https') 'update endpoint must use HTTPS.'
 Assert-Release ([string]::IsNullOrEmpty($updateEndpoint.UserInfo)) 'update endpoint must not contain credentials.'
 Assert-Release ([string]::IsNullOrEmpty($updateEndpoint.Fragment)) 'update endpoint must not contain a fragment.'
 
-$artifactBaseUri = $null
-Assert-Release ([uri]::TryCreate($env:WINDOWS_UPDATE_ARTIFACT_BASE_URL, [System.UriKind]::Absolute, [ref]$artifactBaseUri)) 'update artifact base URL is invalid.'
-Assert-Release ($artifactBaseUri.Scheme -eq 'https') 'update artifact base URL must use HTTPS.'
-Assert-Release ([string]::IsNullOrEmpty($artifactBaseUri.UserInfo)) 'update artifact base URL must not contain credentials.'
-Assert-Release ([string]::IsNullOrEmpty($artifactBaseUri.Query)) 'update artifact base URL must not contain a query.'
-Assert-Release ([string]::IsNullOrEmpty($artifactBaseUri.Fragment)) 'update artifact base URL must not contain a fragment.'
-
 $updaterPublicKey = $env:WINDOWS_UPDATER_PUBLIC_KEY.Trim()
 Assert-Release ($updaterPublicKey.Length -ge 32) 'updater public key is unexpectedly short.'
 Assert-Release ($updaterPublicKey.Length -le 16384) 'updater public key is unexpectedly large.'
-
-$expectedThumbprint = Normalize-Thumbprint $env:WINDOWS_CERTIFICATE_THUMBPRINT
-Assert-Release ($expectedThumbprint -match '^[0-9A-F]{40,64}$') 'certificate thumbprint has an invalid shape.'
+Assert-Release ($env:WINDOWS_AUTHENTICODE_MODE -ceq 'disabled') 'WINDOWS_AUTHENTICODE_MODE must be exactly disabled for the free release channel.'
 
 $runnerTemp = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
 $releaseTemp = Join-Path $runnerTemp "mistake-trainer-signing-$([guid]::NewGuid().ToString('N'))"
-$pfxPath = Join-Path $releaseTemp 'windows-signing-certificate.pfx'
 $overridePath = Join-Path $releaseTemp 'tauri.signing.conf.json'
-$importedCertificatePaths = @()
-$preExistingCertificatePaths = @(
-  Get-ChildItem 'Cert:\CurrentUser\My' | ForEach-Object { $_.PSPath }
-)
 New-Item -ItemType Directory -Path $releaseTemp -Force | Out-Null
 
 try {
-  try {
-    [System.IO.File]::WriteAllBytes(
-      $pfxPath,
-      [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
-    )
-  }
-  catch {
-    throw 'Windows signed release blocked: WINDOWS_CERTIFICATE is not valid base64.'
-  }
-
-  $securePassword = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
-  $imported = @(Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation 'Cert:\CurrentUser\My' -Password $securePassword)
-  $importedCertificatePaths = @($imported | ForEach-Object { $_.PSPath })
-  $signingCertificate = $imported |
-    Where-Object { (Normalize-Thumbprint $_.Thumbprint) -eq $expectedThumbprint } |
-    Select-Object -First 1
-  Assert-Release ($null -ne $signingCertificate) 'imported PFX did not contain the expected signing certificate.'
-  Assert-Release ($signingCertificate.HasPrivateKey) 'expected signing certificate has no private key.'
   $overrideJson = @{
     bundle = @{
       createUpdaterArtifacts = $true
-      windows = @{
-        certificateThumbprint = $expectedThumbprint
-        digestAlgorithm = 'sha256'
-        timestampUrl = $timestampUri.AbsoluteUri
-        tsp = $true
-      }
     }
     plugins = @{
       updater = @{
@@ -154,11 +107,21 @@ try {
   Assert-Release (-not [string]::IsNullOrWhiteSpace($updaterSignature)) 'Tauri updater signature is empty.'
   Assert-Release ($updaterSignature.Length -le 16384) 'Tauri updater signature is unexpectedly large.'
 
+  $verifierManifest = Join-Path $repositoryRoot 'scripts\updater-signature-verifier\Cargo.toml'
+  & cargo run `
+    --release `
+    --locked `
+    --quiet `
+    --manifest-path $verifierManifest `
+    -- `
+    $installers[0].FullName `
+    $updaterSignaturePath
+  Assert-Release ($LASTEXITCODE -eq 0) 'Tauri updater signature did not match the installer and configured public key.'
+
   foreach ($artifact in @((Get-Item -LiteralPath $applicationExecutable), $installers[0])) {
     $signature = Get-AuthenticodeSignature -LiteralPath $artifact.FullName
-    Assert-Release ($signature.Status -eq 'Valid') "$($artifact.Name) signature status is '$($signature.Status)'."
-    Assert-Release ($null -ne $signature.SignerCertificate) "$($artifact.Name) has no signer certificate."
-    Assert-Release ((Normalize-Thumbprint $signature.SignerCertificate.Thumbprint) -eq $expectedThumbprint) "$($artifact.Name) was signed by an unexpected certificate."
+    Assert-Release ($signature.Status -eq 'NotSigned') "$($artifact.Name) unexpectedly has Authenticode status '$($signature.Status)'."
+    Assert-Release ($null -eq $signature.SignerCertificate) "$($artifact.Name) unexpectedly has an Authenticode signer certificate."
   }
 
   & (Join-Path $repositoryRoot 'scripts\windows-installer-smoke.ps1') `
@@ -168,17 +131,12 @@ try {
   $hash = (Get-FileHash -LiteralPath $installers[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
   $checksumPath = "$($installers[0].FullName).sha256"
   "$hash  $($installers[0].Name)" | Set-Content -LiteralPath $checksumPath -Encoding ascii
-  Write-Output "Signed Windows release verified: $($installers[0].FullName)"
-  Write-Output "Updater signature verified: $updaterSignaturePath"
+  Write-Warning 'Installer is intentionally not Authenticode-signed; Windows may show Unknown publisher or SmartScreen warnings.'
+  Write-Output "Unsigned Windows installer verified: $($installers[0].FullName)"
+  Write-Output "Updater signature cryptographically verified: $updaterSignaturePath"
   Write-Output "Checksum: $checksumPath"
 }
 finally {
-  Remove-Item -LiteralPath $pfxPath -Force -ErrorAction SilentlyContinue
-  foreach ($certificatePath in $importedCertificatePaths) {
-    if ($preExistingCertificatePaths -notcontains $certificatePath) {
-      Remove-Item -LiteralPath $certificatePath -Force -ErrorAction SilentlyContinue
-    }
-  }
   $resolvedReleaseTemp = [System.IO.Path]::GetFullPath($releaseTemp)
   $resolvedRunnerTemp = [System.IO.Path]::GetFullPath($runnerTemp).TrimEnd('\') + '\'
   if ($resolvedReleaseTemp.StartsWith($resolvedRunnerTemp, [System.StringComparison]::OrdinalIgnoreCase)) {

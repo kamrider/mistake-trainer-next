@@ -8,16 +8,50 @@ import { commands, type BackupRestoreReceipt, type ProfileSummary, type SyncNowR
 import { normalizeAppResult } from '../shared/api/normalize-result'
 import { loadSystemStatus } from '../shared/api/system-status'
 import AppShell, { type AppPage } from './AppShell.vue'
+import StartupUpdateDialog from './components/StartupUpdateDialog.vue'
 import { useLibraryAccessLifecycle } from './composables/useLibraryAccessLifecycle'
 import { useProfileManagement } from './composables/useProfileManagement'
+import { useStartupUpdate } from './composables/useStartupUpdate'
 import LibraryAccessScreen from './LibraryAccessScreen.vue'
 import { libraryAccessControllerKey } from './library-access-controller'
+import { formatSettingsTime } from './settings-formatters'
 import { createSyncController, syncControllerKey, syncStatusCopy, type SyncPhase, type SyncTrigger } from './sync-controller'
 import { createWorkspaceTransitionGuard, workspaceTransitionGuardKey } from './workspace-transition-guard'
 
 const route = useRoute()
 const router = useRouter()
 const desktopRuntime = isTauri()
+const startupUpdate = useStartupUpdate({
+  desktopRuntime,
+  operations: {
+    status: async () => {
+      const invocation = await commands.windowsUpdateStatus()
+      if (invocation.status === 'error') throw new Error('update status command rejected')
+      return normalizeAppResult(invocation.data)
+    },
+    check: async () => {
+      const invocation = await commands.windowsUpdateCheck()
+      if (invocation.status === 'error') throw new Error('update check command rejected')
+      return normalizeAppResult(invocation.data)
+    },
+    install: async (expectedVersion) => {
+      const invocation = await commands.windowsUpdateInstall(expectedVersion)
+      if (invocation.status === 'error') throw new Error('update install command rejected')
+      return normalizeAppResult(invocation.data)
+    },
+  },
+})
+const {
+  report: startupUpdateReport,
+  installing: startupUpdateInstalling,
+  message: startupUpdateMessage,
+} = startupUpdate
+const startupUpdatePublicationLabel = computed(() => {
+  const value = startupUpdateReport.value?.publishedAt
+  if (!value) return ''
+  const timestamp = Date.parse(value)
+  return Number.isFinite(timestamp) ? formatSettingsTime(timestamp) : ''
+})
 const workspaceTransitionGuard = createWorkspaceTransitionGuard()
 provide(workspaceTransitionGuardKey, workspaceTransitionGuard)
 const {
@@ -194,6 +228,7 @@ onErrorCaptured((error) => {
 onMounted(() => {
   window.addEventListener('online', handleOnline)
   document.addEventListener('visibilitychange', handleVisibilityChange)
+  startupUpdate.start()
   void loadWindowsCompatibility()
   void loadLibraryAccess()
 })
@@ -201,6 +236,7 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('online', handleOnline)
   document.removeEventListener('visibilitychange', handleVisibilityChange)
+  startupUpdate.dispose()
   syncController.dispose()
 })
 
@@ -581,6 +617,15 @@ async function selectProfile(profileId: string): Promise<boolean> {
       </Transition>
     </RouterView>
   </AppShell>
+  <StartupUpdateDialog
+    v-if="startupUpdateReport?.available && startupUpdateReport.version"
+    :report="startupUpdateReport"
+    :installing="startupUpdateInstalling"
+    :message="startupUpdateMessage"
+    :publication-label="startupUpdatePublicationLabel"
+    @dismiss="startupUpdate.dismiss"
+    @install="startupUpdate.install"
+  />
 </template>
 
 <style>

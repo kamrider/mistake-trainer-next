@@ -2,6 +2,31 @@
 
 All notable product changes are recorded in this file. Versions follow Semantic Versioning.
 
+## 0.1.0 — 2026-08-10
+
+First stable public Windows release using the no-cost GitHub distribution channel.
+
+### Included
+
+- Optional startup update checks run at most once every 24 hours and stay silent when offline,
+  unconfigured, current, or temporarily unavailable.
+- New-version prompts require an explicit user choice and preserve the existing exact-version,
+  Rust-owned install and signature-verification flow.
+- Public GitHub Releases provide immutable x64 and native ARM64 installer URLs, checksums, Tauri
+  updater signatures, and one dual-architecture `latest.json` manifest.
+
+### Distribution security
+
+- Windows installers and application executables are intentionally not Authenticode-signed;
+  Windows may display Unknown publisher or Microsoft Defender SmartScreen warnings.
+- Draft and published release pages must disclose that warning and must not describe the build as
+  a verified Windows publisher.
+- Every updater payload remains cryptographically signed with the protected Tauri updater key.
+  Release CI verifies each installer/signature pair against the exact public key compiled into
+  installed clients before any artifact is uploaded.
+- The free channel uses public GitHub standard runners and GitHub Releases. It requires no paid
+  certificate, timestamping account, runner, or download host.
+
 ## 0.1.0-rc.1 — 2026-08-08
 
 First Windows release candidate for the commercial-quality baseline.
@@ -19,6 +44,8 @@ First Windows release candidate for the commercial-quality baseline.
 ### Release-candidate status
 
 - The repository gates and local x64 installer smoke must pass on the exact candidate commit.
-- Public promotion requires Authenticode-signed and updater-signed x64 and ARM64 artifacts from the protected GitHub workflow.
-- The supported Windows, DPI, offline, storage-pressure, sleep/resume, antivirus, and upgrade matrix must be recorded before a paid production release.
+- The candidate evaluated an Authenticode requirement; the stable `0.1.0` release intentionally
+  replaced it with the documented free unsigned-installer channel while retaining updater signing.
+- The supported Windows, DPI, offline, storage-pressure, sleep/resume, antivirus, and upgrade
+  matrix must be recorded before public production release.
 
