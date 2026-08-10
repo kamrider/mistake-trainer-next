@@ -24,8 +24,7 @@ $requiredEnvironment = @(
   'WINDOWS_CERTIFICATE_PASSWORD',
   'WINDOWS_CERTIFICATE_THUMBPRINT',
   'WINDOWS_TIMESTAMP_URL',
-  'WINDOWS_UPDATE_ENDPOINT',
-  'WINDOWS_UPDATE_ARTIFACT_BASE_URL',
+  'GITHUB_REPOSITORY',
   'WINDOWS_UPDATER_PUBLIC_KEY',
   'TAURI_SIGNING_PRIVATE_KEY',
   'TAURI_SIGNING_PRIVATE_KEY_PASSWORD'
@@ -55,18 +54,15 @@ $timestampUri = $null
 Assert-Release ([uri]::TryCreate($env:WINDOWS_TIMESTAMP_URL, [System.UriKind]::Absolute, [ref]$timestampUri)) 'timestamp URL is invalid.'
 Assert-Release ($timestampUri.Scheme -eq 'https') 'timestamp URL must use HTTPS.'
 
+$repositorySlug = $env:GITHUB_REPOSITORY.Trim()
+Assert-Release ($repositorySlug -eq $env:GITHUB_REPOSITORY) 'GITHUB_REPOSITORY must not contain surrounding whitespace.'
+Assert-Release ($repositorySlug -match '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') 'GITHUB_REPOSITORY must use owner/repository syntax.'
+$updateEndpointValue = "https://github.com/$repositorySlug/releases/latest/download/latest.json"
 $updateEndpoint = $null
-Assert-Release ([uri]::TryCreate($env:WINDOWS_UPDATE_ENDPOINT, [System.UriKind]::Absolute, [ref]$updateEndpoint)) 'update endpoint is invalid.'
+Assert-Release ([uri]::TryCreate($updateEndpointValue, [System.UriKind]::Absolute, [ref]$updateEndpoint)) 'derived update endpoint is invalid.'
 Assert-Release ($updateEndpoint.Scheme -eq 'https') 'update endpoint must use HTTPS.'
 Assert-Release ([string]::IsNullOrEmpty($updateEndpoint.UserInfo)) 'update endpoint must not contain credentials.'
 Assert-Release ([string]::IsNullOrEmpty($updateEndpoint.Fragment)) 'update endpoint must not contain a fragment.'
-
-$artifactBaseUri = $null
-Assert-Release ([uri]::TryCreate($env:WINDOWS_UPDATE_ARTIFACT_BASE_URL, [System.UriKind]::Absolute, [ref]$artifactBaseUri)) 'update artifact base URL is invalid.'
-Assert-Release ($artifactBaseUri.Scheme -eq 'https') 'update artifact base URL must use HTTPS.'
-Assert-Release ([string]::IsNullOrEmpty($artifactBaseUri.UserInfo)) 'update artifact base URL must not contain credentials.'
-Assert-Release ([string]::IsNullOrEmpty($artifactBaseUri.Query)) 'update artifact base URL must not contain a query.'
-Assert-Release ([string]::IsNullOrEmpty($artifactBaseUri.Fragment)) 'update artifact base URL must not contain a fragment.'
 
 $updaterPublicKey = $env:WINDOWS_UPDATER_PUBLIC_KEY.Trim()
 Assert-Release ($updaterPublicKey.Length -ge 32) 'updater public key is unexpectedly short.'

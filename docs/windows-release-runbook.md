@@ -31,7 +31,29 @@ Authoritative platform references:
 - [Microsoft WebView2 distribution](https://learn.microsoft.com/microsoft-edge/webview2/concepts/distribution)
 - [Microsoft Authenticode timestamping](https://learn.microsoft.com/windows/win32/seccrypto/time-stamping-authenticode-signatures)
 
+## Installed-client behavior
+
+- A production Windows build schedules a non-blocking update check 1.5 seconds after the first
+  application frame. Browser previews, ordinary builds without updater configuration, and
+  offline launches do not contact the release endpoint.
+- The per-device key `mistake-trainer.update.lastAutomaticCheckUtcMs.v1` limits automatic checks
+  to one attempt every 24 hours. A failed automatic check remains silent; Settings always keeps
+  an explicit manual retry path. If the attempt timestamp cannot be persisted, the automatic
+  endpoint request fails closed and the manual Settings action remains available.
+- Only newer update metadata accepted by Tauri's manifest and version checks opens the dialog.
+  The user must choose **Update now**; there is no background download, forced update,
+  ignored-version state, or silent install. Cryptographic payload verification happens after
+  download and before installation.
+- Installation rechecks the exact displayed version and verifies the Tauri updater signature.
+  Version races trigger one fresh check instead of installing the stale result.
+
 ## One-time GitHub environment setup
+
+Before changing repository visibility, run a history-aware scanner such as `gitleaks git --redact
+--no-banner --log-opts="--all" .` from a clean clone and require zero findings. Also inspect
+GitHub Actions logs and workflow artifacts for PFX files, updater private keys, service-role keys,
+and credential-bearing URLs. Do not make the repository public until every finding is removed
+from history or the exposed credential has been revoked and rotated.
 
 Create a protected `production` environment with required reviewers. Configure:
 
@@ -39,8 +61,6 @@ Create a protected `production` environment with required reviewers. Configure:
 - `WINDOWS_CERTIFICATE_PASSWORD`: PFX password secret;
 - `WINDOWS_CERTIFICATE_THUMBPRINT`: expected signer thumbprint secret;
 - `WINDOWS_TIMESTAMP_URL`: HTTPS RFC 3161 timestamp service environment variable.
-- `WINDOWS_UPDATE_ENDPOINT`: public HTTPS URL from which installed clients read `latest.json`;
-- `WINDOWS_UPDATE_ARTIFACT_BASE_URL`: public HTTPS release directory used inside `latest.json`;
 - `WINDOWS_UPDATER_PUBLIC_KEY`: public Tauri updater verification key;
 - `TAURI_SIGNING_PRIVATE_KEY`: Tauri updater private key secret;
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: updater private-key password secret.
@@ -51,6 +71,13 @@ password must never enter the repository, workflow artifacts, issue text, or sup
 Back up the private key offline: losing it prevents shipping trusted updates to already-installed
 clients. Prefer a hardware-backed or managed Authenticode signing service when operationally
 available, and rotate credentials only through a separate audited migration procedure.
+
+The repository must be public before a release is promoted. The workflow derives the installed
+client endpoint as `https://github.com/<owner>/<repository>/releases/latest/download/latest.json`
+from GitHub's trusted `GITHUB_REPOSITORY` value, and writes immutable tag-scoped installer URLs
+into the manifest. No manually maintained update URL or credential-bearing download URL is used.
+Public repository visibility does not grant an open-source license; adding a software license is
+a separate product-owner decision.
 
 ## Prepare a release
 
@@ -69,10 +96,12 @@ available, and rotate credentials only through a separate audited migration proc
 6. Download the workflow artifact. Verify both installer SHA-256 files, inspect
    `Get-AuthenticodeSignature` for `Valid` status and the expected publisher, and confirm
    `latest.json` contains exactly the x64 and ARM64 entries with the intended public URLs.
-7. Confirm the installers and `latest.json` are reachable at their configured HTTPS URLs before
-   publishing the draft. Never publish a manifest that points to inaccessible or private assets.
-8. Complete the manual matrix below, including an upgrade from the previous signed version, then
-   publish the draft GitHub Release.
+7. Complete the manual matrix below, including an upgrade from the previous signed version, then
+   publish the draft GitHub Release as a non-prerelease release.
+8. After publication, confirm the anonymous `releases/latest/download/latest.json` request and
+   both immutable installer URLs return HTTP 200, then verify their checksums and signatures.
+   Drafts, prereleases, private repository assets, and manifests pointing to inaccessible assets
+   are not valid production update sources.
 
 ## Required manual matrix
 

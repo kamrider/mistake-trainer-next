@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/vue'
+import { fireEvent, render, screen, waitFor } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
 import { createMemoryHistory, type Router } from 'vue-router'
 import { inject, onBeforeUnmount } from 'vue'
@@ -24,6 +24,9 @@ const commandMocks = vi.hoisted(() => ({
   backupRestoreStatus: vi.fn(),
   authRestore: vi.fn(),
   syncNow: vi.fn(),
+  windowsUpdateStatus: vi.fn(),
+  windowsUpdateCheck: vi.fn(),
+  windowsUpdateInstall: vi.fn(),
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => true }))
@@ -71,6 +74,7 @@ const profileCommandProbe = {
 describe('App profile orchestration', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    window.localStorage.clear()
     commandMocks.libraryAccessStatus.mockResolvedValue({
       ok: true,
       data: { locked: false, trustedWindowsAccount: true },
@@ -129,6 +133,23 @@ describe('App profile orchestration', () => {
           finalCursor: 0,
         },
       },
+    })
+    commandMocks.windowsUpdateStatus.mockResolvedValue({
+      status: 'ok',
+      data: { ok: true, data: { enabled: false, currentVersion: '0.1.0' } },
+    })
+    commandMocks.windowsUpdateCheck.mockResolvedValue({
+      status: 'ok',
+      data: { ok: true, data: {
+        available: false,
+        currentVersion: '0.1.0',
+        version: null,
+        publishedAt: null,
+      } },
+    })
+    commandMocks.windowsUpdateInstall.mockResolvedValue({
+      status: 'ok',
+      data: { ok: true, data: { acceptedVersion: '0.2.0' } },
     })
     commandMocks.profileSelect.mockResolvedValue({
       ok: true,
@@ -618,6 +639,44 @@ describe('App profile orchestration', () => {
       expect(router.currentRoute.value.name).toBe('library')
       expect(screen.getByRole('button', { name: /当前学习档案：日常学习/ })).toBeVisible()
     })
+  })
+
+  it('opens the startup update dialog only after delayed Tauri-accepted metadata', async () => {
+    vi.useFakeTimers()
+    try {
+      commandMocks.windowsUpdateStatus.mockResolvedValue({
+        status: 'ok',
+        data: { ok: true, data: { enabled: true, currentVersion: '0.1.0' } },
+      })
+      commandMocks.windowsUpdateCheck.mockResolvedValue({
+        status: 'ok',
+        data: { ok: true, data: {
+          available: true,
+          currentVersion: '0.1.0',
+          version: '0.2.0',
+          publishedAt: '2026-08-10T00:00:00Z',
+        } },
+      })
+      const router = createAppRouter(createMemoryHistory())
+      await router.push('/')
+      await router.isReady()
+      render(App, { global: { plugins: [router], stubs: { transition: false } } })
+
+      expect(screen.queryByRole('dialog', { name: '新版本 0.2.0 已准备好' })).not.toBeInTheDocument()
+      await vi.advanceTimersByTimeAsync(1_499)
+      expect(commandMocks.windowsUpdateStatus).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+
+      expect(commandMocks.windowsUpdateStatus).toHaveBeenCalledOnce()
+      expect(commandMocks.windowsUpdateCheck).toHaveBeenCalledOnce()
+      expect(screen.getByRole('dialog', { name: '新版本 0.2.0 已准备好' })).toBeVisible()
+      await fireEvent.click(screen.getByRole('button', { name: /^稍后$/ }))
+      expect(screen.queryByRole('dialog', { name: '新版本 0.2.0 已准备好' })).not.toBeInTheDocument()
+      expect(commandMocks.windowsUpdateInstall).not.toHaveBeenCalled()
+    }
+    finally {
+      vi.useRealTimers()
+    }
   })
 
   it('shows and dismisses the one-time result after a successful restore restart', async () => {

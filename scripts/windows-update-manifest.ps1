@@ -5,7 +5,7 @@ param(
     [Parameter(Mandatory)]
     [string]$ReleaseTag,
     [Parameter(Mandatory)]
-    [string]$ArtifactBaseUrl,
+    [string]$RepositorySlug,
     [Parameter(Mandatory)]
     [string]$OutputPath,
     [string]$PublicationDateUtc = [DateTimeOffset]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
@@ -58,7 +58,7 @@ function Read-VerifiedArtifact {
     $escapedName = [Uri]::EscapeDataString($installer.Name)
     return [ordered]@{
         signature = $signature
-        url = "$normalizedArtifactBaseUrl/$escapedName"
+        url = "$artifactBaseUrl/$escapedName"
     }
 }
 
@@ -69,13 +69,16 @@ Assert-Manifest (-not [string]::IsNullOrWhiteSpace($ReleaseTag)) 'release tag is
 $releaseVersion = $ReleaseTag.TrimStart('v')
 Assert-Manifest ($releaseVersion -match '^\d+\.\d+\.\d+([+-][0-9A-Za-z.-]+)?$') "release tag '$ReleaseTag' is not a supported semantic version."
 
+$normalizedRepositorySlug = $RepositorySlug.Trim()
+Assert-Manifest ($normalizedRepositorySlug -eq $RepositorySlug) 'repository slug must not contain surrounding whitespace.'
+Assert-Manifest ($normalizedRepositorySlug -match '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') 'repository slug must use owner/repository syntax.'
+$artifactBaseUrl = "https://github.com/$normalizedRepositorySlug/releases/download/$ReleaseTag"
 $artifactBaseUri = $null
-Assert-Manifest ([Uri]::TryCreate($ArtifactBaseUrl, [UriKind]::Absolute, [ref]$artifactBaseUri)) 'artifact base URL is invalid.'
-Assert-Manifest ($artifactBaseUri.Scheme -eq 'https') 'artifact base URL must use HTTPS.'
-Assert-Manifest ([string]::IsNullOrEmpty($artifactBaseUri.UserInfo)) 'artifact base URL must not contain credentials.'
-Assert-Manifest ([string]::IsNullOrEmpty($artifactBaseUri.Query)) 'artifact base URL must not contain a query.'
-Assert-Manifest ([string]::IsNullOrEmpty($artifactBaseUri.Fragment)) 'artifact base URL must not contain a fragment.'
-$normalizedArtifactBaseUrl = $artifactBaseUri.AbsoluteUri.TrimEnd('/')
+Assert-Manifest ([Uri]::TryCreate($artifactBaseUrl, [UriKind]::Absolute, [ref]$artifactBaseUri)) 'derived artifact base URL is invalid.'
+Assert-Manifest ($artifactBaseUri.Scheme -eq 'https') 'derived artifact base URL must use HTTPS.'
+Assert-Manifest ([string]::IsNullOrEmpty($artifactBaseUri.UserInfo)) 'derived artifact base URL must not contain credentials.'
+Assert-Manifest ([string]::IsNullOrEmpty($artifactBaseUri.Query)) 'derived artifact base URL must not contain a query.'
+Assert-Manifest ([string]::IsNullOrEmpty($artifactBaseUri.Fragment)) 'derived artifact base URL must not contain a fragment.'
 
 $parsedPublicationDate = [DateTimeOffset]::MinValue
 Assert-Manifest ([DateTimeOffset]::TryParse(

@@ -75,8 +75,6 @@ jobs:
       WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
       WINDOWS_CERTIFICATE_THUMBPRINT: ${{ secrets.WINDOWS_CERTIFICATE_THUMBPRINT }}
       WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
-      WINDOWS_UPDATE_ENDPOINT: ${{ vars.WINDOWS_UPDATE_ENDPOINT }}
-      WINDOWS_UPDATE_ARTIFACT_BASE_URL: ${{ vars.WINDOWS_UPDATE_ARTIFACT_BASE_URL }}
       WINDOWS_UPDATER_PUBLIC_KEY: ${{ vars.WINDOWS_UPDATER_PUBLIC_KEY }}
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -133,14 +131,13 @@ jobs:
         shell: powershell
         env:
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-          WINDOWS_UPDATE_ARTIFACT_BASE_URL: ${{ vars.WINDOWS_UPDATE_ARTIFACT_BASE_URL }}
         run: |
           $artifacts = @(Get-ChildItem verified-installers -File)
           if ($artifacts.Count -ne 6) { throw "Expected two installers, two updater signatures, and two checksums; found $($artifacts.Count)." }
           .\scripts\windows-update-manifest.ps1 `
             -ArtifactDirectory verified-installers `
             -ReleaseTag $env:RELEASE_TAG `
-            -ArtifactBaseUrl $env:WINDOWS_UPDATE_ARTIFACT_BASE_URL `
+            -RepositorySlug $env:GITHUB_REPOSITORY `
             -OutputPath verified-installers\latest.json
       - name: Create draft GitHub release with both architectures
         shell: powershell

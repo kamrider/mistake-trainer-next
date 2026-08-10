@@ -54,6 +54,7 @@ describe('SettingsUpdatePanel', () => {
 
     expect(view.emitted().check).toHaveLength(1)
     expect(view.emitted().install).toHaveLength(1)
+    expect(screen.getByText(/启动后每天最多静默检查一次/)).toBeVisible()
     expect(screen.getByRole('status', { name: '应用更新状态' })).not.toHaveTextContent(
       /private\.example|must-not-render/,
     )

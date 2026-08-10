@@ -60,7 +60,7 @@ try {
     & $manifestScript `
         -ArtifactDirectory $testRoot `
         -ReleaseTag 'v0.1.0' `
-        -ArtifactBaseUrl 'https://downloads.mistake-trainer.invalid/releases/v0.1.0/' `
+        -RepositorySlug 'kamrider/mistake-trainer-next' `
         -PublicationDateUtc '2026-07-28T00:00:00Z' `
         -OutputPath $manifestPath
 
@@ -72,8 +72,8 @@ try {
     Assert-Contract (($platformNames -join ',') -eq 'windows-aarch64,windows-x86_64') 'manifest platform set was not exact.'
     Assert-Contract ($manifest.platforms.'windows-x86_64'.signature -eq 'trusted-x64-updater-signature') 'x64 signature content was not embedded.'
     Assert-Contract ($manifest.platforms.'windows-aarch64'.signature -eq 'trusted-arm64-updater-signature') 'ARM64 signature content was not embedded.'
-    Assert-Contract ($manifest.platforms.'windows-x86_64'.url -match '^https://') 'x64 artifact URL was not HTTPS.'
-    Assert-Contract ($manifest.platforms.'windows-aarch64'.url -match '^https://') 'ARM64 artifact URL was not HTTPS.'
+    Assert-Contract ($manifest.platforms.'windows-x86_64'.url -eq 'https://github.com/kamrider/mistake-trainer-next/releases/download/v0.1.0/Mistake%20Trainer%20Next_0.1.0_x64-setup.exe') 'x64 artifact URL was not immutable and tag-scoped.'
+    Assert-Contract ($manifest.platforms.'windows-aarch64'.url -eq 'https://github.com/kamrider/mistake-trainer-next/releases/download/v0.1.0/Mistake%20Trainer%20Next_0.1.0_arm64-setup.exe') 'ARM64 artifact URL was not immutable and tag-scoped.'
     Assert-Contract ($manifest.platforms.'windows-x86_64'.url -notmatch '\.sig$') 'x64 URL pointed to a signature instead of an installer.'
     Assert-Contract ($manifest.platforms.'windows-aarch64'.url -notmatch '\.sig$') 'ARM64 URL pointed to a signature instead of an installer.'
 
@@ -85,8 +85,7 @@ try {
 
     $releaseText = Get-Content -LiteralPath $releaseScript -Raw
     foreach ($requiredName in @(
-        'WINDOWS_UPDATE_ENDPOINT',
-        'WINDOWS_UPDATE_ARTIFACT_BASE_URL',
+        'GITHUB_REPOSITORY',
         'WINDOWS_UPDATER_PUBLIC_KEY',
         'TAURI_SIGNING_PRIVATE_KEY',
         'TAURI_SIGNING_PRIVATE_KEY_PASSWORD'
@@ -100,15 +99,17 @@ try {
     Assert-Contract ($workflowText -match '\*-setup\.exe\.sig') 'workflow did not upload updater signatures.'
     Assert-Contract ($workflowText -match 'windows-update-manifest\.ps1') 'workflow did not generate latest.json.'
     Assert-Contract ($workflowText -match 'latest\.json') 'workflow did not publish latest.json.'
+    Assert-Contract ($workflowText -notmatch 'vars\.WINDOWS_UPDATE_ENDPOINT') 'workflow still required a manually configured update endpoint.'
+    Assert-Contract ($workflowText -notmatch 'vars\.WINDOWS_UPDATE_ARTIFACT_BASE_URL') 'workflow still required a manually configured artifact base URL.'
 
     $failureCases = @(
         @{
-            Name = 'HTTP artifact base URL'
-            Arguments = @('-ArtifactBaseUrl', 'http://downloads.mistake-trainer.invalid/releases/v0.1.0/')
+            Name = 'repository slug with URL syntax'
+            Arguments = @('-RepositorySlug', 'https://github.com/kamrider/mistake-trainer-next')
         },
         @{
-            Name = 'artifact base URL credentials'
-            Arguments = @('-ArtifactBaseUrl', 'https://user:password@downloads.mistake-trainer.invalid/releases/v0.1.0/')
+            Name = 'repository slug traversal'
+            Arguments = @('-RepositorySlug', 'kamrider/../mistake-trainer-next')
         },
         @{
             Name = 'version mismatch'
@@ -124,7 +125,7 @@ try {
             '-File', $manifestScript,
             '-ArtifactDirectory', $testRoot,
             '-ReleaseTag', 'v0.1.0',
-            '-ArtifactBaseUrl', 'https://downloads.mistake-trainer.invalid/releases/v0.1.0/',
+            '-RepositorySlug', 'kamrider/mistake-trainer-next',
             '-PublicationDateUtc', '2026-07-28T00:00:00Z',
             '-OutputPath', $failureOutput
         )
@@ -149,7 +150,7 @@ try {
         '-File', $manifestScript,
         '-ArtifactDirectory', $testRoot,
         '-ReleaseTag', 'v0.1.0',
-        '-ArtifactBaseUrl', 'https://downloads.mistake-trainer.invalid/releases/v0.1.0/',
+        '-RepositorySlug', 'kamrider/mistake-trainer-next',
         '-PublicationDateUtc', '2026-07-28T00:00:00Z',
         '-OutputPath', $emptySignatureOutput
     ) -Wait -PassThru -WindowStyle Hidden

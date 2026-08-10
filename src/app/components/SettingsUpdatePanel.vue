@@ -54,7 +54,7 @@ defineExpose({ focusPrimaryAction })
         </strong>
         <p>当前版本 {{ status.currentVersion }}</p>
         <small v-if="status.enabled">
-          仅在你点击检查时联网；发现新版本后仍需再次确认安装。
+          启动后每天最多静默检查一次，也可随时手动检查；发现新版本后仍需再次确认安装。
         </small>
         <small v-else>
           本地开发版或未配置发行版不会访问更新服务器，请通过新的正式安装包升级。
