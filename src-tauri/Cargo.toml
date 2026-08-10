@@ -1,6 +1,6 @@
 [package]
 name = "mistake-trainer-next"
-version = "0.1.0-rc.1"
+version = "0.1.0"
 description = "Offline-first mistake training desktop app"
 authors = ["Mistake Trainer Next contributors"]
 edition = "2024"

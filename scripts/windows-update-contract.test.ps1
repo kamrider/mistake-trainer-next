@@ -7,8 +7,11 @@ Set-StrictMode -Version Latest
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $manifestScript = Join-Path $repositoryRoot 'scripts\windows-update-manifest.ps1'
 $releaseScript = Join-Path $repositoryRoot 'scripts\windows-signed-release.ps1'
+$signatureVerifierManifest = Join-Path $repositoryRoot 'scripts\updater-signature-verifier\Cargo.toml'
 $workflowPath = Join-Path $repositoryRoot '.github\workflows\release-windows.yml'
 $configurationPath = Join-Path $repositoryRoot 'src-tauri\tauri.conf.json'
+$supportPolicyPath = Join-Path $repositoryRoot 'docs\windows-support-policy.md'
+$changelogPath = Join-Path $repositoryRoot 'CHANGELOG.md'
 $testRoot = Join-Path ([System.IO.Path]::GetTempPath()) "mistake-trainer-update-contract-$([guid]::NewGuid().ToString('N'))"
 
 function Assert-Contract {
@@ -53,6 +56,9 @@ function New-ArchitectureArtifacts {
 New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
 
 try {
+    & cargo test --locked --quiet --manifest-path $signatureVerifierManifest
+    Assert-Contract ($LASTEXITCODE -eq 0) 'updater signature verifier tests failed.'
+
     New-ArchitectureArtifacts -Architecture 'x64'
     New-ArchitectureArtifacts -Architecture 'arm64'
 
@@ -85,6 +91,7 @@ try {
 
     $releaseText = Get-Content -LiteralPath $releaseScript -Raw
     foreach ($requiredName in @(
+        'WINDOWS_AUTHENTICODE_MODE',
         'GITHUB_REPOSITORY',
         'WINDOWS_UPDATER_PUBLIC_KEY',
         'TAURI_SIGNING_PRIVATE_KEY',
@@ -94,6 +101,18 @@ try {
     }
     Assert-Contract ($releaseText -match 'createUpdaterArtifacts\s*=\s*\$true') 'release override did not enable updater artifacts.'
     Assert-Contract ($releaseText -match "installMode\s*=\s*'passive'") 'release override did not use passive update installation.'
+    Assert-Contract ($releaseText -match "WINDOWS_AUTHENTICODE_MODE\s+-ceq\s+'disabled'") 'release script did not require the explicit free unsigned mode.'
+    Assert-Contract ($releaseText -match "Status\s+-eq\s+'NotSigned'") 'release script did not verify that Authenticode is absent.'
+    Assert-Contract ($releaseText -match 'updater-signature-verifier\\Cargo\.toml') 'release script did not invoke the updater signature verifier.'
+    Assert-Contract ($releaseText -match 'signature did not match the installer and configured public key') 'release script did not fail closed on a mismatched updater signature.'
+    foreach ($forbiddenName in @(
+        'WINDOWS_CERTIFICATE',
+        'WINDOWS_CERTIFICATE_PASSWORD',
+        'WINDOWS_CERTIFICATE_THUMBPRINT',
+        'WINDOWS_TIMESTAMP_URL'
+    )) {
+        Assert-Contract (-not $releaseText.Contains($forbiddenName)) "free release script still referenced $forbiddenName."
+    }
 
     $workflowText = Get-Content -LiteralPath $workflowPath -Raw
     Assert-Contract ($workflowText -match '\*-setup\.exe\.sig') 'workflow did not upload updater signatures.'
@@ -101,6 +120,26 @@ try {
     Assert-Contract ($workflowText -match 'latest\.json') 'workflow did not publish latest.json.'
     Assert-Contract ($workflowText -notmatch 'vars\.WINDOWS_UPDATE_ENDPOINT') 'workflow still required a manually configured update endpoint.'
     Assert-Contract ($workflowText -notmatch 'vars\.WINDOWS_UPDATE_ARTIFACT_BASE_URL') 'workflow still required a manually configured artifact base URL.'
+    Assert-Contract ($workflowText -match 'WINDOWS_AUTHENTICODE_MODE:\s*disabled') 'workflow did not explicitly select the free unsigned mode.'
+    Assert-Contract ($workflowText -match 'Unknown publisher or Microsoft Defender SmartScreen warning') 'draft release did not disclose the unsigned installer warning.'
+    foreach ($forbiddenName in @(
+        'secrets.WINDOWS_CERTIFICATE',
+        'secrets.WINDOWS_CERTIFICATE_PASSWORD',
+        'secrets.WINDOWS_CERTIFICATE_THUMBPRINT',
+        'vars.WINDOWS_TIMESTAMP_URL'
+    )) {
+        Assert-Contract (-not $workflowText.Contains($forbiddenName)) "free workflow still referenced $forbiddenName."
+    }
+
+    $supportPolicyText = Get-Content -LiteralPath $supportPolicyPath -Raw
+    Assert-Contract ($supportPolicyText -match '状态均为 `NotSigned`') 'support policy did not document the unsigned executable contract.'
+    Assert-Contract ($supportPolicyText -match 'Tauri updater 私钥签名') 'support policy did not preserve updater signing.'
+    Assert-Contract ($supportPolicyText -notmatch '必须使用同一个受信任发布者身份') 'support policy still required trusted Authenticode for the free channel.'
+
+    $changelogText = Get-Content -LiteralPath $changelogPath -Raw
+    Assert-Contract ($changelogText -match '## 0\.1\.0 — 2026-08-10') 'stable 0.1.0 changelog entry was missing.'
+    Assert-Contract ($changelogText -match 'intentionally not Authenticode-signed') 'stable changelog did not disclose the unsigned installer risk.'
+    Assert-Contract ($changelogText -notmatch 'before a paid production release') 'changelog still required a paid production release.'
 
     $failureCases = @(
         @{

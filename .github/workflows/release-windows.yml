@@ -1,4 +1,4 @@
-name: Signed Windows Release
+name: Windows Updater Release (Unsigned Installer)
 
 on:
   push:
@@ -71,10 +71,7 @@ jobs:
     environment: production
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-      WINDOWS_CERTIFICATE_THUMBPRINT: ${{ secrets.WINDOWS_CERTIFICATE_THUMBPRINT }}
-      WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
+      WINDOWS_AUTHENTICODE_MODE: disabled
       WINDOWS_UPDATER_PUBLIC_KEY: ${{ vars.WINDOWS_UPDATER_PUBLIC_KEY }}
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -98,7 +95,7 @@ jobs:
         shell: powershell
         run: choco install strawberryperl --no-progress -y
       - run: pnpm install --frozen-lockfile
-      - name: Build and verify signed installer
+      - name: Build unsigned installer and verify updater signature artifact
         shell: powershell
         run: .\scripts\windows-signed-release.ps1 -ReleaseTag $env:RELEASE_TAG -Architecture ${{ matrix.architecture }}
       - name: Upload verified release artifacts
@@ -148,5 +145,13 @@ jobs:
           $artifacts = @(Get-ChildItem verified-installers -File)
           if ($artifacts.Count -ne 7) { throw "Expected two installers, two updater signatures, two checksums, and latest.json; found $($artifacts.Count)." }
           $artifactPaths = @($artifacts | ForEach-Object { $_.FullName })
-          & gh release create $env:RELEASE_TAG --draft --verify-tag --generate-notes $artifactPaths
+          $releaseTitle = "$env:RELEASE_TAG - unsigned Windows installers"
+          $releaseNotes = @'
+          These Windows installers are intentionally not Authenticode-signed. Windows may show
+          an Unknown publisher or Microsoft Defender SmartScreen warning during installation.
+
+          Automatic-update payloads are separately signed with the Tauri updater key and are
+          cryptographically verified by the installed application before installation.
+          '@
+          & gh release create $env:RELEASE_TAG --draft --verify-tag --title $releaseTitle --notes $releaseNotes $artifactPaths
           if ($LASTEXITCODE -ne 0) { throw "GitHub release creation exited with code $LASTEXITCODE." }
