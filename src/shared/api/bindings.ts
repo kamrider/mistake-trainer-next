@@ -30,7 +30,7 @@ export const commands = {
 	libraryContext: () => __TAURI_INVOKE<AppResult<LibraryContext>>("library_context"),
 	problemDetail: (problemId: string) => __TAURI_INVOKE<AppResult<ProblemDetail>>("problem_detail", { problemId }),
 	problemChangeStatus: (input: ProblemStatusInput) => __TAURI_INVOKE<AppResult<number>>("problem_change_status", { input }),
-	problemList: (status: ProblemStatusFilter, search: string | null) => __TAURI_INVOKE<AppResult<ProblemSummary[]>>("problem_list", { status, search }),
+	problemList: (input: ProblemListInput) => __TAURI_INVOKE<AppResult<ProblemSummary[]>>("problem_list", { input }),
 	problemUpdate: (input: ProblemUpdateInput) => __TAURI_INVOKE<AppResult<boolean>>("problem_update", { input }),
 	legacyScan: () => typedError<AppResult<LegacyImportCandidate | null>, null>(__TAURI_INVOKE("legacy_scan")),
 	legacyImport: (candidateId: string) => typedError<AppResult<LegacyImportReceipt>, null>(__TAURI_INVOKE("legacy_import", { candidateId })),
@@ -675,6 +675,8 @@ export type OcrRecognitionFeatureStatus = {
 	detail: string,
 };
 
+export type ProblemAnswerState = "any" | "has_answer" | "missing_answer";
+
 export type ProblemAssetPreview = {
 	id: string,
 	role: string,
@@ -693,6 +695,17 @@ export type ProblemDetail = {
 	updatedAtUtcMs: number | null,
 	assets: ProblemAssetPreview[],
 };
+
+export type ProblemListInput = {
+	status: ProblemStatusFilter,
+	search: string | null,
+	subjects: string[],
+	tags: string[],
+	reviewState: ProblemReviewState,
+	answerState: ProblemAnswerState,
+};
+
+export type ProblemReviewState = "any" | "never_reviewed" | "due" | "recently_forgotten";
 
 export type ProblemStatusFilter = "active" | "archived" | "trashed";
 

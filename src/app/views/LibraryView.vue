@@ -97,7 +97,14 @@ async function refresh() {
     const requestedSearch = search.value.trim()
     const [contextResult, problemResult] = await Promise.all([
       commands.libraryContext(),
-      commands.problemList(requestedStatus, requestedSearch || null),
+      commands.problemList({
+        status: requestedStatus,
+        search: requestedSearch || null,
+        subjects: [],
+        tags: [],
+        reviewState: 'any',
+        answerState: 'any',
+      }),
     ])
     if (sequence !== refreshSequence) return
     const context = normalizeAppResult(contextResult)

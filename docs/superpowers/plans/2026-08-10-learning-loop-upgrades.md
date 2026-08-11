@@ -111,25 +111,25 @@
 - Produces enums: `ProblemReviewState = Any | NeverReviewed | Due | RecentlyForgotten` and `ProblemAnswerState = Any | HasAnswer | MissingAnswer`.
 - Replaces the page-facing call with `commands.problemList(input)` while keeping the Rust-owned runtime identity boundary.
 
-- [ ] **Step 1: Write failing repository tests**
+- [x] **Step 1: Write failing repository tests**
 
   Create fixtures that cover two profiles, multiple subjects/tags, an unscheduled problem, a due schedule, a future schedule, a recent `again` event, and missing answer assets. Assert every single filter, AND composition across filter groups, OR behavior within selected subjects/tags, deterministic updated-time ordering, literal wildcard search, empty arrays as no-op, and a 100-character search limit.
 
-- [ ] **Step 2: Run focused Rust tests and verify failure**
+- [x] **Step 2: Run focused Rust tests and verify failure**
 
   Run: `.\scripts\cargo-msvc.cmd test --manifest-path src-tauri\Cargo.toml --test problem_query --test library_command`
 
   Expected: compilation fails because `ProblemListInput` and the filter enums do not exist.
 
-- [ ] **Step 3: Implement validated query input**
+- [x] **Step 3: Implement validated query input**
 
   Validate at most 20 subjects and 20 tags, each at most 30 Unicode characters. Build SQL with fixed predicates and bounded `json_each` checks; never concatenate user values into SQL. Define recently forgotten as the latest event for the problem having rating `again` within the previous 30 days.
 
-- [ ] **Step 4: Register typed command and regenerate bindings**
+- [x] **Step 4: Register typed command and regenerate bindings**
 
   Update the command to accept one typed input and call the repository with runtime account/profile and current UTC time. Run `pnpm bindings:generate`; assert generated unions and camelCase fields exactly match the Rust types.
 
-- [ ] **Step 5: Run query and binding tests**
+- [x] **Step 5: Run query and binding tests**
 
   Run: `.\scripts\cargo-msvc.cmd test --manifest-path src-tauri\Cargo.toml --test problem_query --test library_command` and `pnpm test -- src/shared/api/bindings.test.ts`.
 

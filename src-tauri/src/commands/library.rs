@@ -7,7 +7,7 @@ use crate::{
     application::result::AppResult,
     infrastructure::runtime::LibraryRuntime,
     modules::problems::{
-        ChangeProblemStatus, ProblemDetail, ProblemDetailQuery, ProblemListQuery,
+        ChangeProblemStatus, ProblemDetail, ProblemDetailQuery, ProblemListInput, ProblemListQuery,
         ProblemStatusFilter, ProblemSummary, UpdateProblem, change_problem_status,
         get_problem_detail, list_problem_summaries_with_previews, update_problem,
     },
@@ -49,8 +49,8 @@ pub fn library_context_for(runtime: &LibraryRuntime) -> AppResult<LibraryContext
 
 pub fn problem_list_for(
     runtime: &LibraryRuntime,
-    status: ProblemStatusFilter,
-    search: Option<String>,
+    input: ProblemListInput,
+    now_utc_ms: i64,
 ) -> AppResult<Vec<ProblemSummary>> {
     let profile = runtime.active_profile();
     let connection = match runtime.connection.lock() {
@@ -64,11 +64,17 @@ pub fn problem_list_for(
         ProblemListQuery {
             account_id: runtime.account_id().to_owned(),
             profile_id: profile.id,
-            status,
-            search,
+            now_utc_ms,
+            input,
         },
     ) {
         Ok(problems) => AppResult::success(problems),
+        Err(crate::modules::problems::ProblemUseCaseError::InvalidQuery) => AppResult::failure(
+            "problem_filter_invalid",
+            "筛选条件过多或过长，请精简后再试。",
+            false,
+            Uuid::now_v7().to_string(),
+        ),
         Err(_) => internal_library_error("problem_list_failed"),
     }
 }
@@ -174,10 +180,9 @@ pub fn library_context(state: State<'_, LibraryRuntime>) -> AppResult<LibraryCon
 #[specta::specta]
 pub fn problem_list(
     state: State<'_, LibraryRuntime>,
-    status: ProblemStatusFilter,
-    search: Option<String>,
+    input: ProblemListInput,
 ) -> AppResult<Vec<ProblemSummary>> {
-    problem_list_for(&state, status, search)
+    problem_list_for(&state, input, current_utc_millis())
 }
 
 #[tauri::command]

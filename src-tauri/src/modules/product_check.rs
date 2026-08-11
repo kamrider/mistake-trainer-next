@@ -17,9 +17,9 @@ use crate::{
     modules::{
         backup::{create_backup, validate_backup},
         problems::{
-            AssetRole, CaptureAsset, CreateProblem, ProblemDetailQuery, ProblemListQuery,
-            ProblemStatusFilter, create_problem, get_problem_detail,
-            list_problem_summaries_with_previews,
+            AssetRole, CaptureAsset, CreateProblem, ProblemAnswerState, ProblemDetailQuery,
+            ProblemListInput, ProblemListQuery, ProblemReviewState, ProblemStatusFilter,
+            create_problem, get_problem_detail, list_problem_summaries_with_previews,
         },
         review::{StartManualReview, SubmitReview, start_manual_review_queue, submit_review},
     },
@@ -242,8 +242,15 @@ fn run_product_checks(
             ProblemListQuery {
                 account_id: runtime.account_id().to_owned(),
                 profile_id: profile.id.clone(),
-                status: ProblemStatusFilter::Active,
-                search: Some("黄金路径".to_owned()),
+                now_utc_ms: checked_at_utc_ms,
+                input: ProblemListInput {
+                    status: ProblemStatusFilter::Active,
+                    search: Some("黄金路径".to_owned()),
+                    subjects: vec![],
+                    tags: vec![],
+                    review_state: ProblemReviewState::Any,
+                    answer_state: ProblemAnswerState::Any,
+                },
             },
         )
         .map_err(|_| WindowsProductCheckFailureCode::ProblemRoundTripFailed)?;

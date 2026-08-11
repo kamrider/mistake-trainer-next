@@ -52,16 +52,19 @@ fn list_problem_summaries_internal(
         question_asset_path: Option<String>,
         question_asset_media_type: Option<String>,
     }
-    let search = query
+    let account_id = query.account_id;
+    let profile_id = query.profile_id;
+    let now_utc_ms = query.now_utc_ms;
+    let input = query.input.validated()?;
+    let search = input
         .search
         .unwrap_or_default()
-        .trim()
-        .chars()
-        .take(100)
-        .collect::<String>()
         .replace('\\', "\\\\")
         .replace('%', "\\%")
         .replace('_', "\\_");
+    let subjects_json = serde_json::to_string(&input.subjects)?;
+    let tags_json = serde_json::to_string(&input.tags)?;
+    let recently_forgotten_after_utc_ms = now_utc_ms.saturating_sub(30 * 86_400_000);
     let mut statement = connection.prepare(
         "SELECT p.id, p.subject, p.note, p.tags_json, p.status,
                 SUM(CASE WHEN pa.role = 'question' THEN 1 ELSE 0 END),
@@ -92,15 +95,71 @@ fn list_problem_summaries_internal(
                             SELECT 1 FROM json_each(p.tags_json) tag
                             WHERE CAST(tag.value AS TEXT) LIKE '%' || ?4 || '%' ESCAPE '\\'
                         ))
+           AND (?5 = '[]' OR EXISTS (
+                SELECT 1 FROM json_each(?5) selected_subject
+                WHERE CAST(selected_subject.value AS TEXT) = p.subject
+           ))
+           AND (?6 = '[]' OR EXISTS (
+                SELECT 1
+                FROM json_each(?6) selected_tag
+                JOIN json_each(p.tags_json) problem_tag
+                  ON CAST(problem_tag.value AS TEXT) = CAST(selected_tag.value AS TEXT)
+           ))
+           AND (
+                ?7 = 'any'
+                OR (?7 = 'never_reviewed' AND NOT EXISTS (
+                    SELECT 1 FROM review_events review
+                    WHERE review.account_id = p.account_id
+                      AND review.profile_id = p.profile_id
+                      AND review.problem_id = p.id
+                ))
+                OR (?7 = 'due' AND EXISTS (
+                    SELECT 1 FROM schedule_states schedule
+                    WHERE schedule.problem_id = p.id
+                      AND schedule.due_at_utc_ms <= ?9
+                ))
+                OR (?7 = 'recently_forgotten' AND (
+                    SELECT review.rating FROM review_events review
+                    WHERE review.account_id = p.account_id
+                      AND review.profile_id = p.profile_id
+                      AND review.problem_id = p.id
+                    ORDER BY review.occurred_at_utc_ms DESC, review.id DESC
+                    LIMIT 1
+                ) = 'again' AND (
+                    SELECT review.occurred_at_utc_ms FROM review_events review
+                    WHERE review.account_id = p.account_id
+                      AND review.profile_id = p.profile_id
+                      AND review.problem_id = p.id
+                    ORDER BY review.occurred_at_utc_ms DESC, review.id DESC
+                    LIMIT 1
+                ) >= ?10)
+           )
+           AND (
+                ?8 = 'any'
+                OR (?8 = 'has_answer' AND EXISTS (
+                    SELECT 1 FROM problem_assets answer_asset
+                    WHERE answer_asset.problem_id = p.id AND answer_asset.role = 'answer'
+                ))
+                OR (?8 = 'missing_answer' AND NOT EXISTS (
+                    SELECT 1 FROM problem_assets answer_asset
+                    WHERE answer_asset.problem_id = p.id AND answer_asset.role = 'answer'
+                ))
+           )
          GROUP BY p.id
          ORDER BY p.updated_at_utc_ms DESC, p.id DESC",
     )?;
     let rows = statement.query_map(
         params![
-            query.account_id,
-            query.profile_id,
-            query.status.as_str(),
-            search
+            account_id,
+            profile_id,
+            input.status.as_str(),
+            search,
+            subjects_json,
+            tags_json,
+            input.review_state.as_str(),
+            input.answer_state.as_str(),
+            now_utc_ms,
+            recently_forgotten_after_utc_ms,
         ],
         |row| {
             Ok(ProblemSummaryRow {
