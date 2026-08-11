@@ -1,8 +1,11 @@
+use std::{cmp::Ordering, collections::BTreeMap};
+
 use rusqlite::{Connection, params};
+use time::OffsetDateTime;
 
 use super::{
-    DailyActivity, DashboardOverview, InsightsError, ReportSummary, SettingsOverview,
-    SubjectActivity,
+    DailyActivity, DashboardOverview, DueForecastDay, InsightsError, ReportSummary,
+    SettingsOverview, SubjectActivity, WeakAreaSummary,
 };
 
 const DAY_MS: i64 = 86_400_000;
@@ -118,7 +121,11 @@ pub(super) fn report_summary(
     account_id: &str,
     profile_id: &str,
     now_utc_ms: i64,
+    utc_offset_minutes: i32,
 ) -> Result<ReportSummary, InsightsError> {
+    if !(-840..=840).contains(&utc_offset_minutes) {
+        return Err(InsightsError::InvalidTimezoneOffset);
+    }
     let active_problem_count = scalar(
         connection,
         "SELECT COUNT(*) FROM problems WHERE account_id = ?1 AND profile_id = ?2 AND status = 'active'",
@@ -206,6 +213,14 @@ pub(super) fn report_summary(
             })?
             .collect::<Result<Vec<_>, _>>()?
     };
+    let weak_areas = weak_areas(connection, account_id, profile_id, now_utc_ms)?;
+    let due_forecast = due_forecast(
+        connection,
+        account_id,
+        profile_id,
+        now_utc_ms,
+        utc_offset_minutes,
+    )?;
 
     Ok(ReportSummary {
         active_problem_count: bounded_i32(active_problem_count),
@@ -216,7 +231,152 @@ pub(super) fn report_summary(
         current_streak_days,
         daily_activity,
         subject_activity,
+        weak_areas,
+        due_forecast,
     })
+}
+
+#[derive(Default)]
+struct WeakAreaAccumulator {
+    reviewed_count: i64,
+    lapse_count: i64,
+    duration_total_ms: i64,
+    duration_count: i64,
+}
+
+fn weak_areas(
+    connection: &Connection,
+    account_id: &str,
+    profile_id: &str,
+    now_utc_ms: i64,
+) -> Result<Vec<WeakAreaSummary>, InsightsError> {
+    let cutoff = now_utc_ms.saturating_sub(30 * DAY_MS);
+    let mut statement = connection.prepare(
+        "SELECT CASE WHEN trim(p.subject) = '' THEN '未分类' ELSE p.subject END,
+                p.tags_json, review.rating, review.duration_ms
+         FROM review_events review
+         JOIN problems p ON p.id = review.problem_id
+         WHERE review.account_id = ?1 AND review.profile_id = ?2
+           AND p.account_id = ?1 AND p.profile_id = ?2
+           AND review.occurred_at_utc_ms >= ?3 AND review.occurred_at_utc_ms <= ?4",
+    )?;
+    let rows = statement
+        .query_map(params![account_id, profile_id, cutoff, now_utc_ms], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<i64>>(3)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut areas = BTreeMap::<(String, String), WeakAreaAccumulator>::new();
+    for (subject, tags_json, rating, duration_ms) in rows {
+        accumulate_weak_area(
+            areas.entry(("subject".to_owned(), subject)).or_default(),
+            &rating,
+            duration_ms,
+        );
+        for tag in serde_json::from_str::<Vec<String>>(&tags_json).unwrap_or_default() {
+            if tag.starts_with("错因·") {
+                accumulate_weak_area(
+                    areas.entry(("reason".to_owned(), tag)).or_default(),
+                    &rating,
+                    duration_ms,
+                );
+            }
+        }
+    }
+    let mut summaries = areas
+        .into_iter()
+        .filter(|(_, area)| area.reviewed_count >= 2)
+        .map(|((kind, label), area)| WeakAreaSummary {
+            label,
+            kind,
+            reviewed_count: bounded_i32(area.reviewed_count),
+            lapse_count: bounded_i32(area.lapse_count),
+            lapse_rate: area.lapse_count as f64 / area.reviewed_count as f64,
+            average_duration_ms: if area.duration_count == 0 {
+                0.0
+            } else {
+                area.duration_total_ms as f64 / area.duration_count as f64
+            },
+        })
+        .collect::<Vec<_>>();
+    summaries.sort_by(|left, right| {
+        right
+            .lapse_rate
+            .partial_cmp(&left.lapse_rate)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| right.lapse_count.cmp(&left.lapse_count))
+            .then_with(|| right.reviewed_count.cmp(&left.reviewed_count))
+            .then_with(|| left.label.cmp(&right.label))
+    });
+    summaries.truncate(5);
+    Ok(summaries)
+}
+
+fn accumulate_weak_area(area: &mut WeakAreaAccumulator, rating: &str, duration_ms: Option<i64>) {
+    area.reviewed_count += 1;
+    area.lapse_count += i64::from(rating == "again");
+    if let Some(duration_ms) = duration_ms.filter(|duration| *duration >= 0) {
+        area.duration_total_ms = area.duration_total_ms.saturating_add(duration_ms);
+        area.duration_count += 1;
+    }
+}
+
+fn due_forecast(
+    connection: &Connection,
+    account_id: &str,
+    profile_id: &str,
+    now_utc_ms: i64,
+    utc_offset_minutes: i32,
+) -> Result<Vec<DueForecastDay>, InsightsError> {
+    let offset_ms = i64::from(utc_offset_minutes) * 60_000;
+    let today_bucket = (now_utc_ms + offset_ms).div_euclid(DAY_MS);
+    let today_start_utc_ms = today_bucket * DAY_MS - offset_ms;
+    let forecast_end_utc_ms = today_start_utc_ms + 7 * DAY_MS;
+    let mut counts = [0_i64; 7];
+    let mut overdue_count = 0_i64;
+    let mut statement = connection.prepare(
+        "SELECT schedule.due_at_utc_ms
+         FROM schedule_states schedule
+         JOIN problems p ON p.id = schedule.problem_id
+         WHERE p.account_id = ?1 AND p.profile_id = ?2 AND p.status = 'active'
+           AND schedule.due_at_utc_ms < ?3",
+    )?;
+    for due_at in statement.query_map(
+        params![account_id, profile_id, forecast_end_utc_ms],
+        |row| row.get::<_, i64>(0),
+    )? {
+        let due_at = due_at?;
+        if due_at < today_start_utc_ms {
+            overdue_count += 1;
+            continue;
+        }
+        let index = ((due_at + offset_ms).div_euclid(DAY_MS) - today_bucket) as usize;
+        if let Some(count) = counts.get_mut(index) {
+            *count += 1;
+        }
+    }
+    (0..7)
+        .map(|index| {
+            let local_day_start_ms = (today_bucket + index as i64) * DAY_MS;
+            let local_date = OffsetDateTime::from_unix_timestamp(local_day_start_ms / 1_000)
+                .map_err(|_| InsightsError::InvalidTimezoneOffset)?
+                .date()
+                .to_string();
+            Ok(DueForecastDay {
+                local_date,
+                due_count: bounded_i32(counts[index]),
+                overdue_count: if index == 0 {
+                    bounded_i32(overdue_count)
+                } else {
+                    0
+                },
+            })
+        })
+        .collect()
 }
 
 pub(super) fn settings_overview(

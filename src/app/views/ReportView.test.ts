@@ -69,6 +69,12 @@ describe('ReportView', () => {
       totalDurationMs: 120_000, currentStreakDays: 2,
       dailyActivity: [{ dayStartUtcMs: 1_700_000_000_000, reviewCount: 4, durationMs: 120_000 }],
       subjectActivity: [{ subject: '数学', problemCount: 1, reviewCount: 4 }],
+      weakAreas: [{ label: '错因·计算失误', kind: 'reason', reviewedCount: 4, lapseCount: 2, lapseRate: 0.5, averageDurationMs: 30_000 }],
+      dueForecast: Array.from({ length: 7 }, (_, index) => ({
+        localDate: `2026-08-${String(10 + index).padStart(2, '0')}`,
+        dueCount: index,
+        overdueCount: index === 0 ? 2 : 0,
+      })),
     } })
     api.exportList.mockResolvedValue({ ok: true, data: [] })
     api.exportTrashList.mockResolvedValue({ ok: true, data: [] })
@@ -88,6 +94,9 @@ describe('ReportView', () => {
     renderView()
 
     expect(await screen.findByRole('heading', { level: 1, name: '学习报告' })).toBeVisible()
+    expect(api.reportSummary).toHaveBeenCalledWith(-new Date().getTimezoneOffset())
+    expect(screen.getByRole('heading', { name: '本周最值得修正' })).toBeVisible()
+    expect(await screen.findByRole('list', { name: '未来七天到期题预测' })).toBeVisible()
     expect(screen.getByText(/把练习变成看得见的节奏/)).toBeVisible()
     expect(screen.getByRole('navigation', { name: '报告页面目录' })).toHaveTextContent('学习概览导出中心')
     expect(screen.getByRole('region', { name: '学习概览' })).toHaveAttribute('id', 'report-overview')
@@ -148,6 +157,7 @@ describe('ReportView', () => {
     reportRefresh.resolve({ ok: true, data: {
       activeProblemCount: 1, dueProblemCount: 1, reviewCount: 4, rememberedRate: 0.75,
       totalDurationMs: 120_000, currentStreakDays: 2, dailyActivity: [], subjectActivity: [],
+      weakAreas: [], dueForecast: [],
     } })
     await waitFor(() => expect(refresh).toBeEnabled())
   })

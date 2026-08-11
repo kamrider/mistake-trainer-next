@@ -470,4 +470,27 @@ describe('LibraryView manual review deck', () => {
     expect(syncController.scheduleMutation).toHaveBeenCalledOnce()
     expect(screen.queryByRole('dialog', { name: '修改已选 1 道题' })).not.toBeInTheDocument()
   })
+
+  it('hydrates a serializable report deep-link into the typed library filter', async () => {
+    const router = createAppRouter(createMemoryHistory())
+    await router.push({ name: 'library', query: { tag: '错因·计算失误' } })
+    await router.isReady()
+    render(LibraryView, {
+      global: {
+        plugins: [router],
+        provide: { [syncControllerKey as symbol]: syncController },
+      },
+    })
+
+    await screen.findByText('先看定义域。')
+    expect(api.problemList).toHaveBeenCalledWith({
+      status: 'active',
+      search: null,
+      subjects: [],
+      tags: ['错因·计算失误'],
+      reviewState: 'any',
+      answerState: 'any',
+    })
+    expect(screen.getByRole('button', { name: '移除标签 错因·计算失误' })).toBeVisible()
+  })
 })

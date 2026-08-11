@@ -9,6 +9,8 @@ import { useDurableActionGuard } from '../composables/useDurableActionGuard'
 import ExportCandidatePicker from '../../modules/export/components/ExportCandidatePicker.vue'
 import ExportSnapshotHistory from '../../modules/export/components/ExportSnapshotHistory.vue'
 import ExportWorkflowGuide from '../../modules/export/components/ExportWorkflowGuide.vue'
+import DueForecastPanel from '../../modules/report/components/DueForecastPanel.vue'
+import WeakAreaPanel from '../../modules/report/components/WeakAreaPanel.vue'
 import { useExportCandidateSelection } from '../../modules/export/composables/useExportCandidateSelection'
 import { useExportSnapshotMutations } from '../../modules/export/composables/useExportSnapshotMutations'
 import { commands, type DeletedExportSnapshotSummary, type ExportCandidate, type ExportCandidateSource, type ExportLayout, type ExportSnapshotSummary, type ReportSummary } from '../../shared/api/bindings'
@@ -149,6 +151,15 @@ function loadDevelopmentPreview() {
       { subject: '英语', problemCount: 9, reviewCount: 26 },
       { subject: '化学', problemCount: 8, reviewCount: 19 },
     ],
+    weakAreas: [
+      { label: '错因·审题遗漏', kind: 'reason', reviewedCount: 8, lapseCount: 5, lapseRate: 0.625, averageDurationMs: 72_000 },
+      { label: '物理', kind: 'subject', reviewedCount: 12, lapseCount: 6, lapseRate: 0.5, averageDurationMs: 95_000 },
+    ],
+    dueForecast: Array.from({ length: 7 }, (_, index) => ({
+      localDate: new Date(Date.now() + index * day).toISOString().slice(0, 10),
+      dueCount: [5, 8, 3, 6, 4, 2, 7][index] ?? 0,
+      overdueCount: index === 0 ? 3 : 0,
+    })),
   }
   replacePreviewCandidates(candidateSource.value, developmentCandidates(candidateSource.value))
   snapshots.value = [
@@ -180,7 +191,7 @@ async function load() {
     }
     const candidateTask = loadCandidates(candidateSource.value)
     const [reportResult, snapshotsResult, trashResult] = await Promise.all([
-      commands.reportSummary(),
+      commands.reportSummary(-new Date().getTimezoneOffset()),
       commands.exportList(),
       commands.exportTrashList(),
     ])
@@ -300,6 +311,14 @@ onMounted(load)
           />来自每次提交用时
         </p>
       </article>
+    </section>
+
+    <section
+      class="insight-grid"
+      aria-label="本周修正建议与未来任务"
+    >
+      <WeakAreaPanel :areas="report?.weakAreas ?? []" />
+      <DueForecastPanel :days="report?.dueForecast ?? []" />
     </section>
 
     <section class="report-grid">
@@ -479,6 +498,7 @@ button { display: inline-flex; gap: 7px; align-items: center; justify-content: c
 .metric-grid article { padding: 20px; } .metric-grid span { color: var(--ink-muted); font-size: 12px; }
 .metric-grid strong { display: block; margin: 10px 0 6px; font-family: Georgia,serif; color: var(--green-deep); font-size: 36px; }
 .metric-grid strong small { margin-left: 4px; font: 600 13px 'Microsoft YaHei',sans-serif; } .metric-grid p { display: flex; gap: 5px; align-items: center; margin: 0; color: var(--ink-muted); font-size: 12px; }
+.insight-grid { display: grid; grid-template-columns: minmax(0,1.15fr) minmax(320px,.85fr); gap: 16px; margin-top: 16px; }
 .report-grid { display: grid; grid-template-columns: minmax(0,1.6fr) minmax(280px,.8fr); gap: 16px; margin-top: 16px; }
 .paper-panel { padding: 24px; } .bar-chart { display: grid; grid-template-columns: repeat(14,1fr); gap: 7px; align-items: end; height: 230px; margin-top: 24px; padding-top: 26px; border-bottom: 1px solid var(--line); }
 .bar-column { display: grid; grid-template-rows: 18px 1fr 24px; height: 100%; align-items: end; text-align: center; } .bar-column i { display: block; width: 100%; max-width: 24px; min-height: 4px; margin: 0 auto; border-radius: 5px 5px 2px 2px; background: var(--green-deep); transition: height var(--motion-page) var(--ease-standard); }
@@ -519,7 +539,7 @@ fieldset label { display: flex; gap: 7px; align-items: flex-start; }
 .configuration-step > button:hover:not(:disabled) { box-shadow: 0 10px 24px rgba(33, 51, 45, .15); transform: translateY(-2px); }
 .success-banner { margin: 16px 0 0; padding: 11px 13px; border: 1px solid rgba(33,51,45,.16); border-radius: 10px; background: var(--green-soft); color: var(--green-deep); font-size: 12px; }
 .empty-copy { color: var(--ink-muted); font-size: 13px; }
-@media (max-width: 1050px) { .metric-grid { grid-template-columns: repeat(2,1fr); } .report-grid { grid-template-columns: 1fr; } .configuration-step { grid-template-columns: 1fr; } .configuration-step .step-heading { grid-column: auto; } }
+@media (max-width: 1050px) { .metric-grid { grid-template-columns: repeat(2,1fr); } .insight-grid,.report-grid { grid-template-columns: 1fr; } .configuration-step { grid-template-columns: 1fr; } .configuration-step .step-heading { grid-column: auto; } }
 @media (max-width: 760px) { fieldset { grid-template-columns: 1fr; } .page-heading { flex-direction: column; } .heading-actions { width: 100%; flex-wrap: wrap; } .report-section-nav { width: 100%; }.report-section-nav a { flex: 1; justify-content: center; } }
 @media (max-width: 620px) { .report-page { padding: 24px 16px 92px; } .metric-grid { grid-template-columns: 1fr; } .bar-chart { gap: 3px; overflow: hidden; } .bar-column small { writing-mode: vertical-rl; } }
 @media (prefers-reduced-motion: reduce) { .configuration-step > button, .layout-option, .history-link { transition: none; } .configuration-step > button:hover:not(:disabled), .layout-option:hover, .history-link:hover { transform: none; } }

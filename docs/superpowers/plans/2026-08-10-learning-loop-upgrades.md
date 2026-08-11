@@ -248,23 +248,23 @@
 - Produces: `WeakAreaSummary { label, kind, reviewed_count, lapse_count, lapse_rate, average_duration_ms }`.
 - Produces: `DueForecastDay { local_date, due_count, overdue_count }` for today plus the next six local calendar days.
 
-- [ ] **Step 1: Write failing insights tests**
+- [x] **Step 1: Write failing insights tests**
 
   Build events across subjects and canonical reason tags. Assert a weakness needs at least two reviews, lapse means latest-30-day rating `again`, ordering is `(lapse_rate DESC, lapse_count DESC, reviewed_count DESC, label ASC)`, the list is capped at five, other profiles are excluded, and duration averages ignore invalid legacy nulls. Assert exact seven-day buckets across UTC offset boundaries and separate already-overdue count on today.
 
-- [ ] **Step 2: Implement the local read projection**
+- [x] **Step 2: Implement the local read projection**
 
   Query canonical `错因·` tags through `json_each`, union them with subject aggregates, compute bounded numeric fields in Rust, and return empty arrays when no evidence exists. Do not convert sparse data into claims.
 
-- [ ] **Step 3: Write failing report presentation tests**
+- [x] **Step 3: Write failing report presentation tests**
 
   Cover loading, error, sparse-data explanation, ordered weak-area rows, reason-vs-subject labels, lapse rate, average time, seven dates, overdue emphasis without anxiety-red copy, and responsive accessible text equivalents for charts.
 
-- [ ] **Step 4: Implement report panels**
+- [x] **Step 4: Implement report panels**
 
   Place `本周最值得修正` before generic activity charts and `未来七天任务` beside the 14-day rhythm. Each weak row links to the library by setting a serializable filter descriptor through route query, never raw problem IDs.
 
-- [ ] **Step 5: Run focused tests**
+- [x] **Step 5: Run focused tests**
 
   Run: `.\scripts\cargo-msvc.cmd test --manifest-path src-tauri\Cargo.toml --test insights_store` and `pnpm test -- src/modules/report/components/WeakAreaPanel.test.ts src/modules/report/components/DueForecastPanel.test.ts src/app/views/ReportView.test.ts`.
 

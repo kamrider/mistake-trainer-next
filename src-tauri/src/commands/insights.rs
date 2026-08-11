@@ -42,7 +42,10 @@ pub fn dashboard_overview(
 
 #[tauri::command]
 #[specta::specta]
-pub fn report_summary(state: State<'_, LibraryRuntime>) -> AppResult<ReportSummary> {
+pub fn report_summary(
+    state: State<'_, LibraryRuntime>,
+    utc_offset_minutes: i32,
+) -> AppResult<ReportSummary> {
     let profile = state.active_profile();
     let connection = match state.connection.lock() {
         Ok(connection) => connection,
@@ -53,9 +56,16 @@ pub fn report_summary(state: State<'_, LibraryRuntime>) -> AppResult<ReportSumma
         state.account_id(),
         &profile.id,
         current_utc_millis(),
+        utc_offset_minutes,
     ) {
         Ok(summary) => AppResult::success(summary),
-        Err(_) => insights_error("report_summary_failed"),
+        Err(InsightsError::InvalidTimezoneOffset) => AppResult::failure(
+            "report_timezone_invalid",
+            "系统时区设置异常，请检查 Windows 日期和时间设置。",
+            false,
+            Uuid::now_v7().to_string(),
+        ),
+        Err(InsightsError::Database(_)) => insights_error("report_summary_failed"),
     }
 }
 

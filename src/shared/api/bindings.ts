@@ -50,7 +50,7 @@ export const commands = {
 	reviewHistoryList: (input: ReviewHistoryInput) => __TAURI_INVOKE<AppResult<ReviewHistoryPage>>("review_history_list", { input }),
 	reviewHistoryDetail: (eventId: string) => __TAURI_INVOKE<AppResult<ReviewHistoryDetail>>("review_history_detail", { eventId }),
 	dashboardOverview: (utcOffsetMinutes: number) => __TAURI_INVOKE<AppResult<DashboardOverview>>("dashboard_overview", { utcOffsetMinutes }),
-	reportSummary: () => __TAURI_INVOKE<AppResult<ReportSummary>>("report_summary"),
+	reportSummary: (utcOffsetMinutes: number) => __TAURI_INVOKE<AppResult<ReportSummary>>("report_summary", { utcOffsetMinutes }),
 	settingsOverview: () => __TAURI_INVOKE<AppResult<SettingsOverview>>("settings_overview"),
 	subjectPreferencesGet: () => __TAURI_INVOKE<AppResult<SubjectPreferences>>("subject_preferences_get"),
 	subjectPreferencesSave: (input: SubjectPreferencesInput) => __TAURI_INVOKE<AppResult<SubjectPreferences>>("subject_preferences_save", { input }),
@@ -519,6 +519,12 @@ export type DiagnosticExportReceipt = {
 	warningCount: number,
 };
 
+export type DueForecastDay = {
+	localDate: string,
+	dueCount: number,
+	overdueCount: number,
+};
+
 export type ExportCandidate = {
 	id: string,
 	subject: string,
@@ -785,6 +791,8 @@ export type ReportSummary = {
 	currentStreakDays: number,
 	dailyActivity: DailyActivity[],
 	subjectActivity: SubjectActivity[],
+	weakAreas: WeakAreaSummary[],
+	dueForecast: DueForecastDay[],
 };
 
 export type ResolveSyncConflictEntityInput = {
@@ -1009,6 +1017,15 @@ export type SystemStatus = {
 	appVersion: string,
 	storage: string,
 	sync: string,
+};
+
+export type WeakAreaSummary = {
+	label: string,
+	kind: string,
+	reviewedCount: number,
+	lapseCount: number,
+	lapseRate: number | null,
+	averageDurationMs: number | null,
 };
 
 export type WindowsCompatibilityStatus = {

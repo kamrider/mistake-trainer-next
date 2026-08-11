@@ -36,8 +36,8 @@ const bulkMetadataOpen = ref(false)
 const bulkMetadataBusy = ref(false)
 const advancedFilters = ref<LibraryAdvancedFilters>({
   ...EMPTY_LIBRARY_FILTERS,
-  subjects: [],
-  tags: [],
+  subjects: typeof route.query.subject === 'string' ? [route.query.subject] : [],
+  tags: typeof route.query.tag === 'string' ? [route.query.tag] : [],
 })
 const knownSubjects = ref<string[]>([])
 const knownTags = ref<string[]>([])
