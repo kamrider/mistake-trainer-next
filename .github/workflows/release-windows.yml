@@ -64,8 +64,10 @@ jobs:
         include:
           - architecture: x64
             runner: windows-2025
+            target_triple: x86_64-pc-windows-msvc
           - architecture: arm64
             runner: windows-11-arm
+            target_triple: aarch64-pc-windows-msvc
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     environment: production
@@ -90,7 +92,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: 1.97.0
-          targets: ${{ matrix.architecture == 'arm64' && 'aarch64-pc-windows-msvc' || 'x86_64-pc-windows-msvc' }}
+          targets: ${{ matrix.target_triple }}
       - name: Install native build prerequisite
         shell: powershell
         run: choco install strawberryperl --no-progress -y
@@ -104,9 +106,9 @@ jobs:
           name: mistake-trainer-next-${{ env.RELEASE_TAG }}-windows-${{ matrix.architecture }}
           if-no-files-found: error
           path: |
-            src-tauri/target/*-pc-windows-msvc/release/bundle/nsis/*-setup.exe
-            src-tauri/target/*-pc-windows-msvc/release/bundle/nsis/*-setup.exe.sig
-            src-tauri/target/*-pc-windows-msvc/release/bundle/nsis/*-setup.exe.sha256
+            src-tauri/target/${{ matrix.target_triple }}/release/bundle/nsis/*-setup.exe
+            src-tauri/target/${{ matrix.target_triple }}/release/bundle/nsis/*-setup.exe.sig
+            src-tauri/target/${{ matrix.target_triple }}/release/bundle/nsis/*-setup.exe.sha256
 
   draft-release:
     needs: [verify-release-source, signed-windows]

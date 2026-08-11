@@ -122,6 +122,10 @@ try {
     Assert-Contract ($workflowText -notmatch 'vars\.WINDOWS_UPDATE_ARTIFACT_BASE_URL') 'workflow still required a manually configured artifact base URL.'
     Assert-Contract ($workflowText -match 'WINDOWS_AUTHENTICODE_MODE:\s*disabled') 'workflow did not explicitly select the free unsigned mode.'
     Assert-Contract ($workflowText -match 'Unknown publisher or Microsoft Defender SmartScreen warning') 'draft release did not disclose the unsigned installer warning.'
+    Assert-Contract ($workflowText -match 'target_triple:\s*x86_64-pc-windows-msvc') 'workflow did not define the exact x64 target artifact root.'
+    Assert-Contract ($workflowText -match 'target_triple:\s*aarch64-pc-windows-msvc') 'workflow did not define the exact ARM64 target artifact root.'
+    Assert-Contract ($workflowText -match 'src-tauri/target/\$\{\{\s*matrix\.target_triple\s*\}\}/release/bundle/nsis/\*-setup\.exe') 'workflow upload paths do not flatten installers into the artifact root.'
+    Assert-Contract ($workflowText -notmatch 'src-tauri/target/\*-pc-windows-msvc') 'workflow upload paths still preserve architecture directories inside artifacts.'
     foreach ($forbiddenName in @(
         'secrets.WINDOWS_CERTIFICATE',
         'secrets.WINDOWS_CERTIFICATE_PASSWORD',
