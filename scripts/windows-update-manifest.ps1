@@ -55,7 +55,11 @@ function Read-VerifiedArtifact {
     $versionPattern = [regex]::Escape($releaseVersion)
     Assert-Manifest ($installer.Name -match "_${versionPattern}_$Architecture-setup\.exe$") "$Architecture installer version does not match the release tag."
 
-    $escapedName = [Uri]::EscapeDataString($installer.Name)
+    Assert-Manifest ($installer.Name -match '^[A-Za-z0-9._ -]+$') "$Architecture installer name contains unsupported GitHub release asset characters."
+    # GitHub normalizes spaces in uploaded release asset filenames to periods.
+    $releaseAssetName = $installer.Name.Replace(' ', '.')
+    Assert-Manifest ($releaseAssetName -match '^[A-Za-z0-9._-]+$') "$Architecture normalized release asset name is invalid."
+    $escapedName = [Uri]::EscapeDataString($releaseAssetName)
     return [ordered]@{
         signature = $signature
         url = "$artifactBaseUrl/$escapedName"
