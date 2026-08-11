@@ -40,6 +40,7 @@ export const commands = {
 	reviewQueue: () => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_queue"),
 	reviewCurrentProblem: () => __TAURI_INVOKE<AppResult<ProblemDetail>>("review_current_problem"),
 	reviewManualStart: (input: ReviewManualStartInput) => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_manual_start", { input }),
+	reviewQuickStart: (input: ReviewQuickStartInput) => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_quick_start", { input }),
 	reviewExamStart: (input: ReviewExamStartInput) => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_exam_start", { input }),
 	reviewExamNavigate: (input: ReviewExamNavigateInput) => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_exam_navigate", { input }),
 	reviewExamBeginGrading: () => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_exam_begin_grading"),
@@ -773,6 +774,8 @@ export type ProfileSummary = {
 	revision: number,
 };
 
+export type QuickReviewPreset = "five_minutes" | "ten_problems" | "recently_forgotten";
+
 export type ReportSummary = {
 	activeProblemCount: number,
 	dueProblemCount: number,
@@ -898,6 +901,12 @@ export type ReviewQueueOverview = {
 	examWrongCount: number,
 	focus: ReviewFocusState | null,
 	items: ReviewQueueItem[],
+};
+
+export type ReviewQuickStartInput = {
+	preset: QuickReviewPreset,
+	subject: string | null,
+	tag: string | null,
 };
 
 export type ReviewSubmission = {

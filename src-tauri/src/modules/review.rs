@@ -1,5 +1,5 @@
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::collections::HashSet;
 use thiserror::Error;
@@ -31,6 +31,24 @@ pub struct StartManualReview {
     pub account_id: String,
     pub profile_id: String,
     pub problem_ids: Vec<String>,
+    pub now_utc_ms: i64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum QuickReviewPreset {
+    FiveMinutes,
+    TenProblems,
+    RecentlyForgotten,
+}
+
+#[derive(Clone, Debug)]
+pub struct StartQuickReview {
+    pub account_id: String,
+    pub profile_id: String,
+    pub preset: QuickReviewPreset,
+    pub subject: Option<String>,
+    pub tag: Option<String>,
     pub now_utc_ms: i64,
 }
 
@@ -123,6 +141,10 @@ pub enum ReviewUseCaseError {
     InvalidExamSelection,
     #[error("exam session is missing or in the wrong phase")]
     InvalidExamState,
+    #[error("quick review filters are invalid")]
+    InvalidQuickSelection,
+    #[error("quick review has no matching candidates")]
+    NoQuickCandidates,
     #[error("review focus operation failed")]
     Focus(#[from] ReviewFocusError),
 }
@@ -379,6 +401,99 @@ pub fn start_manual_review_queue(
         focus,
         items: entries,
     })
+}
+
+pub fn start_quick_review_queue(
+    connection: &mut Connection,
+    input: StartQuickReview,
+) -> Result<ReviewQueueState, ReviewUseCaseError> {
+    let subject = normalize_quick_filter(input.subject, 40)?;
+    let tag = normalize_quick_filter(input.tag, 30)?;
+    let (limit, recently_forgotten_only) = match input.preset {
+        QuickReviewPreset::FiveMinutes => (8_i64, false),
+        QuickReviewPreset::TenProblems => (10_i64, false),
+        QuickReviewPreset::RecentlyForgotten => (20_i64, true),
+    };
+    let recent_cutoff = input.now_utc_ms.saturating_sub(30 * 86_400_000);
+    let problem_ids = {
+        let mut statement = connection.prepare(
+            "SELECT p.id
+             FROM problems p
+             LEFT JOIN schedule_states schedule ON schedule.problem_id = p.id
+             WHERE p.account_id = ?1 AND p.profile_id = ?2 AND p.status = 'active'
+               AND (?3 = '' OR p.subject = ?3)
+               AND (?4 = '' OR EXISTS (
+                    SELECT 1 FROM json_each(p.tags_json) selected_tag
+                    WHERE CAST(selected_tag.value AS TEXT) = ?4
+               ))
+               AND (?5 = 0 OR (
+                    SELECT review.rating FROM review_events review
+                    WHERE review.account_id = p.account_id
+                      AND review.profile_id = p.profile_id
+                      AND review.problem_id = p.id
+                    ORDER BY review.occurred_at_utc_ms DESC, review.id DESC
+                    LIMIT 1
+               ) = 'again' AND (
+                    SELECT review.occurred_at_utc_ms FROM review_events review
+                    WHERE review.account_id = p.account_id
+                      AND review.profile_id = p.profile_id
+                      AND review.problem_id = p.id
+                    ORDER BY review.occurred_at_utc_ms DESC, review.id DESC
+                    LIMIT 1
+               ) >= ?6)
+             ORDER BY CASE WHEN schedule.due_at_utc_ms <= ?7 THEN 0 ELSE 1 END,
+                      CASE WHEN schedule.due_at_utc_ms <= ?7 THEN schedule.due_at_utc_ms ELSE 9223372036854775807 END,
+                      p.updated_at_utc_ms,
+                      p.id
+             LIMIT ?8",
+        )?;
+        statement
+            .query_map(
+                params![
+                    input.account_id,
+                    input.profile_id,
+                    subject.as_deref().unwrap_or_default(),
+                    tag.as_deref().unwrap_or_default(),
+                    i32::from(recently_forgotten_only),
+                    recent_cutoff,
+                    input.now_utc_ms,
+                    limit,
+                ],
+                |row| row.get::<_, String>(0),
+            )?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    if problem_ids.is_empty() {
+        return Err(ReviewUseCaseError::NoQuickCandidates);
+    }
+    start_manual_review_queue(
+        connection,
+        StartManualReview {
+            account_id: input.account_id,
+            profile_id: input.profile_id,
+            problem_ids,
+            now_utc_ms: input.now_utc_ms,
+        },
+    )
+}
+
+fn normalize_quick_filter(
+    value: Option<String>,
+    max_chars: usize,
+) -> Result<Option<String>, ReviewUseCaseError> {
+    value
+        .map(|value| value.trim().to_owned())
+        .map(|value| {
+            if value.is_empty() {
+                Ok(None)
+            } else if value.chars().count() > max_chars {
+                Err(ReviewUseCaseError::InvalidQuickSelection)
+            } else {
+                Ok(Some(value))
+            }
+        })
+        .transpose()
+        .map(Option::flatten)
 }
 
 pub fn start_exam_review_queue(

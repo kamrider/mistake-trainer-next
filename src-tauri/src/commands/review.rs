@@ -11,10 +11,10 @@ use crate::{
     modules::{
         problems::{ProblemDetail, ProblemDetailQuery, get_problem_detail},
         review::{
-            BeginExamGrading, NavigateExam, ReviewQueueQuery, ReviewQueueState, ReviewSubmission,
-            StartExamReview, StartManualReview, SubmitReview, begin_exam_grading,
-            list_review_queue, navigate_exam, start_exam_review_queue, start_manual_review_queue,
-            submit_review,
+            BeginExamGrading, NavigateExam, QuickReviewPreset, ReviewQueueQuery, ReviewQueueState,
+            ReviewSubmission, StartExamReview, StartManualReview, StartQuickReview, SubmitReview,
+            begin_exam_grading, list_review_queue, navigate_exam, start_exam_review_queue,
+            start_manual_review_queue, start_quick_review_queue, submit_review,
         },
         review_focus::{
             FocusNumberSelection, ReviewFocusError, ReviewFocusState, SkipReviewFocus,
@@ -59,6 +59,14 @@ pub struct ReviewSubmitInput {
 #[serde(rename_all = "camelCase")]
 pub struct ReviewManualStartInput {
     pub problem_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewQuickStartInput {
+    pub preset: QuickReviewPreset,
+    pub subject: Option<String>,
+    pub tag: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Type)]
@@ -181,6 +189,46 @@ pub fn review_manual_start_for(
             )
         }
         Err(_) => internal_review_error("review_manual_start_failed"),
+    }
+}
+
+pub fn review_quick_start_for(
+    runtime: &LibraryRuntime,
+    input: ReviewQuickStartInput,
+    now_utc_ms: i64,
+) -> AppResult<ReviewQueueOverview> {
+    let profile = runtime.active_profile();
+    let mut connection = match runtime.connection.lock() {
+        Ok(connection) => connection,
+        Err(_) => return internal_review_error("library_lock_poisoned"),
+    };
+    match start_quick_review_queue(
+        &mut connection,
+        StartQuickReview {
+            account_id: runtime.account_id().to_owned(),
+            profile_id: profile.id,
+            preset: input.preset,
+            subject: input.subject,
+            tag: input.tag,
+            now_utc_ms,
+        },
+    ) {
+        Ok(overview) => AppResult::success(queue_overview(overview)),
+        Err(crate::modules::review::ReviewUseCaseError::NoQuickCandidates) => AppResult::failure(
+            "review_quick_empty",
+            "当前没有符合条件的题目，可以调整科目或标签后再试。",
+            false,
+            Uuid::now_v7().to_string(),
+        ),
+        Err(crate::modules::review::ReviewUseCaseError::InvalidQuickSelection) => {
+            AppResult::failure(
+                "review_quick_filter_invalid",
+                "快速训练的科目或标签过长，请精简后再试。",
+                false,
+                Uuid::now_v7().to_string(),
+            )
+        }
+        Err(_) => internal_review_error("review_quick_start_failed"),
     }
 }
 
@@ -384,6 +432,15 @@ pub fn review_manual_start(
     input: ReviewManualStartInput,
 ) -> AppResult<ReviewQueueOverview> {
     review_manual_start_for(&state, input, current_utc_millis())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn review_quick_start(
+    state: State<'_, LibraryRuntime>,
+    input: ReviewQuickStartInput,
+) -> AppResult<ReviewQueueOverview> {
+    review_quick_start_for(&state, input, current_utc_millis())
 }
 
 #[tauri::command]

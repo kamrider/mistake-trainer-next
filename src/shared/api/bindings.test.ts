@@ -32,6 +32,8 @@ describe('generated Tauri bindings', () => {
     expect(bindings).not.toContain('storageMigrateSelect: (accountId:')
     expect(bindings).not.toContain('storageMigrateSelect: (profileId:')
     expect(bindings).toContain('reviewManualStart')
+    expect(bindings).toContain('reviewQuickStart')
+    expect(bindings).toContain('QuickReviewPreset')
     expect(bindings).toContain('ReviewManualStartInput')
     expect(bindings).toContain('problemList: (input: ProblemListInput) =>')
     expect(bindings).toContain('problemBulkMetadata: (input: ProblemBulkMetadataInput) =>')

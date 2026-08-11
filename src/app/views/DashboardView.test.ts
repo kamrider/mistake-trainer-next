@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createAppRouter } from '../router'
 import DashboardView from './DashboardView.vue'
 
-const api = vi.hoisted(() => ({ dashboardOverview: vi.fn() }))
+const api = vi.hoisted(() => ({ dashboardOverview: vi.fn(), reviewQuickStart: vi.fn() }))
 
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => true }))
 vi.mock('../../shared/api/bindings', () => ({ commands: api }))
@@ -33,6 +33,10 @@ describe('DashboardView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     api.dashboardOverview.mockResolvedValue({ ok: true, data: dashboardData })
+    api.reviewQuickStart.mockResolvedValue({
+      ok: true,
+      data: { sessionId: 'quick-1', mode: 'manual', resumed: false, completedCount: 0, totalCount: 8, items: [] },
+    })
   })
 
   it('loads the typed local overview with the browser timezone offset', async () => {
@@ -64,5 +68,38 @@ describe('DashboardView', () => {
 
     await user.click(await screen.findByRole('button', { name: '查看题库' }))
     await waitFor(() => expect(router.currentRoute.value.name).toBe('library'))
+  })
+
+  it('persists a quick session before navigating to review', async () => {
+    const user = userEvent.setup()
+    const router = await renderWithRouter()
+    await user.click(await screen.findByRole('button', { name: '快速训练' }))
+    await user.click(screen.getByRole('radio', { name: /十道题专注/ }))
+    await user.click(screen.getByRole('button', { name: '开始这轮训练' }))
+
+    await waitFor(() => expect(api.reviewQuickStart).toHaveBeenCalledWith({
+      preset: 'ten_problems', subject: null, tag: null,
+    }))
+    await waitFor(() => expect(router.currentRoute.value.name).toBe('review'))
+  })
+
+  it('keeps the user on the dashboard when quick selection is empty', async () => {
+    const user = userEvent.setup()
+    api.reviewQuickStart.mockResolvedValue({
+      ok: false,
+      error: {
+        code: 'review_quick_empty',
+        userMessage: '当前没有符合条件的题目，可以调整科目或标签后再试。',
+        retryable: false,
+        diagnosticId: 'quick-empty',
+      },
+    })
+    const router = await renderWithRouter()
+    await user.click(await screen.findByRole('button', { name: '快速训练' }))
+    await user.click(screen.getByRole('button', { name: '开始这轮训练' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('调整科目或标签')
+    expect(router.currentRoute.value.name).toBe('dashboard')
+    expect(screen.getByRole('button', { name: '开始这轮训练' })).toBeEnabled()
   })
 })

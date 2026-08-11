@@ -43,6 +43,7 @@ pub fn builder() -> Builder<tauri::Wry> {
         commands::review::review_queue,
         commands::review::review_current_problem,
         commands::review::review_manual_start,
+        commands::review::review_quick_start,
         commands::review::review_exam_start,
         commands::review::review_exam_navigate,
         commands::review::review_exam_begin_grading,

@@ -205,23 +205,23 @@
 - Produces: `ReviewQuickStartInput { preset, subject, tag }` and command `review_quick_start(input) -> AppResult<ReviewQueueOverview>`.
 - Five-minute sessions select at most 8 cards; ten-problem sessions select at most 10; recently-forgotten sessions select at most 20. All select due cards before new cards and use deterministic `(due_at, updated_at, id)` ordering.
 
-- [ ] **Step 1: Write failing selection tests**
+- [x] **Step 1: Write failing selection tests**
 
   Cover exact limits, due-before-new ordering, subject/tag filters, recent-`again` behavior, profile/status scoping, no candidates, and replacement of an existing inactive session without leaking IDs to the command response or route.
 
-- [ ] **Step 2: Implement Rust-owned quick selection**
+- [x] **Step 2: Implement Rust-owned quick selection**
 
   Translate the preset to a bounded query and reuse the existing validated manual-session transaction. Keep the experience `review`, source `manual`, and existing crash-safe progress behavior.
 
-- [ ] **Step 3: Write failing dashboard/dialog tests**
+- [x] **Step 3: Write failing dashboard/dialog tests**
 
   Assert the dashboard exposes `快速训练`, presets explain their card limits, optional subject/tag filters are accessible, empty results keep the user on the dashboard with an actionable message, and success navigates only after persistence.
 
-- [ ] **Step 4: Implement the UI orchestration**
+- [x] **Step 4: Implement the UI orchestration**
 
   Add one secondary CTA rather than three competing hero buttons. Disable duplicate starts, normalize command errors, and schedule mutation sync only after a session successfully persists.
 
-- [ ] **Step 5: Run focused tests**
+- [x] **Step 5: Run focused tests**
 
   Run: `.\scripts\cargo-msvc.cmd test --manifest-path src-tauri\Cargo.toml --test review_store --test review_command` and `pnpm test -- src/modules/review/components/QuickSessionDialog.test.ts src/modules/dashboard/components/TrainingDashboard.test.ts src/app/views/DashboardView.test.ts`.
 

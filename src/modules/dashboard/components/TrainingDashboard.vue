@@ -12,6 +12,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'start-review': []
+  'open-quick': []
   'open-inbox': []
   'open-library': []
   'open-report': []
@@ -144,6 +145,18 @@ function openFirstRoute() {
               <ArrowRight
                 class="action-arrow"
                 :size="18"
+                aria-hidden="true"
+              />
+            </button>
+            <button
+              v-if="hasProblems"
+              class="secondary-action"
+              type="button"
+              @click="$emit('open-quick')"
+            >
+              快速训练
+              <Clock3
+                :size="17"
                 aria-hidden="true"
               />
             </button>
@@ -286,7 +299,7 @@ function openFirstRoute() {
 .hero-copy { position: relative; z-index: 1; max-width: 700px; }.eyebrow { margin: 0 0 12px; color: var(--cinnabar); font-size: 12px; font-weight: 750; letter-spacing: .18em; text-transform: uppercase; }.hero-panel .eyebrow { color: #e7a892; }
 h1 { max-width: 700px; margin: 0; font-size: clamp(32px, 3.6vw, 48px); font-weight: 680; line-height: 1.18; letter-spacing: -.045em; text-wrap: balance; }.hero-note { margin: 18px 0 0; color: rgba(255,253,248,.67); line-height: 1.75; }
 .hero-actions { display: flex; gap: 12px; margin-top: 30px; }.hero-actions button,.error-state button { min-height: 46px; padding: 0 20px; border-radius: 999px; cursor: pointer; transition: transform var(--motion-feedback) var(--ease-standard), background var(--motion-standard) var(--ease-standard); }.hero-actions button:active,.error-state button:active { transform: translateY(1px) scale(.985); }
-.primary-action { display: inline-flex; align-items: center; gap: 12px; color: var(--white); border: 1px solid var(--cinnabar); background: var(--cinnabar); font-weight: 700; }.primary-action:hover { background: var(--cinnabar-dark); }.action-arrow { transition: transform var(--motion-feedback) var(--ease-standard); }.primary-action:hover .action-arrow { transform: translateX(4px); }.quiet-action { color: rgba(255,253,248,.84); border: 1px solid rgba(255,253,248,.22); background: transparent; }.quiet-action:hover { background: rgba(255,255,255,.08); }
+.primary-action { display: inline-flex; align-items: center; gap: 12px; color: var(--white); border: 1px solid var(--cinnabar); background: var(--cinnabar); font-weight: 700; }.primary-action:hover { background: var(--cinnabar-dark); }.secondary-action { display: inline-flex; gap: 9px; align-items: center; color: rgba(255,253,248,.9); border: 1px solid rgba(255,253,248,.28); background: rgba(255,255,255,.06); font-weight: 700; }.secondary-action:hover { background: rgba(255,255,255,.12); }.action-arrow { transition: transform var(--motion-feedback) var(--ease-standard); }.primary-action:hover .action-arrow { transform: translateX(4px); }.quiet-action { color: rgba(255,253,248,.84); border: 1px solid rgba(255,253,248,.22); background: transparent; }.quiet-action:hover { background: rgba(255,255,255,.08); }
 .progress-seal { position: relative; z-index: 1; display: grid; width: 148px; height: 148px; flex: 0 0 auto; place-content: center; justify-items: center; border: 1px solid rgba(255,253,248,.22); border-radius: 50%; text-align: center; }.progress-seal.complete { animation: seal-arrive 460ms var(--ease-standard) both; }.seal-number { font-family: Georgia, "Times New Roman", serif; font-size: 56px; line-height: 1; font-variant-numeric: tabular-nums; }.seal-label { margin-top: 8px; color: rgba(255,253,248,.62); font-size: 13px; }
 .metrics { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 14px; }.metric-card { display: flex; gap: 14px; align-items: center; min-height: 104px; padding: 22px; border: 1px solid var(--line); border-radius: var(--radius-md); background: rgba(255,253,247,.7); transition: transform var(--motion-standard) var(--ease-standard), box-shadow var(--motion-standard) var(--ease-standard); }.metric-card:hover { transform: translateY(-2px); box-shadow: 0 10px 28px rgba(49,57,51,.07); }.metric-card > svg { color: var(--cinnabar); }.metric-card p,.metric-card strong { margin: 0; }.metric-card p { margin-bottom: 7px; color: var(--ink-muted); font-size: 13px; }.metric-card strong { font-family: Georgia,"Microsoft YaHei UI",serif; font-size: 23px; font-weight: 620; font-variant-numeric: tabular-nums; }.metric-card .text-value { font-family: inherit; font-size: 17px; }
 .day-plan { display: grid; grid-template-columns: .6fr 1fr; gap: 40px; padding: 30px 34px; border-top: 1px solid var(--line); }.day-plan h2 { margin: 0; font-size: 26px; }.route-list { display: grid; gap: 6px; }.route-list button { display: grid; grid-template-columns: 30px 24px 1fr 18px; gap: 10px; align-items: center; width: 100%; padding: 12px 10px; color: var(--ink); border: 0; border-radius: 12px; background: transparent; text-align: left; cursor: pointer; transition: transform var(--motion-feedback) var(--ease-standard), background var(--motion-feedback) var(--ease-standard); }.route-list button:hover { background: rgba(232,221,199,.48); transform: translateX(3px); }.route-list button > span,.route-list button > svg:first-of-type { color: var(--cinnabar); }.route-list button > svg:last-child { color: var(--ink-muted); }.route-list strong,.route-list small { display: block; }.route-list small { overflow: hidden; margin-top: 4px; color: var(--ink-muted); text-overflow: ellipsis; white-space: nowrap; }

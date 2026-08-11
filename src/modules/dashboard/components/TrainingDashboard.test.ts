@@ -24,6 +24,8 @@ describe('TrainingDashboard', () => {
     await user.click(screen.getByRole('button', { name: '开始复习 18 道' }))
 
     expect(view.emitted('start-review')).toHaveLength(1)
+    await user.click(screen.getByRole('button', { name: '快速训练' }))
+    expect(view.emitted('open-quick')).toHaveLength(1)
     expect(screen.getByText('2 个批次 · 14 张图片待整理')).toBeVisible()
     expect(screen.queryByRole('button', { name: '整理采集箱' })).not.toBeInTheDocument()
   })
@@ -38,6 +40,7 @@ describe('TrainingDashboard', () => {
     expect(screen.getByText('从今天开始')).toBeVisible()
     await user.click(screen.getByRole('button', { name: '录入第一道错题' }))
     expect(view.emitted('open-inbox')).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: '快速训练' })).not.toBeInTheDocument()
   })
 
   it('shows an all-clear state and opens the library when nothing is due', async () => {
