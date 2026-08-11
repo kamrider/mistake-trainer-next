@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { acquireDialogDocumentBoundary } from '../../../app/dialog-document-boundary'
+import { trapDialogFocus } from '../../../app/dialog-focus'
 import type { QuickReviewPreset, ReviewQuickStartInput } from '../../../shared/api/bindings'
 
 const props = withDefaults(defineProps<{
@@ -16,18 +18,44 @@ const emit = defineEmits<{
 const preset = ref<QuickReviewPreset>('five_minutes')
 const subject = ref('')
 const tag = ref('')
+const dialog = ref<HTMLElement>()
+let releaseDialogBoundary: (() => void) | undefined
 const presets: Array<{ value: QuickReviewPreset; title: string; detail: string }> = [
   { value: 'five_minutes', title: '五分钟热身', detail: '最多 8 道，适合课间快速回看' },
   { value: 'ten_problems', title: '十道题专注', detail: '最多 10 道，完成一个清晰小目标' },
   { value: 'recently_forgotten', title: '最近遗忘', detail: '最多 20 道，重看近 30 天答错的题' },
 ]
 
-watch(() => props.open, (open) => {
+function releaseBoundary() {
+  releaseDialogBoundary?.()
+  releaseDialogBoundary = undefined
+}
+
+watch(() => props.open, async (open) => {
+  releaseBoundary()
   if (!open) return
   preset.value = 'five_minutes'
   subject.value = ''
   tag.value = ''
-})
+  await nextTick()
+  if (!dialog.value || !props.open) return
+  releaseDialogBoundary = acquireDialogDocumentBoundary(dialog.value)
+  dialog.value.querySelector<HTMLInputElement>('input:not(:disabled)')?.focus()
+}, { immediate: true })
+
+function close() {
+  if (!props.busy) emit('close')
+}
+
+function handleKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && !props.busy) {
+    event.preventDefault()
+    close()
+  }
+  if (event.key === 'Tab') trapDialogFocus(event, dialog.value)
+}
+
+onBeforeUnmount(releaseBoundary)
 
 function start() {
   emit('start', {
@@ -42,13 +70,15 @@ function start() {
   <div
     v-if="open"
     class="dialog-backdrop"
-    @mousedown.self="!busy && $emit('close')"
+    @mousedown.self="close"
   >
     <section
+      ref="dialog"
       class="dialog"
       role="dialog"
       aria-modal="true"
       aria-labelledby="quick-session-title"
+      @keydown="handleKeydown"
     >
       <p class="eyebrow">
         小步开始
@@ -110,7 +140,7 @@ function start() {
         <button
           type="button"
           :disabled="busy"
-          @click="$emit('close')"
+          @click="close"
         >
           取消
         </button>

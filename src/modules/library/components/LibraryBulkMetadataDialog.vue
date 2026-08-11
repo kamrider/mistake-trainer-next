@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { acquireDialogDocumentBoundary } from '../../../app/dialog-document-boundary'
+import { trapDialogFocus } from '../../../app/dialog-focus'
 
 const props = withDefaults(defineProps<{
   open: boolean
@@ -17,17 +19,43 @@ const subject = ref('')
 const addTagsText = ref('')
 const removeTagsText = ref('')
 const validationMessage = ref('')
+const dialog = ref<HTMLElement>()
+let releaseDialogBoundary: (() => void) | undefined
 const normalizedAddTags = computed(() => normalizeTags(addTagsText.value))
 const normalizedRemoveTags = computed(() => normalizeTags(removeTagsText.value))
 
-watch(() => props.open, (open) => {
+function releaseBoundary() {
+  releaseDialogBoundary?.()
+  releaseDialogBoundary = undefined
+}
+
+watch(() => props.open, async (open) => {
+  releaseBoundary()
   if (!open) return
   replaceSubject.value = false
   subject.value = ''
   addTagsText.value = ''
   removeTagsText.value = ''
   validationMessage.value = ''
-})
+  await nextTick()
+  if (!dialog.value || !props.open) return
+  releaseDialogBoundary = acquireDialogDocumentBoundary(dialog.value)
+  dialog.value.querySelector<HTMLInputElement>('input:not(:disabled)')?.focus()
+}, { immediate: true })
+
+function close() {
+  if (!props.busy) emit('close')
+}
+
+function handleKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && !props.busy) {
+    event.preventDefault()
+    close()
+  }
+  if (event.key === 'Tab') trapDialogFocus(event, dialog.value)
+}
+
+onBeforeUnmount(releaseBoundary)
 
 function normalizeTags(value: string) {
   return [...new Set(value.split(/[,，\n]/u).map(tag => tag.trim()).filter(Boolean))]
@@ -51,13 +79,15 @@ function submit() {
   <div
     v-if="open"
     class="dialog-backdrop"
-    @mousedown.self="!busy && $emit('close')"
+    @mousedown.self="close"
   >
     <section
+      ref="dialog"
       class="dialog"
       role="dialog"
       aria-modal="true"
       aria-labelledby="bulk-metadata-title"
+      @keydown="handleKeydown"
     >
       <p class="eyebrow">
         原子批量修改
@@ -113,7 +143,7 @@ function submit() {
         <button
           type="button"
           :disabled="busy"
-          @click="$emit('close')"
+          @click="close"
         >
           取消
         </button>

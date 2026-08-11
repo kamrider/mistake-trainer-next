@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/vue'
+import { render, screen, waitFor } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import QuickSessionDialog from './QuickSessionDialog.vue'
@@ -28,5 +28,16 @@ describe('QuickSessionDialog', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('调整科目或标签')
     expect(screen.getByRole('button', { name: '正在准备训练…' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '取消' })).toBeDisabled()
+  })
+
+  it('moves focus inside the modal and closes with Escape', async () => {
+    const user = userEvent.setup()
+    const view = render(QuickSessionDialog, { props: { open: true } })
+    const firstPreset = screen.getByRole('radio', { name: /五分钟热身/ })
+
+    await waitFor(() => expect(firstPreset).toHaveFocus())
+    await user.keyboard('{Escape}')
+
+    expect(view.emitted('close')).toEqual([[]])
   })
 })

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/vue'
+import { render, screen, waitFor } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import LibraryBulkMetadataDialog from './LibraryBulkMetadataDialog.vue'
@@ -41,5 +41,18 @@ describe('LibraryBulkMetadataDialog', () => {
     await view.rerender({ busy: true })
     expect(screen.getByRole('button', { name: '正在批量修改…' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '取消' })).toBeDisabled()
+  })
+
+  it('moves focus inside the modal and closes with Escape', async () => {
+    const user = userEvent.setup()
+    const view = render(LibraryBulkMetadataDialog, {
+      props: { open: true, selectedCount: 2 },
+    })
+    const subjectToggle = screen.getByRole('checkbox', { name: '统一修改科目' })
+
+    await waitFor(() => expect(subjectToggle).toHaveFocus())
+    await user.keyboard('{Escape}')
+
+    expect(view.emitted('close')).toEqual([[]])
   })
 })

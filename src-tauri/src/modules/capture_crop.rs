@@ -976,6 +976,14 @@ mod perspective_tests {
     #[test]
     fn crossed_or_tiny_quad_is_rejected_before_encoding() {
         let source = coordinate_fixture(64, 48);
+        let out_of_range = recipe(PerspectiveQuad {
+            top_left: point(-0.01, 0.1),
+            top_right: point(0.9, 0.1),
+            bottom_right: point(0.9, 0.9),
+            bottom_left: point(0.1, 0.9),
+        });
+        assert!(encode_crop(&source, &out_of_range).is_err());
+
         let crossed = recipe(PerspectiveQuad {
             top_left: point(0.1, 0.1),
             top_right: point(0.9, 0.9),
