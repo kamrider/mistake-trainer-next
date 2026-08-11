@@ -364,6 +364,19 @@ mod tests {
     }
 
     #[test]
+    fn flat_dark_image_reports_exposure_and_contrast() {
+        let image = DynamicImage::ImageLuma8(GrayImage::from_pixel(160, 120, Luma([12])));
+        let report = analyze_capture_image("dark", &image);
+
+        assert!(report.issues.contains(&CaptureQualityIssueCode::TooDark));
+        assert!(
+            report
+                .issues
+                .contains(&CaptureQualityIssueCode::LowContrast)
+        );
+    }
+
+    #[test]
     fn smooth_high_contrast_gradient_is_reported_as_blurry() {
         let mut image = GrayImage::new(320, 180);
         for (x, _y, pixel) in image.enumerate_pixels_mut() {

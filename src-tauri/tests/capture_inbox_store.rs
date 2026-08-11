@@ -103,6 +103,7 @@ fn crop_recipe(x: f64, width: f64) -> CaptureCropRecipe {
             width,
             height: 1.0,
         },
+        perspective_quad: None,
         rotation_degrees: 0,
         output_media_type: "image/png".to_owned(),
         max_edge: 4_096,
