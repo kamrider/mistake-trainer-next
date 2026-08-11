@@ -22,6 +22,13 @@ export interface CaptureCropEditorState {
   itemId: string
   itemName: string
   dataUrl: string
+  initialRecipes?: CaptureCropRecipe[] | undefined
+  suggestedRotationDegrees?: number | undefined
+}
+
+export interface CaptureCropEditorSeed {
+  initialRecipes?: CaptureCropRecipe[] | undefined
+  suggestedRotationDegrees?: number | undefined
 }
 
 interface CaptureItemEditingOperations {
@@ -119,7 +126,7 @@ export function useCaptureItemEditing(options: CaptureItemEditingOptions) {
     }
   }
 
-  async function openCropEditor(itemId: string) {
+  async function openCropEditor(itemId: string, seed?: CaptureCropEditorSeed) {
     const current = options.activeDetail()
     const item = current?.items.find(value => value.id === itemId)
     if (
@@ -137,7 +144,15 @@ export function useCaptureItemEditing(options: CaptureItemEditingOptions) {
       const result = await options.operations.preview(identity.id, itemId)
       if (!isCurrent(identity)) return
       if (result.ok) {
-        cropEditor.value = { itemId, itemName: item.sourceName, dataUrl: result.data.dataUrl }
+        cropEditor.value = {
+          itemId,
+          itemName: item.sourceName,
+          dataUrl: result.data.dataUrl,
+          ...(seed?.initialRecipes ? { initialRecipes: seed.initialRecipes } : {}),
+          ...(seed?.suggestedRotationDegrees !== undefined
+            ? { suggestedRotationDegrees: seed.suggestedRotationDegrees }
+            : {}),
+        }
         cropEditorBatchId = identity.id
       }
       else await reportCommandError(result.error, identity)

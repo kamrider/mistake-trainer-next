@@ -132,6 +132,29 @@ describe('useCaptureItemEditing', () => {
     })
   })
 
+  it('carries a local quality suggestion into the reversible crop editor state', async () => {
+    const crop = harness()
+    const initialRecipes = [{
+      rect: { x: 0.12, y: 0.08, width: 0.76, height: 0.8 },
+      perspectiveQuad: null,
+      rotationDegrees: 0,
+      outputMediaType: 'image/png',
+      maxEdge: 4096,
+      jpegQuality: 90,
+    }] satisfies CaptureCropRecipe[]
+
+    await crop.controller.openCropEditor('item-1', {
+      initialRecipes,
+      suggestedRotationDegrees: -2.4,
+    })
+
+    expect(crop.controller.cropEditor.value).toMatchObject({
+      initialRecipes,
+      suggestedRotationDegrees: -2.4,
+    })
+    expect(crop.operations.apply).not.toHaveBeenCalled()
+  })
+
   it('cancels safely and revalidates the target after confirmation', async () => {
     const cancelled = harness()
     cancelled.confirm.mockResolvedValue(false)

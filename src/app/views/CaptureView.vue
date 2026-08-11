@@ -341,7 +341,7 @@ async function openVisibleCropEditor(itemId: string) {
   const batchId = detail.value?.batch.id
   if (!batchId) {
     cropReturnFocus.clear()
-    await openCropEditor(itemId)
+    await openCropEditor(itemId, qualityCropSeed(itemId))
     return
   }
   cropReturnFocus.capture({
@@ -351,7 +351,7 @@ async function openVisibleCropEditor(itemId: string) {
       ? activeElement
       : undefined,
   })
-  await openCropEditor(itemId)
+  await openCropEditor(itemId, qualityCropSeed(itemId))
   if (!cropEditor.value) await cropReturnFocus.restore()
 }
 
@@ -519,6 +519,26 @@ async function loadDetail(batchId: string) {
   }
   catch {
     if (requestedDetailBatchId === batchId) showError('没有读取到这个采集批次，请返回后重试。')
+  }
+}
+
+function qualityCropSeed(itemId: string) {
+  const report = qualityReports.value[itemId]
+  if (!report) return undefined
+  return {
+    ...(report.suggestedCrop
+      ? {
+          initialRecipes: [{
+            rect: report.suggestedCrop,
+            perspectiveQuad: null,
+            rotationDegrees: 0,
+            outputMediaType: 'image/png',
+            maxEdge: 4096,
+            jpegQuality: 90,
+          }] satisfies CaptureCropRecipe[],
+        }
+      : {}),
+    suggestedRotationDegrees: report.suggestedRotationDegrees ?? 0,
   }
 }
 
@@ -915,6 +935,8 @@ onBeforeUnmount(() => {
     :data-url="visibleCropEditor.dataUrl"
     :item-name="visibleCropEditor.itemName"
     :busy="busy"
+    :initial-recipes="visibleCropEditor.initialRecipes"
+    :suggested-rotation-degrees="visibleCropEditor.suggestedRotationDegrees"
     @close="closeVisibleCropEditor"
     @apply="applyVisibleCrop"
   />

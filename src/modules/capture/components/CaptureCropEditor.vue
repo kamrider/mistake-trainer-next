@@ -63,7 +63,8 @@ const props = defineProps<{
   itemName: string
   busy: boolean
   mode?: CaptureCropEditorMode | undefined
-  initialRecipes?: CaptureCropRecipe[] | undefined
+  initialRecipes?: readonly CaptureCropRecipe[] | undefined
+  suggestedRotationDegrees?: number | undefined
 }>()
 
 const emit = defineEmits<{
@@ -613,6 +614,10 @@ onBeforeUnmount(() => {
             裁出真正需要的题目范围
           </h2>
           <span :title="itemName">{{ itemName }}</span>
+          <span
+            v-if="suggestedRotationDegrees && Math.abs(suggestedRotationDegrees) >= 1.5"
+            class="quality-suggestion"
+          >质量检测建议约旋转 {{ suggestedRotationDegrees > 0 ? '+' : '' }}{{ suggestedRotationDegrees.toFixed(1) }}°；可用透视矫正贴合纸张四角。</span>
         </div>
         <button
           ref="closeButton"
