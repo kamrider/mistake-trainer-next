@@ -7,6 +7,20 @@ export interface CropRegion {
 
 export type CropResizeHandle = 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'nw'
 
+export interface PerspectivePoint {
+  x: number
+  y: number
+}
+
+export interface PerspectiveQuad {
+  topLeft: PerspectivePoint
+  topRight: PerspectivePoint
+  bottomRight: PerspectivePoint
+  bottomLeft: PerspectivePoint
+}
+
+export type PerspectiveCorner = keyof PerspectiveQuad
+
 const DEFAULT_MINIMUM_SIZE = 0.015
 
 function clamp(value: number, minimum: number, maximum: number) {
@@ -62,6 +76,63 @@ export function resizeCropRegion<T extends CropRegion>(
   if (handle.includes('s')) bottom = clamp(bottom + deltaY, top + minimum, 1)
 
   return withEdges(region, left, top, right, bottom)
+}
+
+export function identityPerspectiveQuad(): PerspectiveQuad {
+  return {
+    topLeft: { x: 0, y: 0 },
+    topRight: { x: 1, y: 0 },
+    bottomRight: { x: 1, y: 1 },
+    bottomLeft: { x: 0, y: 1 },
+  }
+}
+
+export function clonePerspectiveQuad(quad: PerspectiveQuad): PerspectiveQuad {
+  return {
+    topLeft: { ...quad.topLeft },
+    topRight: { ...quad.topRight },
+    bottomRight: { ...quad.bottomRight },
+    bottomLeft: { ...quad.bottomLeft },
+  }
+}
+
+export function isValidPerspectiveQuad(quad: PerspectiveQuad, minimumArea = 0.02) {
+  const points = [quad.topLeft, quad.topRight, quad.bottomRight, quad.bottomLeft]
+  if (!points.every(point =>
+    Number.isFinite(point.x)
+    && Number.isFinite(point.y)
+    && point.x >= 0
+    && point.x <= 1
+    && point.y >= 0
+    && point.y <= 1,
+  )) return false
+  for (let index = 0; index < points.length; index += 1) {
+    const a = points[index]!
+    const b = points[(index + 1) % points.length]!
+    const c = points[(index + 2) % points.length]!
+    const cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x)
+    if (cross <= 1e-6) return false
+  }
+  const twiceArea = Math.abs(points.reduce((sum, point, index) => {
+    const next = points[(index + 1) % points.length]!
+    return sum + point.x * next.y - next.x * point.y
+  }, 0))
+  return twiceArea >= Math.max(0.001, minimumArea * 2)
+}
+
+export function movePerspectiveCorner(
+  quad: PerspectiveQuad,
+  corner: PerspectiveCorner,
+  deltaX: number,
+  deltaY: number,
+): PerspectiveQuad {
+  if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) return clonePerspectiveQuad(quad)
+  const next = clonePerspectiveQuad(quad)
+  next[corner] = {
+    x: normalized(clamp(next[corner].x + deltaX, 0, 1)),
+    y: normalized(clamp(next[corner].y + deltaY, 0, 1)),
+  }
+  return isValidPerspectiveQuad(next) ? next : clonePerspectiveQuad(quad)
 }
 
 export function fitImageWithin(

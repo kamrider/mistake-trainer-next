@@ -1,20 +1,31 @@
 <script setup lang="ts">
-import { ArrowDown, ArrowUp, Crop, Plus, Redo2, RotateCw, Trash2, Undo2, X, ZoomIn, ZoomOut } from '@lucide/vue'
+import { ArrowDown, ArrowUp, Crop, Plus, Redo2, RotateCw, ScanLine, Trash2, Undo2, X, ZoomIn, ZoomOut } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { acquireDialogDocumentBoundary } from '../../../app/dialog-document-boundary'
 import { trapDialogFocus } from '../../../app/dialog-focus'
 import type { CaptureCropRecipe } from '../../../shared/api/bindings'
 import {
   fitImageWithin,
+  clonePerspectiveQuad,
+  identityPerspectiveQuad,
+  movePerspectiveCorner,
   moveCropRegion,
   resizeCropRegion,
   type CropRegion,
   type CropResizeHandle,
+  type PerspectiveCorner,
+  type PerspectiveQuad,
 } from '../domain/cropGeometry'
 
 type Region = CropRegion & { id: string }
 type CaptureCropEditorMode = 'apply' | 'proposal'
-type Snapshot = { rotation: 0 | 90 | 180 | 270, regions: Region[], activeId: string }
+type Snapshot = {
+  rotation: 0 | 90 | 180 | 270
+  regions: Region[]
+  activeId: string
+  perspectiveQuad: PerspectiveQuad | null
+  perspectiveMode: boolean
+}
 type DragState = {
   id: string
   mode: 'move' | 'resize'
@@ -22,6 +33,12 @@ type DragState = {
   startX: number
   startY: number
   before: Region
+}
+type PerspectiveDragState = {
+  corner: PerspectiveCorner
+  startX: number
+  startY: number
+  before: PerspectiveQuad
 }
 
 const resizeHandles: { handle: CropResizeHandle, label: string }[] = [
@@ -33,6 +50,12 @@ const resizeHandles: { handle: CropResizeHandle, label: string }[] = [
   { handle: 'sw', label: '调整左下角' },
   { handle: 'w', label: '调整左边界' },
   { handle: 'nw', label: '调整左上角' },
+]
+const perspectiveCorners: { corner: PerspectiveCorner, label: string }[] = [
+  { corner: 'topLeft', label: '透视左上角' },
+  { corner: 'topRight', label: '透视右上角' },
+  { corner: 'bottomRight', label: '透视右下角' },
+  { corner: 'bottomLeft', label: '透视左下角' },
 ]
 
 const props = defineProps<{
@@ -63,7 +86,24 @@ const regions = ref<Region[]>(makeInitialRegions())
 const activeId = ref(regions.value[0]!.id)
 const undoStack = ref<Snapshot[]>([])
 const redoStack = ref<Snapshot[]>([])
+function readInitialPerspectiveQuad(): PerspectiveQuad | null {
+  const quad = props.initialRecipes?.[0]?.perspectiveQuad
+  if (!quad) return null
+  const points = [quad.topLeft, quad.topRight, quad.bottomRight, quad.bottomLeft]
+  if (!points.every(point => Number.isFinite(point.x) && Number.isFinite(point.y))) return null
+  return {
+    topLeft: { x: quad.topLeft.x!, y: quad.topLeft.y! },
+    topRight: { x: quad.topRight.x!, y: quad.topRight.y! },
+    bottomRight: { x: quad.bottomRight.x!, y: quad.bottomRight.y! },
+    bottomLeft: { x: quad.bottomLeft.x!, y: quad.bottomLeft.y! },
+  }
+}
+
+const initialPerspectiveQuad: PerspectiveQuad | null = readInitialPerspectiveQuad()
+const perspectiveQuad = ref<PerspectiveQuad | null>(initialPerspectiveQuad)
+const perspectiveMode = ref(Boolean(initialPerspectiveQuad))
 let drag: DragState | undefined
+let perspectiveDrag: PerspectiveDragState | undefined
 let pan: { startX: number, startY: number, scrollLeft: number, scrollTop: number } | undefined
 let spacePressed = false
 let resizeObserver: ResizeObserver | undefined
@@ -94,6 +134,16 @@ const stageSurfaceStyle = computed(() => ({
   height: `${Math.max(viewportSize.value.height, displayImageSize.value.height + 56)}px`,
 }))
 
+const perspectivePolygonPoints = computed(() => {
+  if (!perspectiveQuad.value) return ''
+  return [
+    perspectiveQuad.value.topLeft,
+    perspectiveQuad.value.topRight,
+    perspectiveQuad.value.bottomRight,
+    perspectiveQuad.value.bottomLeft,
+  ].map(point => `${point.x * 100},${point.y * 100}`).join(' ')
+})
+
 function makeRegion(index: number): Region {
   const inset = Math.min(0.06 + index * 0.018, 0.2)
   return { id: crypto.randomUUID(), x: inset, y: inset, width: 1 - inset * 2, height: 1 - inset * 2 }
@@ -123,6 +173,8 @@ function snapshot(): Snapshot {
     rotation: rotation.value,
     regions: regions.value.map(region => ({ ...region })),
     activeId: activeId.value,
+    perspectiveQuad: perspectiveQuad.value ? clonePerspectiveQuad(perspectiveQuad.value) : null,
+    perspectiveMode: perspectiveMode.value,
   }
 }
 
@@ -132,6 +184,8 @@ function restore(value: Snapshot) {
   activeId.value = regions.value.some(region => region.id === value.activeId)
     ? value.activeId
     : regions.value[0]?.id ?? ''
+  perspectiveQuad.value = value.perspectiveQuad ? clonePerspectiveQuad(value.perspectiveQuad) : null
+  perspectiveMode.value = value.perspectiveMode
 }
 
 function checkpoint() {
@@ -202,6 +256,75 @@ function reset() {
   zoom.value = 1
   regions.value = makeInitialRegions()
   activeId.value = regions.value[0]!.id
+  perspectiveQuad.value = initialPerspectiveQuad ? clonePerspectiveQuad(initialPerspectiveQuad) : null
+  perspectiveMode.value = Boolean(initialPerspectiveQuad)
+}
+
+function togglePerspectiveMode() {
+  if (props.busy) return
+  checkpoint()
+  if (!perspectiveQuad.value) perspectiveQuad.value = identityPerspectiveQuad()
+  perspectiveMode.value = !perspectiveMode.value
+}
+
+function resetPerspective() {
+  if (props.busy) return
+  checkpoint()
+  perspectiveQuad.value = identityPerspectiveQuad()
+  perspectiveMode.value = true
+}
+
+function removePerspective() {
+  if (props.busy || !perspectiveQuad.value) return
+  checkpoint()
+  perspectiveQuad.value = null
+  perspectiveMode.value = false
+}
+
+function beginPerspectiveDrag(corner: PerspectiveCorner, event: PointerEvent) {
+  if (props.busy || !perspectiveQuad.value) return
+  event.preventDefault()
+  event.stopPropagation()
+  checkpoint()
+  perspectiveDrag = {
+    corner,
+    startX: event.clientX,
+    startY: event.clientY,
+    before: clonePerspectiveQuad(perspectiveQuad.value),
+  }
+  window.addEventListener('pointermove', movePerspectiveDrag)
+  window.addEventListener('pointerup', endPerspectiveDrag, { once: true })
+  window.addEventListener('pointercancel', endPerspectiveDrag, { once: true })
+}
+
+function movePerspectiveDrag(event: PointerEvent) {
+  if (!perspectiveDrag || !perspectiveQuad.value) return
+  const overlay = dialog.value?.querySelector<HTMLElement>('.crop-overlay')
+  if (!overlay?.clientWidth || !overlay.clientHeight) return
+  perspectiveQuad.value = movePerspectiveCorner(
+    perspectiveDrag.before,
+    perspectiveDrag.corner,
+    (event.clientX - perspectiveDrag.startX) / overlay.clientWidth,
+    (event.clientY - perspectiveDrag.startY) / overlay.clientHeight,
+  )
+}
+
+function endPerspectiveDrag() {
+  perspectiveDrag = undefined
+  window.removeEventListener('pointermove', movePerspectiveDrag)
+  window.removeEventListener('pointerup', endPerspectiveDrag)
+  window.removeEventListener('pointercancel', endPerspectiveDrag)
+}
+
+function nudgePerspective(event: KeyboardEvent, corner: PerspectiveCorner) {
+  if (props.busy || !perspectiveQuad.value) return
+  if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return
+  event.preventDefault()
+  checkpoint()
+  const delta = event.shiftKey ? 0.02 : 0.005
+  const dx = event.key === 'ArrowLeft' ? -delta : event.key === 'ArrowRight' ? delta : 0
+  const dy = event.key === 'ArrowUp' ? -delta : event.key === 'ArrowDown' ? delta : 0
+  perspectiveQuad.value = movePerspectiveCorner(perspectiveQuad.value, corner, dx, dy)
 }
 
 function beginPointer(
@@ -378,6 +501,7 @@ function apply() {
   if (props.busy) return
   const recipes = regions.value.map<CaptureCropRecipe>(region => ({
     rect: { x: region.x, y: region.y, width: region.width, height: region.height },
+    perspectiveQuad: perspectiveQuad.value ? clonePerspectiveQuad(perspectiveQuad.value) : null,
     rotationDegrees: rotation.value,
     outputMediaType: 'image/png',
     maxEdge: 4096,
@@ -437,6 +561,7 @@ watch(() => props.busy, (busy) => {
   if (!busy) return
   spacePressed = false
   endPointer()
+  endPerspectiveDrag()
   endPan()
 })
 
@@ -458,9 +583,11 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleDialogKeydown)
   window.removeEventListener('keyup', handleDialogKeyup)
   window.removeEventListener('pointermove', movePointer)
+  window.removeEventListener('pointermove', movePerspectiveDrag)
   resizeObserver?.disconnect()
   clearTimeout(zoomScrollTimer)
   endPointer()
+  endPerspectiveDrag()
   endPan()
 })
 </script>
@@ -526,6 +653,31 @@ onBeforeUnmount(() => {
         </button>
         <button
           type="button"
+          :class="{ active: perspectiveMode }"
+          :aria-pressed="perspectiveMode"
+          :disabled="busy"
+          @click="togglePerspectiveMode"
+        >
+          <ScanLine :size="16" />{{ perspectiveMode ? '完成四角' : perspectiveQuad ? '调整四角' : '透视矫正' }}
+        </button>
+        <button
+          v-if="perspectiveMode"
+          type="button"
+          :disabled="busy"
+          @click="resetPerspective"
+        >
+          重置四角
+        </button>
+        <button
+          v-if="perspectiveQuad && !perspectiveMode"
+          type="button"
+          :disabled="busy"
+          @click="removePerspective"
+        >
+          移除透视
+        </button>
+        <button
+          type="button"
           :disabled="busy || zoom <= 0.75"
           aria-label="缩小"
           @click="setZoom(zoom - .25)"
@@ -583,7 +735,10 @@ onBeforeUnmount(() => {
                 draggable="false"
                 @load="readImageSize"
               >
-              <div class="crop-overlay">
+              <div
+                class="crop-overlay"
+                :class="{ 'is-perspective': perspectiveMode }"
+              >
                 <div
                   v-for="(region, index) in regions"
                   :key="region.id"
@@ -607,6 +762,33 @@ onBeforeUnmount(() => {
                     :class="`handle-${handle.handle}`"
                     :aria-label="`${handle.label}（区域 ${index + 1}）`"
                     @pointerdown="beginPointer(region, 'resize', $event, handle.handle)"
+                  />
+                </div>
+                <div
+                  v-if="perspectiveMode && perspectiveQuad"
+                  class="perspective-layer"
+                  aria-label="透视四角"
+                >
+                  <svg
+                    viewBox="0 0 100 100"
+                    preserveAspectRatio="none"
+                    aria-hidden="true"
+                  >
+                    <polygon :points="perspectivePolygonPoints" />
+                  </svg>
+                  <button
+                    v-for="corner in perspectiveCorners"
+                    :key="corner.corner"
+                    type="button"
+                    class="perspective-handle"
+                    :style="{
+                      left: `${perspectiveQuad[corner.corner].x * 100}%`,
+                      top: `${perspectiveQuad[corner.corner].y * 100}%`,
+                    }"
+                    :aria-label="corner.label"
+                    :disabled="busy"
+                    @pointerdown="beginPerspectiveDrag(corner.corner, $event)"
+                    @keydown="nudgePerspective($event, corner.corner)"
                   />
                 </div>
               </div>
@@ -671,7 +853,7 @@ onBeforeUnmount(() => {
             </div>
           </TransitionGroup>
           <p class="keyboard-tip">
-            方向键移动；Shift 加速；Alt + 方向键调整宽高。按住空格拖动画布，Ctrl + 滚轮缩放。所有区域会一次性保存，失败时原图不变。
+            {{ perspectiveMode ? '拖动四个圆点贴合纸张边缘；方向键微调，Shift 加速。' : '方向键移动；Shift 加速；Alt + 方向键调整宽高。' }}按住空格拖动画布，Ctrl + 滚轮缩放。所有区域会一次性保存，失败时原图不变。
           </p>
         </aside>
       </div>
@@ -705,12 +887,14 @@ onBeforeUnmount(() => {
 .crop-dialog{display:grid;grid-template-rows:auto auto minmax(0,1fr) auto;max-width:1480px;width:100%;height:calc(100vh - 40px);margin:auto;overflow:hidden;border:1px solid rgba(232,221,199,.5);border-radius:24px;background:var(--warm-paper);box-shadow:0 28px 90px rgba(13,23,19,.35);animation:dialog-in var(--motion-page) var(--ease-standard)}
 header,footer{display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-color:rgba(33,51,45,.1)} header{border-bottom:1px solid rgba(33,51,45,.1)} header p{margin:0;color:var(--cinnabar);font-size:12px;font-weight:700;letter-spacing:.12em} header h2{margin:3px 0;font-family:serif;font-size:24px} header span{display:block;max-width:62vw;overflow:hidden;color:var(--ink-muted);font-size:12px;text-overflow:ellipsis;white-space:nowrap}.icon-button{display:grid;width:44px;height:44px;place-items:center;border:0;border-radius:50%;background:rgba(33,51,45,.08);cursor:pointer}
 .crop-toolbar{display:flex;align-items:center;gap:8px;padding:10px 22px;overflow-x:auto;border-bottom:1px solid rgba(33,51,45,.1);background:rgba(232,221,199,.28);scrollbar-width:thin}.crop-toolbar button,.secondary,.primary{display:inline-flex;flex:0 0 auto;align-items:center;gap:6px;min-height:44px;padding:0 12px;border:1px solid rgba(33,51,45,.14);border-radius:10px;background:rgba(255,253,247,.9);color:var(--ink);cursor:pointer}.crop-toolbar strong{min-width:44px;text-align:center;font-size:12px}.crop-toolbar button:disabled,footer button:disabled,.region-actions button:disabled{opacity:.45;cursor:not-allowed}
+.crop-toolbar button.active{color:var(--paper);border-color:var(--cinnabar);background:var(--cinnabar)}
 .crop-body{display:grid;grid-template-columns:minmax(0,1fr) 286px;min-height:0}.crop-stage{position:relative;overflow:auto;overscroll-behavior:contain;background:#18221f;background-image:radial-gradient(rgba(246,241,231,.08) 1px,transparent 1px);background-size:18px 18px;outline:none;scrollbar-color:rgba(246,241,231,.45) rgba(10,17,15,.5);scrollbar-width:thin}.crop-stage:focus-visible{box-shadow:inset 0 0 0 3px var(--cinnabar)}.crop-stage.is-panning{cursor:grabbing;user-select:none}.stage-surface{display:grid;min-width:100%;min-height:100%;place-items:center}.image-shell{position:relative;display:inline-grid;flex:none;transition:width var(--motion-standard) var(--ease-standard),height var(--motion-standard) var(--ease-standard);will-change:width,height}.image-shell>img{display:block;width:100%;height:100%;object-fit:fill;pointer-events:none;user-select:none;box-shadow:0 10px 38px rgba(0,0,0,.32)}.crop-overlay{position:absolute;inset:0}.crop-region{position:absolute;box-sizing:border-box;border:2px solid #f1c86b;background:rgba(241,200,107,.08);cursor:move;touch-action:none;box-shadow:0 0 0 9999px rgba(5,12,10,.1);transition:border-color var(--motion-feedback),background var(--motion-feedback),box-shadow var(--motion-feedback)}.crop-region:focus-visible{outline:3px solid #fff;outline-offset:3px}.crop-region.is-active{z-index:2;border-color:#ffdf84;background:rgba(255,223,132,.12);box-shadow:0 0 0 2px rgba(33,51,45,.72),0 8px 22px rgba(0,0,0,.22)}.crop-region>span{position:absolute;top:5px;left:5px;display:grid;width:25px;height:25px;place-items:center;border-radius:50%;background:#f6d375;color:#24312c;font-size:12px;font-weight:800}.resize-handle{position:absolute;z-index:3;display:grid;width:44px;height:44px;padding:0;place-items:center;border:0;background:transparent;touch-action:none}.resize-handle::after{width:18px;height:18px;box-sizing:border-box;border:2px solid #fff;border-radius:5px;background:var(--cinnabar);content:""}.resize-handle:focus-visible{outline:3px solid #fff;outline-offset:2px}.handle-n{top:-22px;left:calc(50% - 22px);cursor:ns-resize}.handle-ne{top:-22px;right:-22px;cursor:nesw-resize}.handle-e{top:calc(50% - 22px);right:-22px;cursor:ew-resize}.handle-se{right:-22px;bottom:-22px;cursor:nwse-resize}.handle-s{bottom:-22px;left:calc(50% - 22px);cursor:ns-resize}.handle-sw{bottom:-22px;left:-22px;cursor:nesw-resize}.handle-w{top:calc(50% - 22px);left:-22px;cursor:ew-resize}.handle-nw{top:-22px;left:-22px;cursor:nwse-resize}
+.crop-overlay.is-perspective .crop-region{opacity:.22;pointer-events:none}.perspective-layer{position:absolute;z-index:5;inset:0;pointer-events:none}.perspective-layer svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}.perspective-layer polygon{fill:rgba(185,88,63,.1);stroke:#ffdf84;stroke-width:.65;vector-effect:non-scaling-stroke}.perspective-handle{position:absolute;display:grid;width:44px;height:44px;padding:0;transform:translate(-50%,-50%);place-items:center;border:0;background:transparent;pointer-events:auto;touch-action:none;cursor:move}.perspective-handle::after{width:20px;height:20px;border:3px solid #fff;border-radius:50%;background:var(--cinnabar);box-shadow:0 2px 10px rgba(0,0,0,.45);content:""}.perspective-handle:focus-visible{outline:3px solid #fff;outline-offset:2px;border-radius:50%}
 aside{overflow:auto;padding:18px;border-left:1px solid rgba(33,51,45,.1);background:rgba(255,253,247,.7)}.aside-heading{display:flex;justify-content:space-between;margin-bottom:12px;font-size:12px}.region-list{display:grid;gap:8px}.region-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:6px;padding:6px;border:1px solid transparent;border-radius:14px;background:rgba(232,221,199,.34);transition:transform var(--motion-standard) var(--ease-standard),opacity var(--motion-standard),border-color var(--motion-feedback),background var(--motion-feedback)}.region-row.is-active{border-color:rgba(185,88,63,.55);background:rgba(185,88,63,.09)}.region-select{display:grid;grid-template-columns:52px minmax(0,1fr);align-items:center;gap:9px;min-width:0;min-height:44px;padding:0;border:0;background:transparent;color:var(--ink);text-align:left;cursor:pointer}.region-select:focus-visible,.region-actions button:focus-visible{outline:2px solid var(--cinnabar);outline-offset:2px}.region-preview{position:relative;display:block;width:52px;height:44px;overflow:hidden;border:1px solid rgba(33,51,45,.16);border-radius:9px;background-color:#fff;background-repeat:no-repeat}.region-preview b{position:absolute;top:4px;left:4px;display:grid;width:19px;height:19px;place-items:center;border-radius:6px;background:var(--deep-green);color:var(--paper);font-size:12px}.region-copy{display:grid;min-width:0}.region-copy strong,.region-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.region-copy small{color:var(--ink-muted)}.region-actions{display:grid;grid-template-columns:repeat(2,44px);gap:3px}.region-actions button{display:grid;width:44px;height:44px;padding:0;place-items:center;border:0;border-radius:9px;background:rgba(33,51,45,.07);color:var(--ink);cursor:pointer}.region-actions button:last-child{color:var(--cinnabar)}.region-list-move,.region-list-enter-active,.region-list-leave-active{transition:transform var(--motion-standard) var(--ease-standard),opacity var(--motion-standard)}.region-list-enter-from,.region-list-leave-to{opacity:0;transform:translateY(-8px)}.keyboard-tip{margin-top:18px;color:var(--ink-muted);font-size:12px;line-height:1.65}
 footer{border-top:1px solid rgba(33,51,45,.1)}footer>p{display:flex;align-items:center;gap:9px;margin:0;color:var(--ink-muted);font-size:13px}footer>div{display:flex;gap:10px}.primary{border-color:var(--deep-green);background:var(--deep-green);color:var(--paper);font-weight:700}.secondary{background:transparent}
 @keyframes fade-in{from{opacity:0}}@keyframes dialog-in{from{opacity:0;transform:translateY(12px) scale(.985)}}
 @media(max-width:900px){.crop-backdrop{padding:0}.crop-dialog{height:100vh;border-radius:0}.crop-body{grid-template-columns:1fr;grid-template-rows:minmax(0,1fr) auto}.crop-body aside{display:block;max-height:150px;padding:10px 12px;overflow:hidden;border-top:1px solid rgba(33,51,45,.1);border-left:0}.crop-body .aside-heading{margin-bottom:7px}.crop-body .region-list{display:flex;gap:7px;overflow-x:auto;padding-bottom:4px;scrollbar-width:thin}.crop-body .region-row{flex:0 0 238px}.crop-body .keyboard-tip{display:none}.crop-toolbar{padding-inline:12px}footer{gap:10px;padding:12px}footer>p{display:none}}
 @media(max-width:520px){header h2{font-size:19px}header{padding:12px 14px}.crop-toolbar button{min-height:44px}.crop-body aside{max-height:150px}.crop-dialog footer>div{display:grid;width:100%;grid-template-columns:1fr 1fr}.crop-dialog footer button{justify-content:center;padding-inline:8px}}
-@media(forced-colors:active){.crop-region,.crop-region.is-active{border-color:CanvasText;forced-color-adjust:auto}.resize-handle::after{border-color:CanvasText;forced-color-adjust:auto}.crop-region.is-active{outline:3px solid Highlight}.region-row.is-active{border-color:Highlight}}
+@media(forced-colors:active){.crop-region,.crop-region.is-active{border-color:CanvasText;forced-color-adjust:auto}.resize-handle::after{border-color:CanvasText;forced-color-adjust:auto}.perspective-handle::after{border-color:CanvasText;forced-color-adjust:auto}.crop-region.is-active{outline:3px solid Highlight}.region-row.is-active{border-color:Highlight}}
 @media(prefers-reduced-motion:reduce){.crop-backdrop,.crop-dialog{animation:none}.image-shell,.crop-region,.region-row,.region-list-move,.region-list-enter-active,.region-list-leave-active{transition:none}}
 </style>

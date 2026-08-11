@@ -224,6 +224,7 @@ export type CaptureCropApplyReport = {
 
 export type CaptureCropRecipe = {
 	rect: NormalizedCropRect,
+	perspectiveQuad?: PerspectiveQuad | null,
 	rotationDegrees: number,
 	outputMediaType: string,
 	maxEdge: number,
@@ -651,6 +652,11 @@ export type NormalizedCropRect = {
 	height: number | null,
 };
 
+export type NormalizedPoint = {
+	x: number | null,
+	y: number | null,
+};
+
 export type OcrCapabilityStatus = {
 	assessment: OcrHardwareAssessment,
 	components: OcrComponentStatus[],
@@ -695,6 +701,13 @@ export type OcrRecognitionFeatureStatus = {
 	state: OcrRecognitionFeatureState,
 	requiredComponentId: OcrComponentId,
 	detail: string,
+};
+
+export type PerspectiveQuad = {
+	topLeft: NormalizedPoint,
+	topRight: NormalizedPoint,
+	bottomRight: NormalizedPoint,
+	bottomLeft: NormalizedPoint,
 };
 
 export type ProblemAnswerState = "any" | "has_answer" | "missing_answer";

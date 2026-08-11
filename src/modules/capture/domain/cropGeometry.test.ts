@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   fitImageWithin,
+  identityPerspectiveQuad,
+  isValidPerspectiveQuad,
+  movePerspectiveCorner,
   moveCropRegion,
   resizeCropRegion,
   type CropRegion,
@@ -45,5 +48,25 @@ describe('cropGeometry', () => {
     expect(fitImageWithin(2000, 4000, 900, 700)).toEqual({ width: 350, height: 700 })
     expect(fitImageWithin(3000, 2000, 2000, 2000, 1200)).toEqual({ width: 1200, height: 800 })
     expect(fitImageWithin(0, 2000, 900, 700)).toEqual({ width: 1, height: 1 })
+  })
+
+  it('moves perspective corners inside a convex clockwise quadrilateral', () => {
+    const identity = identityPerspectiveQuad()
+    expect(movePerspectiveCorner(identity, 'topLeft', 0.12, 0.08)).toEqual({
+      ...identity,
+      topLeft: { x: 0.12, y: 0.08 },
+    })
+    expect(movePerspectiveCorner(identity, 'topRight', 2, -2).topRight).toEqual({ x: 1, y: 0 })
+  })
+
+  it('rejects crossed and undersized perspective quadrilaterals', () => {
+    expect(isValidPerspectiveQuad({
+      topLeft: { x: 0.1, y: 0.1 }, topRight: { x: 0.9, y: 0.9 },
+      bottomRight: { x: 0.9, y: 0.1 }, bottomLeft: { x: 0.1, y: 0.9 },
+    })).toBe(false)
+    expect(isValidPerspectiveQuad({
+      topLeft: { x: 0.1, y: 0.1 }, topRight: { x: 0.15, y: 0.1 },
+      bottomRight: { x: 0.15, y: 0.15 }, bottomLeft: { x: 0.1, y: 0.15 },
+    })).toBe(false)
   })
 })

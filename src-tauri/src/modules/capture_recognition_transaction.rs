@@ -219,6 +219,7 @@ pub fn apply_capture_recognition(
                 &source_image,
                 &CaptureCropRecipe {
                     rect: region.rect.clone(),
+                    perspective_quad: None,
                     rotation_degrees: 0,
                     output_media_type: output_media_type.to_owned(),
                     max_edge: 4096,

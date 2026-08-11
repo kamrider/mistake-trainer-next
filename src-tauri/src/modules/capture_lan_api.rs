@@ -435,6 +435,7 @@ async fn crop_item(
                 item_id: item_id.clone(),
                 recipes: vec![CaptureCropRecipe {
                     rect: input.rect,
+                    perspective_quad: None,
                     rotation_degrees: input.rotation_degrees,
                     output_media_type: "image/png".to_owned(),
                     max_edge: 4_096,
