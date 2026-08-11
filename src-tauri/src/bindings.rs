@@ -75,6 +75,7 @@ pub fn builder() -> Builder<tauri::Wry> {
         commands::capture_inbox::capture_import_select,
         commands::capture_inbox::capture_import_bytes,
         commands::capture_inbox::capture_item_preview,
+        commands::capture_inbox::capture_quality_check,
         commands::capture_inbox::capture_crop_source_preview,
         commands::capture_inbox::capture_crop_apply,
         commands::capture_inbox::capture_crop_revert,

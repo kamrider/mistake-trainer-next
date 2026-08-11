@@ -10,6 +10,7 @@ import type {
   CaptureBatchDetail, CaptureBatchSummary, CaptureDraftSummary, CaptureItemSummary,
   CaptureLanAddress, CaptureLanPreflight, CaptureLanSession, CaptureLayoutMode,
   CaptureRecognitionJob, CaptureRecognitionOperationSummary, OcrRecognitionFeatureStatus,
+  CaptureQualityReport,
 } from '../../../shared/api/bindings'
 import CaptureRecognitionEntry from '../../ocr/components/CaptureRecognitionEntry.vue'
 import CaptureRecognitionReview from '../../ocr/components/CaptureRecognitionReview.vue'
@@ -19,6 +20,7 @@ import CaptureLanDialog from './CaptureLanDialog.vue'
 import CaptureLayoutTemplatePanel from './CaptureLayoutTemplatePanel.vue'
 import CaptureThumbnail from './CaptureThumbnail.vue'
 import CaptureDraftCard from './CaptureDraftCard.vue'
+import CaptureQualityPanel from './CaptureQualityPanel.vue'
 import { useCapturePointerDrag, type CapturePointerDrop } from '../composables/useCapturePointerDrag'
 import { useCaptureFeedback, type CaptureFeedbackRole } from '../composables/useCaptureFeedback'
 import type { CaptureFileImportProgress } from '../composables/useCaptureFileImport'
@@ -36,7 +38,7 @@ type MoveTarget = {
   targetPosition: number
 }
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   batches: CaptureBatchSummary[]
   detail: CaptureBatchDetail | undefined
   previews: Record<string, string>
@@ -59,7 +61,16 @@ const props = defineProps<{
   recognitionNotice?: string | undefined
   recognitionBusy?: boolean | undefined
   recognitionOperationBusy?: boolean | undefined
-}>()
+  qualityReports?: Record<string, CaptureQualityReport>
+  qualityCheckingItemId?: string
+  qualityErrors?: Record<string, string>
+  qualityDismissedItemIds?: string[]
+}>(), {
+  qualityReports: () => ({}),
+  qualityCheckingItemId: '',
+  qualityErrors: () => ({}),
+  qualityDismissedItemIds: () => [],
+})
 
 const emit = defineEmits<{
   createBatch: [subject: string]
@@ -106,6 +117,8 @@ const emit = defineEmits<{
   recognitionEdit: [suggestionId: string]
   recognitionApply: [suggestionIds: string[]]
   recognitionRevert: [operationId: string]
+  qualityCheck: [itemId: string]
+  qualityDismiss: [itemId: string]
 }>()
 
 const newSubject = ref('')
@@ -405,6 +418,7 @@ function selectMaterial(item: CaptureItemSummary) {
   if (pointerDrag.consumeSuppressedClick() || props.busy) return
   selectedMaterialId.value = item.id
   emit('preview', item.id)
+  emit('qualityCheck', item.id)
 }
 
 function setSelectedMaterialRole(role: CaptureFeedbackRole) {
@@ -999,6 +1013,7 @@ function statusLabel(batch: CaptureBatchSummary) {
                   :removable="!item.cropDerivationId"
                   :disabled="busy"
                   :cropable="detail.batch.state === 'organizing'"
+                  :quality-issue="qualityReports[item.id]?.issues[0]"
                   @preview="emit('preview', $event)"
                   @crop="emit('crop', $event)"
                   @revert-crop="emit('revertCrop', $event)"
@@ -1018,6 +1033,16 @@ function statusLabel(batch: CaptureBatchSummary) {
               aria-label="所选素材操作"
             >
               <p><strong>{{ selectedMaterial.sourceName }}</strong><span>当前标记：{{ selectedMaterial.stagedRole === 'answer' ? '答案' : '题面' }}</span></p>
+              <CaptureQualityPanel
+                v-if="!qualityDismissedItemIds.includes(selectedMaterial.id)"
+                :report="qualityReports[selectedMaterial.id]"
+                :busy="qualityCheckingItemId === selectedMaterial.id"
+                :error-message="qualityErrors[selectedMaterial.id]"
+                @dismiss="emit('qualityDismiss', selectedMaterial.id)"
+                @retry="emit('qualityCheck', selectedMaterial.id)"
+                @reselect="emit('importSelect')"
+                @crop="emit('crop', selectedMaterial.id)"
+              />
               <div class="material-role-actions">
                 <button
                   type="button"

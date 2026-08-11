@@ -72,6 +72,7 @@ export const commands = {
 	captureImportSelect: (batchId: string) => __TAURI_INVOKE<AppResult<CaptureImportReport>>("capture_import_select", { batchId }),
 	captureImportBytes: (input: CaptureImportBytesInput) => __TAURI_INVOKE<AppResult<CaptureItemSummary>>("capture_import_bytes", { input }),
 	captureItemPreview: (batchId: string, itemId: string) => __TAURI_INVOKE<AppResult<CaptureItemPreview>>("capture_item_preview", { batchId, itemId }),
+	captureQualityCheck: (batchId: string, itemId: string) => __TAURI_INVOKE<AppResult<CaptureQualityReport>>("capture_quality_check", { batchId, itemId }),
 	captureCropSourcePreview: (batchId: string, itemId: string) => __TAURI_INVOKE<AppResult<CaptureItemPreview>>("capture_crop_source_preview", { batchId, itemId }),
 	captureCropApply: (input: CaptureCropApplyInput) => __TAURI_INVOKE<AppResult<CaptureCropApplyReport>>("capture_crop_apply", { input }),
 	captureCropRevert: (input: CaptureCropRevertInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_crop_revert", { input }),
@@ -361,6 +362,19 @@ export type CapturePairSuggestionsApplyInput = {
 	batchId: string,
 	expectedRevision: number,
 	pairIds: string[],
+};
+
+export type CaptureQualityIssueCode = "blurry" | "too_dark" | "too_bright" | "low_contrast" | "possible_edge_cut" | "skewed";
+
+export type CaptureQualityReport = {
+	itemId: string,
+	issues: CaptureQualityIssueCode[],
+	sharpnessScore: number | null,
+	darkFraction: number | null,
+	brightFraction: number | null,
+	contrastScore: number | null,
+	suggestedRotationDegrees: number | null,
+	suggestedCrop: NormalizedCropRect | null,
 };
 
 export type CaptureRecognitionApplyInput = {

@@ -5,6 +5,7 @@ pub(crate) mod capture_asset_repository;
 pub mod capture_firewall;
 pub mod capture_inbox;
 pub mod capture_lan;
+pub mod capture_quality;
 pub mod capture_recognition;
 pub mod diagnostics;
 pub mod exports;

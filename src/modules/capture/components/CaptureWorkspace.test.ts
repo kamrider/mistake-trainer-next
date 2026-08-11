@@ -291,6 +291,7 @@ describe('CaptureWorkspace Next', () => {
     const loose = screen.getByLabelText('待配对图片：待配对超长文件名图片.png')
     await user.click(within(loose).getByLabelText('待配对超长文件名图片.png'))
     expect(view.emitted('stageItemRole')).toBeUndefined()
+    expect(view.emitted('qualityCheck')).toEqual([['loose']])
     expect(within(loose).getByText(/已选择/)).toBeVisible()
 
     const questionRole = screen.getByRole('button', { name: '设为题面' })
@@ -300,6 +301,29 @@ describe('CaptureWorkspace Next', () => {
     await user.click(answerRole)
     expect(view.emitted('stageItemRole')).toEqual([['loose', 'answer']])
     expect(screen.queryByText(/双击/)).not.toBeInTheDocument()
+  })
+
+  it('shows a non-blocking quality warning for the selected material', async () => {
+    const user = userEvent.setup()
+    const view = renderWorkspace(organizingDetail())
+    const loose = screen.getByLabelText('待配对图片：待配对超长文件名图片.png')
+    await user.click(within(loose).getByLabelText('待配对超长文件名图片.png'))
+    await view.rerender({
+      qualityReports: {
+        loose: {
+          itemId: 'loose', issues: ['possible_edge_cut'], sharpnessScore: 0.4,
+          darkFraction: 0, brightFraction: 0.4, contrastScore: 0.7,
+          suggestedRotationDegrees: 0, suggestedCrop: null,
+        },
+      },
+    })
+
+    expect(screen.getByText(/内容贴近图片边缘/)).toBeVisible()
+    expect(within(loose).getByText('需检查')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '继续使用' }))
+    expect(view.emitted('qualityDismiss')).toEqual([['loose']])
+    await user.click(screen.getByRole('button', { name: '打开裁剪修正' }))
+    expect(view.emitted('crop')).toContainEqual(['loose'])
   })
 
   it('keeps unfinished draft text through a same-card refresh and saves with the latest subject', async () => {
