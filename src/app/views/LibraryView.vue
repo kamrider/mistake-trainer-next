@@ -3,10 +3,15 @@ import { isTauri } from '@tauri-apps/api/core'
 import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import LibraryWorkspace from '../../modules/library/components/LibraryWorkspace.vue'
+import LibraryBulkMetadataDialog from '../../modules/library/components/LibraryBulkMetadataDialog.vue'
 import ProblemDetailDrawer from '../../modules/library/components/ProblemDetailDrawer.vue'
 import { useLibraryBatchStatus } from '../../modules/library/composables/useLibraryBatchStatus'
 import { useLibraryProblemActions } from '../../modules/library/composables/useLibraryProblemActions'
 import { useLibraryReviewLaunch } from '../../modules/library/composables/useLibraryReviewLaunch'
+import {
+  EMPTY_LIBRARY_FILTERS,
+  type LibraryAdvancedFilters,
+} from '../../modules/library/domain/libraryFilters'
 import { commands, type ProblemDetail, type ProblemStatusFilter, type ProblemSummary } from '../../shared/api/bindings'
 import { normalizeAppResult } from '../../shared/api/normalize-result'
 import { useDurableActionGuard } from '../composables/useDurableActionGuard'
@@ -27,6 +32,15 @@ const loading = ref(true)
 const errorMessage = ref('')
 const startingExperience = ref<'review' | 'exam' | null>(null)
 const changingBatchStatus = ref<ProblemStatusFilter | null>(null)
+const bulkMetadataOpen = ref(false)
+const bulkMetadataBusy = ref(false)
+const advancedFilters = ref<LibraryAdvancedFilters>({
+  ...EMPTY_LIBRARY_FILTERS,
+  subjects: [],
+  tags: [],
+})
+const knownSubjects = ref<string[]>([])
+const knownTags = ref<string[]>([])
 let refreshSequence = 0
 let searchTimer: number | undefined
 let detailSequence = 0
@@ -37,7 +51,7 @@ const detail = ref<ProblemDetail>()
 const detailError = ref('')
 const detailSaving = ref(false)
 const libraryOperationBusy = computed(() =>
-  Boolean(startingExperience.value || changingBatchStatus.value))
+  Boolean(startingExperience.value || changingBatchStatus.value || bulkMetadataBusy.value))
 const durableTransitionBlockedMessage = '题库操作正在进行，请等待完成后再离开。'
 const { attemptLeave: attemptDurableTransition } = useDurableActionGuard({
   busy: () => libraryOperationBusy.value,
@@ -100,10 +114,10 @@ async function refresh() {
       commands.problemList({
         status: requestedStatus,
         search: requestedSearch || null,
-        subjects: [],
-        tags: [],
-        reviewState: 'any',
-        answerState: 'any',
+        subjects: advancedFilters.value.subjects,
+        tags: advancedFilters.value.tags,
+        reviewState: advancedFilters.value.reviewState,
+        answerState: advancedFilters.value.answerState,
       }),
     ])
     if (sequence !== refreshSequence) return
@@ -112,6 +126,14 @@ async function refresh() {
     if (context.ok) profileName.value = context.data.profileName
     if (list.ok) {
       problems.value = list.data
+      knownSubjects.value = [...new Set([
+        ...knownSubjects.value,
+        ...list.data.map(problem => problem.subject).filter(Boolean),
+      ])].sort((left, right) => left.localeCompare(right, 'zh-CN'))
+      knownTags.value = [...new Set([
+        ...knownTags.value,
+        ...list.data.flatMap(problem => problem.tags ?? []),
+      ])].sort((left, right) => left.localeCompare(right, 'zh-CN'))
       const visible = new Set(list.data.map(problem => problem.id))
       selectedProblemIds.value = selectedProblemIds.value.filter(id => visible.has(id))
     }
@@ -132,6 +154,48 @@ function changeSearch(nextSearch: string) {
   selectedProblemIds.value = []
   if (searchTimer !== undefined) window.clearTimeout(searchTimer)
   searchTimer = window.setTimeout(() => void refresh(), 180)
+}
+
+async function changeAdvancedFilters(filters: LibraryAdvancedFilters) {
+  advancedFilters.value = {
+    ...filters,
+    subjects: [...filters.subjects],
+    tags: [...filters.tags],
+  }
+  selectedProblemIds.value = []
+  await refresh()
+}
+
+async function submitBulkMetadata(change: {
+  subject: string | null
+  addTags: string[]
+  removeTags: string[]
+}) {
+  if (bulkMetadataBusy.value || selectedProblemIds.value.length === 0) return
+  bulkMetadataBusy.value = true
+  errorMessage.value = ''
+  try {
+    const result = normalizeAppResult(await commands.problemBulkMetadata({
+      problemIds: [...selectedProblemIds.value],
+      subject: change.subject,
+      addTags: change.addTags,
+      removeTags: change.removeTags,
+    }))
+    if (!result.ok) {
+      errorMessage.value = result.error.userMessage
+      return
+    }
+    bulkMetadataOpen.value = false
+    selectedProblemIds.value = []
+    syncController?.scheduleMutation()
+    await refresh()
+  }
+  catch {
+    errorMessage.value = '批量修改未完成，请稍后重试。'
+  }
+  finally {
+    bulkMetadataBusy.value = false
+  }
 }
 
 async function openDetail(problemId: string) {
@@ -283,10 +347,15 @@ onBeforeUnmount(() => {
     :selected-problem-ids="selectedProblemIds"
     :starting-experience="startingExperience"
     :changing-batch-status="changingBatchStatus"
+    :bulk-metadata-busy="bulkMetadataBusy"
+    :advanced-filters="advancedFilters"
+    :subject-options="knownSubjects"
+    :tag-options="knownTags"
     :error-message="errorMessage"
     @capture="router.push({ name: 'inbox' })"
     @status-change="changeStatus"
     @search-change="changeSearch"
+    @filters-change="changeAdvancedFilters"
     @open-detail="openDetail"
     @toggle-selection="toggleSelection"
     @batch-status="changeBatchStatus"
@@ -294,6 +363,14 @@ onBeforeUnmount(() => {
     @start-exam="startReview(selectedProblemIds, false, 'exam')"
     @select-all="selectAllVisible"
     @clear-selection="clearSelection"
+    @bulk-metadata="bulkMetadataOpen = true"
+  />
+  <LibraryBulkMetadataDialog
+    :open="bulkMetadataOpen"
+    :selected-count="selectedProblemIds.length"
+    :busy="bulkMetadataBusy"
+    @close="bulkMetadataOpen = false"
+    @submit="submitBulkMetadata"
   />
   <ProblemDetailDrawer
     v-if="detailOpen"

@@ -111,6 +111,9 @@ describe('LibraryWorkspace', () => {
 
     expect(screen.getByRole('button', { name: '开始训练 2 道题' })).toBeVisible()
     expect(screen.getByRole('button', { name: '模拟考试 2 道题' })).toBeVisible()
+    expect(screen.getByRole('button', { name: '批量修改' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '批量修改' }))
+    expect(view.emitted('bulkMetadata')).toHaveLength(1)
     await user.click(screen.getByRole('button', { name: '开始训练 2 道题' }))
     expect(view.emitted('trainSelection')).toHaveLength(1)
     await user.click(screen.getByRole('button', { name: '模拟考试 2 道题' }))

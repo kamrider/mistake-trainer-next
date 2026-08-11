@@ -160,23 +160,23 @@
 - Produces: `ProblemBulkMetadataInput { problem_ids, subject, add_tags, remove_tags }` and `ProblemBulkMetadataReport { updated_count }`.
 - Produces command: `problem_bulk_metadata(input) -> AppResult<ProblemBulkMetadataReport>`.
 
-- [ ] **Step 1: Write failing transaction tests**
+- [x] **Step 1: Write failing transaction tests**
 
   Assert 1–100 unique active problem IDs update atomically; optional subject replacement and tag add/remove preserve normalization; revisions increment exactly once; one canonical outbox operation is written per changed problem; foreign, archived, duplicate, stale, or invalid-tag input leaves every row and outbox count unchanged.
 
-- [ ] **Step 2: Implement the Rust transaction**
+- [x] **Step 2: Implement the Rust transaction**
 
   Load and validate the entire selection before the first update. Apply subject and tag changes in caller order, skip byte-for-byte unchanged rows, and enqueue canonical upserts inside the same transaction. Return the number of rows actually changed.
 
-- [ ] **Step 3: Write failing filter and dialog tests**
+- [x] **Step 3: Write failing filter and dialog tests**
 
   Assert filters are keyboard accessible, show removable active-filter chips, preserve state after a detail drawer closes, debounce text search only, and clear explicitly. Assert the bulk dialog previews the selected count, requires at least one change, and emits normalized metadata once.
 
-- [ ] **Step 4: Implement the Vue workflow**
+- [x] **Step 4: Implement the Vue workflow**
 
   Keep filter state in `LibraryView`; refetch through the typed query after successful bulk edits. Extend the existing sticky selection bar with `批量修改` and do not disturb train/exam/archive/trash actions.
 
-- [ ] **Step 5: Run focused gates**
+- [x] **Step 5: Run focused gates**
 
   Run: `.\scripts\cargo-msvc.cmd test --manifest-path src-tauri\Cargo.toml --test problem_bulk_metadata --test problem_query`, then `pnpm test -- src/modules/library/components/LibraryFilterPanel.test.ts src/modules/library/components/LibraryBulkMetadataDialog.test.ts src/modules/library/components/LibraryWorkspace.test.ts src/app/views/LibraryView.test.ts`.
 

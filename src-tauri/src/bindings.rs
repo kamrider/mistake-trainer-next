@@ -32,6 +32,7 @@ pub fn builder() -> Builder<tauri::Wry> {
         commands::profiles::profile_delete,
         commands::library::library_context,
         commands::library::problem_detail,
+        commands::library::problem_bulk_metadata,
         commands::library::problem_change_status,
         commands::library::problem_list,
         commands::library::problem_update,

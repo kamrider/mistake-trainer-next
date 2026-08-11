@@ -271,6 +271,10 @@ pub enum ProblemUseCaseError {
     InvalidTimeLimit,
     #[error("at least one problem must be selected")]
     EmptySelection,
+    #[error("problem selection must contain between 1 and 100 unique identifiers")]
+    InvalidSelection,
+    #[error("at least one metadata change must be provided")]
+    EmptyChange,
     #[error("asset encryption failed")]
     Crypto(#[from] AssetCryptoError),
     #[error("asset file operation failed")]

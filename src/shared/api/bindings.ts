@@ -29,6 +29,7 @@ export const commands = {
 	profileDelete: (input: ProfileDeleteInput) => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_delete", { input }),
 	libraryContext: () => __TAURI_INVOKE<AppResult<LibraryContext>>("library_context"),
 	problemDetail: (problemId: string) => __TAURI_INVOKE<AppResult<ProblemDetail>>("problem_detail", { problemId }),
+	problemBulkMetadata: (input: ProblemBulkMetadataInput) => __TAURI_INVOKE<AppResult<ProblemBulkMetadataReport>>("problem_bulk_metadata", { input }),
 	problemChangeStatus: (input: ProblemStatusInput) => __TAURI_INVOKE<AppResult<number>>("problem_change_status", { input }),
 	problemList: (input: ProblemListInput) => __TAURI_INVOKE<AppResult<ProblemSummary[]>>("problem_list", { input }),
 	problemUpdate: (input: ProblemUpdateInput) => __TAURI_INVOKE<AppResult<boolean>>("problem_update", { input }),
@@ -683,6 +684,17 @@ export type ProblemAssetPreview = {
 	position: number,
 	mediaType: string,
 	dataUrl: string,
+};
+
+export type ProblemBulkMetadataInput = {
+	problemIds: string[],
+	subject: string | null,
+	addTags: string[],
+	removeTags: string[],
+};
+
+export type ProblemBulkMetadataReport = {
+	updatedCount: number,
 };
 
 export type ProblemDetail = {

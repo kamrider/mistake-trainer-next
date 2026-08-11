@@ -12,6 +12,7 @@ pub mod insights;
 pub mod legacy;
 pub mod ocr_capability;
 pub mod preferences;
+pub mod problem_bulk_metadata;
 pub mod problems;
 pub mod product_check;
 pub mod profiles;

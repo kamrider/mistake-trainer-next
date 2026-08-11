@@ -34,6 +34,8 @@ describe('generated Tauri bindings', () => {
     expect(bindings).toContain('reviewManualStart')
     expect(bindings).toContain('ReviewManualStartInput')
     expect(bindings).toContain('problemList: (input: ProblemListInput) =>')
+    expect(bindings).toContain('problemBulkMetadata: (input: ProblemBulkMetadataInput) =>')
+    expect(bindings).toContain('ProblemBulkMetadataReport')
     expect(bindings).toContain('export type ProblemListInput = {')
     expect(bindings).toContain('reviewState: ProblemReviewState')
     expect(bindings).toContain('answerState: ProblemAnswerState')
