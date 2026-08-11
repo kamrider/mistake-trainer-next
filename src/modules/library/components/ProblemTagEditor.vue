@@ -1,12 +1,18 @@
 <script setup lang="ts">
 import { X } from '@lucide/vue'
 import { ref } from 'vue'
+import {
+  toggleMistakeReason,
+  type MistakeReasonTag,
+} from '../domain/mistakeReasons'
 
 const props = withDefaults(defineProps<{
   modelValue: string[]
   disabled?: boolean
+  suggestions?: readonly MistakeReasonTag[]
 }>(), {
   disabled: false,
+  suggestions: () => [],
 })
 
 const emit = defineEmits<{
@@ -45,6 +51,16 @@ function removeTag(index: number) {
   errorMessage.value = ''
 }
 
+function toggleSuggestion(suggestion: MistakeReasonTag) {
+  const active = props.modelValue.includes(suggestion.tag)
+  if (!active && props.modelValue.length >= 20) {
+    errorMessage.value = '每道题最多添加 20 个标签。'
+    return
+  }
+  emit('update:modelValue', toggleMistakeReason(props.modelValue, suggestion.tag))
+  errorMessage.value = ''
+}
+
 function handleKeydown(event: KeyboardEvent) {
   if (event.key === 'Enter' || event.key === ',' || event.key === '，') {
     event.preventDefault()
@@ -60,6 +76,24 @@ function handleKeydown(event: KeyboardEvent) {
 
 <template>
   <div class="tag-editor">
+    <div
+      v-if="suggestions.length"
+      class="reason-suggestions"
+      role="group"
+      aria-label="常见错因（可多选）"
+    >
+      <button
+        v-for="suggestion in suggestions"
+        :key="suggestion.tag"
+        type="button"
+        :aria-pressed="modelValue.includes(suggestion.tag)"
+        :disabled="disabled"
+        @click="toggleSuggestion(suggestion)"
+      >
+        <strong>{{ suggestion.label }}</strong>
+        <span>{{ suggestion.description }}</span>
+      </button>
+    </div>
     <TransitionGroup
       name="tag-chip"
       tag="div"
@@ -105,6 +139,13 @@ function handleKeydown(event: KeyboardEvent) {
 
 <style scoped>
 .tag-editor { display: grid; gap: 8px; }
+.reason-suggestions { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 7px; margin-bottom: 2px; }
+.reason-suggestions button { display: grid; min-height: 52px; padding: 8px 10px; color: var(--ink-muted); border: 1px solid rgba(33,51,45,.14); border-radius: 10px; background: rgba(255,253,247,.68); text-align: left; cursor: pointer; transition: border-color var(--motion-feedback) var(--ease-standard), background var(--motion-feedback) var(--ease-standard), transform var(--motion-feedback) var(--ease-standard); }
+.reason-suggestions button:hover:not(:disabled) { border-color: rgba(185,88,63,.38); transform: translateY(-1px); }
+.reason-suggestions button[aria-pressed="true"] { color: var(--green-deep); border-color: rgba(33,51,45,.45); background: var(--green-soft); box-shadow: inset 3px 0 0 var(--cinnabar); }
+.reason-suggestions button:disabled { cursor: not-allowed; opacity: .48; }
+.reason-suggestions strong { font-size: 12px; }
+.reason-suggestions span { margin-top: 3px; font-size: 12px; font-weight: 500; line-height: 1.4; }
 .tag-editor__chips { display: flex; flex-wrap: wrap; gap: 7px; min-height: 0; }
 .tag-chip { display: inline-flex; gap: 5px; align-items: center; max-width: 100%; min-height: 44px; padding: 0 2px 0 12px; overflow-wrap: anywhere; color: var(--green-deep); border: 1px solid rgba(33,51,45,.14); border-radius: 999px; background: rgba(255,253,247,.82); font-size: 12px; font-weight: 720; }
 .tag-chip button { display: grid; width: 44px; height: 44px; padding: 0; place-items: center; color: inherit; border: 0; border-radius: 50%; background: rgba(33,51,45,.07); cursor: pointer; transition: transform var(--motion-feedback) var(--ease-standard), background var(--motion-feedback) var(--ease-standard); }
@@ -115,5 +156,6 @@ function handleKeydown(event: KeyboardEvent) {
 .tag-editor__error { margin: 0; color: #8d3f2f; font-size: 12px; font-weight: 600; letter-spacing: 0; }
 .tag-chip-enter-active, .tag-chip-leave-active { transition: opacity var(--motion-standard) var(--ease-standard), transform var(--motion-standard) var(--ease-standard); }
 .tag-chip-enter-from, .tag-chip-leave-to { opacity: 0; transform: translateY(4px) scale(.92); }
-@media (prefers-reduced-motion: reduce) { .tag-chip-enter-active, .tag-chip-leave-active, .tag-chip button { transition: none; } }
+@media (max-width: 560px) { .reason-suggestions { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { .tag-chip-enter-active, .tag-chip-leave-active, .tag-chip button, .reason-suggestions button { transition: none; } .reason-suggestions button:hover:not(:disabled) { transform: none; } }
 </style>

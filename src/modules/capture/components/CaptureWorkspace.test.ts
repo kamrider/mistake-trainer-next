@@ -334,6 +334,27 @@ describe('CaptureWorkspace Next', () => {
     ])
   })
 
+  it('quickly classifies the selected draft with a canonical mistake reason', async () => {
+    const user = userEvent.setup()
+    const detail = organizingDetail()
+    detail.drafts[0] = { ...detail.drafts[0]!, tags: ['函数'] }
+    const view = renderWorkspace(detail)
+
+    const inspector = screen.getByLabelText('当前题卡信息')
+    const reasons = within(inspector).getByRole('group', { name: '常见错因（可多选）' })
+    const calculation = within(reasons).getByRole('button', { name: /计算失误/ })
+    expect(calculation).toHaveAttribute('aria-pressed', 'false')
+
+    await user.click(calculation)
+
+    expect(view.emitted('updateDraft')?.at(-1)).toEqual([
+      detail.drafts[0],
+      '数学',
+      ['函数', '错因·计算失误'],
+      '',
+    ])
+  })
+
   it('shows matched question and answer crops inside the material library and applies them in one click', async () => {
     const user = userEvent.setup()
     const detail = organizingDetail()

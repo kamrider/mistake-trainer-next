@@ -8,6 +8,7 @@ import { acquireDialogDocumentBoundary } from '../../../app/dialog-document-boun
 import { getDialogFocusableElements, trapDialogFocus } from '../../../app/dialog-focus'
 import type { ProblemDetail } from '../../../shared/api/bindings'
 import { useProblemDetailEditor } from '../composables/useProblemDetailEditor'
+import { MISTAKE_REASON_TAGS } from '../domain/mistakeReasons'
 import ProblemTagEditor from './ProblemTagEditor.vue'
 
 const props = defineProps<{
@@ -226,7 +227,10 @@ onBeforeUnmount(() => {
           /></label>
           <div class="edit-tags-field">
             <span>标签</span>
-            <ProblemTagEditor v-model="editTags" />
+            <ProblemTagEditor
+              v-model="editTags"
+              :suggestions="MISTAKE_REASON_TAGS"
+            />
           </div>
           <label>答题时限（秒）<input
             v-model="editTimeLimit"
