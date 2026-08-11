@@ -131,6 +131,30 @@ conflict. Deletes create tombstones retained for 30 days.
   is selected. The mobile page has no CDN or third-party requests. The decoder is a
   codec exception to the Vue feature-chunk budget and does not enter the desktop's
   initial JavaScript bundle.
+- Capture quality analysis is an explicit, item-scoped local command. Rust verifies batch/item
+  ownership, decrypts the active asset only for the bounded command, downsizes analysis input to
+  at most 1,024 px, and returns scores and advisory issue codes without persistence or outbox work.
+- Quality suggestions never block capture commit and never auto-apply. A suggested crop may seed
+  the existing editor as a reversible recipe; a small-angle skew is shown as guidance to use the
+  explicit perspective tool because the persisted rotation contract remains quarter-turn only.
+- Perspective correction accepts four normalized points only after convexity, clockwise order,
+  minimum area, range, and output-size validation. Rust rectifies with bounded inverse bilinear
+  sampling before the normal crop/rotation/encode pipeline. The derivation ledger remains the undo
+  boundary and encrypted source assets stay immutable.
+
+## Library retrieval and metadata boundary
+
+- The canonical quick-reason catalog is represented by ordinary normalized tags prefixed with
+  `错因·`; the six supplied chips reuse the same 20-tag, 30-character persistence contract as
+  free-form tags and do not create a second classification store.
+- Library reads accept one typed query. Search is limited to 100 characters and treats SQLite
+  wildcard characters literally; subject/tag arrays contain at most 20 values of at most 30
+  characters. Rust builds fixed predicates, applies OR within a filter group and AND across groups,
+  and always injects runtime account/profile identity.
+- Bulk metadata edits accept 1 through 100 unique active problem IDs. Rust validates the complete
+  selection before changing a row, then applies normalized subject/tag changes, revision increments,
+  and canonical outbox upserts atomically. Foreign, duplicate, archived, or invalid input changes
+  neither problems nor outbox state.
 
 ## Dashboard read boundary
 
@@ -142,6 +166,12 @@ conflict. Deletes create tombstones retained for 30 days.
 - Calendar-day metrics use the Windows browser's current UTC offset. The offset is
   range-checked in Rust, and a streak may begin today or yesterday so a user does not
   lose it before completing the current day's review.
+- Learning reports expose weak areas only after at least two matching review events. They combine
+  subjects with canonical `错因·` tags, use 30-day lapses, cap the ordered result at five, and return
+  an empty list with sparse-evidence guidance rather than manufacturing a conclusion.
+- The due forecast contains today plus the next six local calendar dates. Rust range-checks the
+  supplied UTC offset, assigns future due work to local-day buckets, and reports already-overdue
+  work separately on today.
 
 ## Review session boundary
 
@@ -154,6 +184,10 @@ conflict. Deletes create tombstones retained for 30 days.
 - A manual deck contains 1 through 100 unique active problems. Rust validates account,
   profile, status, uniqueness, and caller order before replacing the current session.
   Any invalid selection leaves the previous session byte-for-byte unchanged.
+- Quick review presets are Rust-owned manual sessions: five minutes selects at most eight cards,
+  ten problems at most ten, and recently forgotten at most twenty. Optional subject/tag filters are
+  validated server-side; every preset selects due cards before new cards with deterministic
+  `(due_at, updated_at, id)` ordering and persists the session before Vue navigates.
 - The library persists a manual deck through `review_manual_start` before navigation.
   The ordinary `review_queue` command accepts no entity IDs, so selected problem IDs do
   not enter routes, browser history, logs, or filenames. Leaving the room intentionally

@@ -293,23 +293,23 @@
 - Produces: `CaptureQualityReport { item_id, issues, sharpness_score, dark_fraction, bright_fraction, contrast_score, suggested_rotation_degrees, suggested_crop }`.
 - Produces command: `capture_quality_check(batch_id, item_id) -> AppResult<CaptureQualityReport>`; plaintext lifetime is bounded to the command and application-owned temp/decryption memory.
 
-- [ ] **Step 1: Write deterministic image-analysis tests**
+- [x] **Step 1: Write deterministic image-analysis tests**
 
   Generate in-memory fixtures for sharp text-like edges, Gaussian-like blur, black/white clipping, low contrast, content touching each edge, and a rotated dominant baseline. Assert bounded scores and issue thresholds, plus ownership checks for foreign batch/item IDs and corrupt encrypted assets.
 
-- [ ] **Step 2: Implement analysis without persistence**
+- [x] **Step 2: Implement analysis without persistence**
 
   Downscale to at most 1,024 px, convert to luma, compute variance of a 3x3 Laplacian response, percentile contrast, clipped-pixel fractions, edge-band foreground density, and a conservative dominant-line rotation suggestion limited to `-8..=8` degrees. Delete or zero transient buffers as existing asset APIs permit.
 
-- [ ] **Step 3: Write failing UI tests**
+- [x] **Step 3: Write failing UI tests**
 
   Assert quality is checked lazily for the selected item, neutral results remain quiet, warnings use plain language, users can choose `继续使用`, `重新选择`, or `打开裁剪修正`, and no warning blocks capture commit without explicit product policy.
 
-- [ ] **Step 4: Implement quality badges and correction handoff**
+- [x] **Step 4: Implement quality badges and correction handoff**
 
   Show at most one compact badge per thumbnail and full details in `CaptureQualityPanel`. Pass suggested rotation/crop into the existing crop editor as initial reversible recipes; saving continues through the current atomic crop operation.
 
-- [ ] **Step 5: Run focused tests**
+- [x] **Step 5: Run focused tests**
 
   Run: `.\scripts\cargo-msvc.cmd test --manifest-path src-tauri\Cargo.toml --test capture_quality` and `pnpm test -- src/modules/capture/components/CaptureQualityPanel.test.ts src/modules/capture/components/CaptureThumbnail.test.ts src/modules/capture/components/CaptureWorkspace.test.ts`.
 
@@ -334,19 +334,19 @@
 - Extends: `CaptureCropRecipe` with `perspective_quad: PerspectiveQuad | null`.
 - Existing derivation ledger remains the undo boundary; source assets remain immutable.
 
-- [ ] **Step 1: Write failing geometry and Rust transform tests**
+- [x] **Step 1: Write failing geometry and Rust transform tests**
 
   Assert convex clockwise quads, minimum area, clamped keyboard movement, identity transform, known trapezoid rectification, output-size bounds, and rejection of crossed/tiny/out-of-range quads before staging any asset.
 
-- [ ] **Step 2: Implement bilinear inverse mapping**
+- [x] **Step 2: Implement bilinear inverse mapping**
 
   Use the existing `image` buffers and bounded output dimensions. Sample with bilinear interpolation, preserve EXIF-free output behavior, and feed the transformed image into the existing crop/rotation/JPEG pipeline.
 
-- [ ] **Step 3: Implement four-corner editor controls**
+- [x] **Step 3: Implement four-corner editor controls**
 
   Add an explicit `透视矫正` mode with four 44 px handles, keyboard arrow movement, reset, preview, and screen-reader coordinates. Never auto-apply the quality suggestion.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
   Run: `.\scripts\cargo-msvc.cmd test --manifest-path src-tauri\Cargo.toml --test capture_quality --test capture_inbox_store` and `pnpm test -- src/modules/capture/domain/cropGeometry.test.ts src/modules/capture/components/CaptureCropEditor.test.ts`.
 
@@ -367,13 +367,13 @@
 **Interfaces:**
 - Documents the canonical reason-tag contract, query limits, quick-session ordering, sparse-data report policy, quality thresholds, and explicit confirmation boundary for correction.
 
-- [ ] **Step 1: Run frontend quality gates**
+- [x] **Step 1: Run frontend quality gates**
 
   Run: `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm bindings:check`, and `pnpm build`.
 
   Expected: every command exits zero and feature chunks remain within the documented gzip budgets.
 
-- [ ] **Step 2: Run Rust and schema gates**
+- [x] **Step 2: Run Rust and schema gates**
 
   Run: `.\scripts\cargo-msvc.cmd fmt --manifest-path src-tauri\Cargo.toml --all -- --check`, `.\scripts\cargo-msvc.cmd clippy --manifest-path src-tauri\Cargo.toml --all-targets -- -D warnings`, and `.\scripts\cargo-msvc.cmd test --manifest-path src-tauri\Cargo.toml --all-targets`.
 
@@ -383,11 +383,11 @@
 
   Execute the documented iPhone Safari and Android Chrome capture matrix, 150-image/1 GB recovery fixture, supported Word DOCX checks, 500-problem export, and two-device deterministic schedule scenario. Record exact device/build evidence in the acceptance documents.
 
-- [ ] **Step 4: Review the complete diff**
+- [x] **Step 4: Review the complete diff**
 
   Verify every new command is registered in `src-tauri/src/bindings.rs`, every generated DTO is covered by the binding contract, no raw path/account/profile field crosses into Vue, and all new mutations notify the existing background-sync controller.
 
-- [ ] **Step 5: Commit documentation and release evidence**
+- [x] **Step 5: Commit documentation and release evidence**
 
   ```powershell
   git add docs CHANGELOG.md

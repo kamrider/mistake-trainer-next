@@ -8,6 +8,14 @@ First stable public Windows release using the no-cost GitHub distribution channe
 
 ### Included
 
+- Added six canonical mistake-reason tags, advanced library filters, and atomic bulk subject/tag
+  editing with ownership-safe validation and synchronization outbox updates.
+- Added persisted five-minute, ten-problem, and recently-forgotten quick review sessions with
+  deterministic due-first selection and optional subject/tag filters.
+- Added sparse-evidence weak-area summaries and a local-calendar seven-day due forecast to the
+  learning report.
+- Added on-demand, local-only capture quality checks, reversible suggested crops, and explicit
+  four-corner perspective correction while retaining immutable encrypted source images.
 - Optional startup update checks run at most once every 24 hours and stay silent when offline,
   unconfigured, current, or temporarily unavailable.
 - New-version prompts require an explicit user choice and preserve the existing exact-version,

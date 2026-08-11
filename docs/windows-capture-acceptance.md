@@ -63,6 +63,19 @@ on an untrusted shared network.
    injected persistence failure creates zero formal problems and produces no settle sound.
 15. Scroll a reference batch containing 150 images. Lazy preview loading and the 40-item
    memory cache must prevent obvious stalls or unbounded memory growth.
+16. Select one item and request **检查质量**. Confirm no analysis starts before the request,
+   only that item is checked, a neutral result stays quiet, and at most one compact warning badge
+   appears. Confirm **继续使用** never blocks **加入题库** and the report survives ordinary edits
+   only for the current open batch.
+17. Use blurry, clipped, very dark, very bright, low-contrast, and slightly skewed fixtures.
+   Confirm the full panel uses plain-language guidance and offers **继续使用**、**重新选择**、
+   **打开裁剪修正**. No image, score, or diagnostic may be uploaded or written to the sync outbox.
+18. Open correction from a reported edge-cut fixture. Confirm the suggested crop is prefilled but
+   unapplied. For a skew suggestion, confirm the editor recommends **透视矫正** rather than silently
+   rotating the source.
+19. In **透视矫正**, drag all four 44 px corner handles, move each with Arrow keys (and the
+   documented larger keyboard step), reset, undo, and apply a trapezoid. Confirm invalid crossed or
+   tiny quads cannot save, the result is readable, and **恢复原图** returns the immutable source.
 
 ## Phone session
 
