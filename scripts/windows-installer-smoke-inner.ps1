@@ -73,7 +73,7 @@ $allowedFailureStages = @(
   'selection', 'install_start', 'install_wait', 'install_exit', 'installed_layout',
   'self_check_start', 'self_check_wait', 'self_check_exit', 'self_check_report', 'self_check_ready', 'self_check_architecture',
   'product_check_start', 'product_check_wait', 'product_check_exit', 'product_check_report', 'product_check_ready',
-  'gui_launch', 'gui_early_exit', 'gui_window', 'single_instance', 'gui_shutdown', 'first_run_data',
+  'gui_start', 'gui_early_exit', 'gui_window', 'single_instance', 'gui_shutdown', 'first_run_data',
   'reinstall', 'reinstall_preservation'
 )
 $status = 'failed'
@@ -160,15 +160,18 @@ try {
   $env:APPDATA = $isolatedAppData
   $env:LOCALAPPDATA = $isolatedLocalAppData
 
-  $failureStage = 'gui_launch'
-  $firstProcess = Start-SmokeProcess -FilePath $applicationPath
+  $failureStage = 'gui_start'
+  $firstProcess = Start-Process -FilePath $applicationPath -PassThru
+  $script:launchedProcesses.Add($firstProcess)
+  $failureStage = 'gui_window'
   if (-not (Wait-MainWindow $firstProcess 60)) {
     $firstProcess.Refresh()
     $failureStage = if ($firstProcess.HasExited) { 'gui_early_exit' } else { 'gui_window' }
     Assert-Smoke $false 'installed GUI did not create a main window.'
   }
   $failureStage = 'single_instance'
-  $second = Start-SmokeProcess -FilePath $applicationPath
+  $second = Start-Process -FilePath $applicationPath -PassThru
+  $script:launchedProcesses.Add($second)
   Assert-Smoke (Wait-SmokeProcessExit $second 15) 'second launch did not hand off.'
   Assert-Smoke ($second.ExitCode -eq 0) 'second launch handoff failed.'
   Start-Sleep -Seconds 10

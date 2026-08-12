@@ -66,6 +66,9 @@ describe('Windows installer smoke isolation', () => {
       inner.indexOf("$failureStage = 'product_check_ready'"),
     )
     expect(inner).toContain('Wait-MainWindow $firstProcess 60')
+    expect(inner).toContain('$firstProcess = Start-Process -FilePath $applicationPath -PassThru')
+    expect(inner).toContain('$script:launchedProcesses.Add($firstProcess)')
+    expect(inner).toContain('$second = Start-Process -FilePath $applicationPath -PassThru')
     expect(inner).toContain("{ 'gui_early_exit' } else { 'gui_window' }")
   })
 
