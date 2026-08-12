@@ -98,6 +98,9 @@ a separate product-owner decision.
    Sandbox remains the final containment boundary. Installer prerequisite discovery and command-line
    self-checks use the disposable runner profile; only the real GUI launch is switched to the isolated
    APPDATA/LOCALAPPDATA profile whose first-run data is asserted and removed.
+   A healthy locked first launch is allowed to leave the profile empty; the smoke must not require
+   `library.db` before the user unlocks or creates a library. Reinstall/uninstall preservation is
+   tested with random sentinel and library bytes created explicitly inside that isolated profile.
 3. Merge only reviewed changes to `main` and wait for the CI `push` run on that exact commit to
    complete successfully.
 4. Create and push an annotated `vX.Y.Z` tag from that current `main` commit.

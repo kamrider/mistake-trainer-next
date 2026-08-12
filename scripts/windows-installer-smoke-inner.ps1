@@ -182,12 +182,19 @@ try {
   $failureStage = 'first_run_data'
   $controlRoot = Join-Path $isolatedAppData 'com.mistaketrainer.next'
   $libraryPath = Join-Path $controlRoot 'library'
-  Assert-Smoke (Test-Path -LiteralPath (Join-Path $libraryPath 'library.db') -PathType Leaf) 'first run did not create the isolated encrypted library.'
+  $startupFailurePath = Join-Path $controlRoot 'startup-failure.json'
+  Assert-Smoke (-not (Test-Path -LiteralPath $startupFailurePath -PathType Leaf)) 'healthy GUI launch created a startup failure record.'
+  New-Item -ItemType Directory -Path $libraryPath -Force | Out-Null
   $sentinelPath = Join-Path $controlRoot 'installer-preservation-sentinel.bin'
   $sentinelBytes = New-Object byte[] 32
+  $libraryBytes = New-Object byte[] 4096
   $random = [Security.Cryptography.RandomNumberGenerator]::Create()
-  try { $random.GetBytes($sentinelBytes) } finally { $random.Dispose() }
+  try {
+    $random.GetBytes($sentinelBytes)
+    $random.GetBytes($libraryBytes)
+  } finally { $random.Dispose() }
   [IO.File]::WriteAllBytes($sentinelPath, $sentinelBytes)
+  [IO.File]::WriteAllBytes((Join-Path $libraryPath 'library.db'), $libraryBytes)
   $sentinelHash = (Get-FileHash -LiteralPath $sentinelPath -Algorithm SHA256).Hash.ToLowerInvariant()
   $libraryFingerprint = Get-SmokeTreeFingerprint $libraryPath
 
