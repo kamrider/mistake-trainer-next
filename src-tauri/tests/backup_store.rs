@@ -6,8 +6,8 @@ use mistake_trainer_next_lib::{
         database::{open_encrypted_database, open_encrypted_database_read_only, run_migrations},
     },
     modules::backup::{
-        BackupError, create_backup, prepare_backup_restore, validate_backup,
-        validate_restore_candidate,
+        BackupError, create_backup, create_portable_backup, prepare_backup_restore,
+        prepare_portable_backup_restore, validate_backup, validate_restore_candidate,
     },
 };
 use rusqlite::{Connection, params};
@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use tempfile::{TempDir, tempdir};
 use uuid::Uuid;
 
-const DATABASE_KEY: &str = "backup-database-key";
+const DATABASE_KEY: &str = "0101010101010101010101010101010101010101010101010101010101010101";
 const ASSET_KEY: [u8; 32] = [7_u8; 32];
 const ACCOUNT_ID: &str = "0191365e-2f2f-7b89-b3b0-111111111111";
 const PROFILE_ID: &str = "0191365e-2f2f-7b89-b3b0-222222222222";
@@ -493,6 +493,60 @@ fn prepare_restore_copies_a_verified_opaque_candidate_and_revalidates_it() {
     )
     .expect("revalidate staged candidate");
     assert_eq!(revalidated, candidate.summary);
+}
+
+#[test]
+fn portable_backup_rekeys_database_assets_and_account_for_another_device() {
+    const TARGET_DATABASE_KEY: &str =
+        "0202020202020202020202020202020202020202020202020202020202020202";
+    const TARGET_ACCOUNT_ID: &str = "0191365e-2f2f-7b89-b3b0-999999999999";
+    let target_asset_key = [9_u8; 32];
+    let fixture = fixture();
+    let receipt = create_portable_backup(
+        &fixture.connection,
+        &fixture.blob_root,
+        DATABASE_KEY,
+        &ASSET_KEY,
+        ACCOUNT_ID,
+        fixture.destination.path(),
+        1_725_000_000_000,
+    )
+    .expect("portable backup");
+    let package = fixture.destination.path().join(&receipt.summary.label);
+    let application_root = tempdir().expect("target application root");
+
+    let candidate = prepare_portable_backup_restore(
+        &package,
+        application_root.path(),
+        &receipt.recovery_key,
+        TARGET_DATABASE_KEY,
+        &target_asset_key,
+        TARGET_ACCOUNT_ID,
+        1_725_000_000_100,
+    )
+    .expect("portable restore candidate");
+
+    let summary = validate_restore_candidate(
+        application_root.path(),
+        &candidate.id,
+        TARGET_DATABASE_KEY,
+        &target_asset_key,
+        TARGET_ACCOUNT_ID,
+        1_725_000_000_101,
+    )
+    .expect("candidate uses target credentials");
+    assert_eq!(summary.asset_count, 1);
+    assert!(matches!(
+        validate_restore_candidate(
+            application_root.path(),
+            &candidate.id,
+            DATABASE_KEY,
+            &ASSET_KEY,
+            ACCOUNT_ID,
+            1_725_000_000_101,
+        ),
+        Err(BackupError::AccountMismatch | BackupError::Integrity)
+    ));
 }
 
 #[test]

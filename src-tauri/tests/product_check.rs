@@ -18,7 +18,7 @@ fn installed_product_check_proves_the_offline_learning_lifecycle() {
     assert_eq!(
         report,
         serde_json::json!({
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "applicationVersion": "1.2.3",
             "checkedAtUtcMs": 1_700_000_000_000_i64,
             "ready": true,
@@ -28,6 +28,8 @@ fn installed_product_check_proves_the_offline_learning_lifecycle() {
                 "problemRoundTrip": true,
                 "reviewRoundTrip": true,
                 "backupValidation": true,
+                "backupRestore": true,
+                "docxExport": true,
                 "libraryReopen": true
             }
         })
@@ -64,6 +66,8 @@ fn installed_product_check_reports_fixed_codes_without_leaking_paths() {
             "problemRoundTrip": false,
             "reviewRoundTrip": false,
             "backupValidation": false,
+            "backupRestore": false,
+            "docxExport": false,
             "libraryReopen": false
         })
     );

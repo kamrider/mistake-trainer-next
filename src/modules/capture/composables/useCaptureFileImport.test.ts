@@ -105,6 +105,16 @@ describe('useCaptureFileImport', () => {
     expect(harness.importBytes.mock.calls[0]![0].sourceSequence).toBeNull()
   })
 
+  it('keeps imported bytes in a typed array instead of expanding every byte into a JS array', async () => {
+    const harness = createHarness()
+
+    await harness.controller.importFiles(files('page.png'))
+
+    const bytes = harness.importBytes.mock.calls[0]![0].bytes
+    expect(bytes).toBeInstanceOf(Uint8Array)
+    expect(bytes).toEqual(new Uint8Array([1]))
+  })
+
   it('accepts supported image types by MIME or fallback extension before reading bytes', async () => {
     const png = {
       name: 'photo.PNG',

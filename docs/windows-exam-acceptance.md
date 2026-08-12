@@ -1,5 +1,16 @@
 # Windows Exam Mode Acceptance
 
+## Real-file release evidence
+
+- [x] Automated PDF import tests cover multipage order, cancel during parsing, partial success,
+  malformed input, password errors and bounded page/byte limits.
+- [x] The import-to-Rust boundary keeps each rendered page as a typed byte buffer and avoids an
+  additional spread-copy proportional to page size.
+- [ ] On each supported Windows architecture, import the approved non-private real-file corpus:
+  multipage scanned, password-protected, malformed, empty and near-limit PDFs.
+- [ ] Open a representative generated DOCX in supported desktop Word and inspect pagination,
+  heading styles, missing-image copy and image readability.
+
 Use a non-production learner profile with at least three active problems. At least one problem
 must contain multiple question images and multiple answer images.
 

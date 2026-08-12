@@ -28,6 +28,11 @@ const api = vi.hoisted(() => ({
   legacyImportList: vi.fn(),
   legacyRollback: vi.fn(),
   backupCreate: vi.fn(),
+  backupCreatePortable: vi.fn(),
+  backupPreparePortableRestore: vi.fn(),
+  backupAutomaticStatus: vi.fn(),
+  backupAutomaticConfigure: vi.fn(),
+  backupAutomaticDisable: vi.fn(),
   backupPrepareRestore: vi.fn(),
   backupRestore: vi.fn(),
   subjectPreferencesGet: vi.fn(),
@@ -167,6 +172,13 @@ describe('SettingsView', () => {
       ok: true,
       data: { state: 'locked', trustedWindowsAccount: true, recoveryReason: null },
     })
+    api.backupAutomaticStatus.mockResolvedValue({ ok: true, data: {
+      enabled: false,
+      intervalDays: 7,
+      retentionCount: 5,
+      destinationLabel: null,
+      lastSuccessAtUtcMs: null,
+    } })
     api.subjectPreferencesGet.mockResolvedValue({ ok: true, data: {
       enabledSubjects: ['语文', '数学', '英语'],
       customSubjects: [],

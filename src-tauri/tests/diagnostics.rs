@@ -209,7 +209,7 @@ fn report_contains_only_fixed_aggregates_and_no_user_content() {
         })
     );
     assert_eq!(report["library"]["storageKind"], "custom");
-    assert_eq!(report["library"]["schemaVersion"], 17);
+    assert_eq!(report["library"]["schemaVersion"], 18);
     assert_eq!(report["library"]["integrity"], "ok");
     assert_eq!(report["library"]["profileCount"], 1);
     assert_eq!(report["library"]["problemCount"], 1);

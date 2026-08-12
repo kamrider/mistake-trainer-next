@@ -101,6 +101,8 @@ a separate product-owner decision.
    A healthy locked first launch is allowed to leave the profile empty; the smoke must not require
    `library.db` before the user unlocks or creates a library. Reinstall/uninstall preservation is
    tested with random sentinel and library bytes created explicitly inside that isolated profile.
+   The installed-product JSON must use the current schema and report `backupRestore=true` and
+   `docxExport=true`. This automated evidence does not replace the real PDF/desktop Word matrix.
 3. Merge only reviewed changes to `main` and wait for the CI `push` run on that exact commit to
    complete successfully.
 4. Create and push an annotated `vX.Y.Z` tag from that current `main` commit.
@@ -139,6 +141,9 @@ possible:
 Also verify sleep/resume, reboot, a network outage during optional cloud sync, 150-image capture,
 1 GB temporary capture data, low disk space, and a read-only or unavailable custom storage
 location. Attach results to the release ticket; do not upload user content or private paths.
+Import the approved synthetic/non-private PDF corpus (multipage scan, password-protected,
+malformed, empty and near-limit), and open a representative DOCX in desktop Word on x64 and
+native ARM64 before promoting the draft release.
 
 ## Support triage
 

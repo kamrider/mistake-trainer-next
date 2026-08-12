@@ -8,6 +8,8 @@ use thiserror::Error;
 mod backup_creation;
 #[path = "backup_package_repository.rs"]
 mod backup_package_repository;
+#[path = "backup_portability.rs"]
+mod backup_portability;
 #[path = "backup_restore.rs"]
 mod backup_restore;
 #[path = "backup_restore_repository.rs"]
@@ -18,6 +20,10 @@ mod backup_schema_validation;
 mod backup_validation;
 
 pub use backup_creation::create_backup;
+pub use backup_portability::{
+    PortableBackupReceipt, PortableCredentials, create_portable_backup, open_portable_credentials,
+    prepare_portable_backup_restore,
+};
 pub use backup_restore::{
     RestoreSwap, begin_pending_restore, prepare_backup_restore, record_failed_restore,
     schedule_backup_restore, schedule_backup_restore_with_mode, take_restore_receipt,
@@ -81,6 +87,12 @@ pub enum BackupError {
     TooLarge,
     #[error("backup integrity check failed")]
     Integrity,
+    #[error("portable backup recovery key is invalid")]
+    InvalidRecoveryKey,
+    #[error("portable backup cryptography failed")]
+    Crypto,
+    #[error("automatic backup policy is invalid")]
+    InvalidPolicy,
     #[error("prepared restore candidate has expired")]
     ExpiredCandidate,
     #[error("another restore is already pending")]

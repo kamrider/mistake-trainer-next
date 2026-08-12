@@ -10,7 +10,12 @@ export const commands = {
 	libraryLock: () => __TAURI_INVOKE<AppResult<LibraryAccessStatus>>("library_lock"),
 	libraryUnlock: () => __TAURI_INVOKE<AppResult<LibraryAccessStatus>>("library_unlock"),
 	backupCreate: () => typedError<AppResult<BackupSummary | null>, null>(__TAURI_INVOKE("backup_create")),
+	backupCreatePortable: () => typedError<AppResult<PortableBackupReceipt | null>, null>(__TAURI_INVOKE("backup_create_portable")),
+	backupAutomaticStatus: () => __TAURI_INVOKE<AppResult<AutomaticBackupStatus>>("backup_automatic_status"),
+	backupAutomaticConfigure: (intervalDays: number, retentionCount: number) => typedError<AppResult<AutomaticBackupStatus | null>, null>(__TAURI_INVOKE("backup_automatic_configure", { intervalDays, retentionCount })),
+	backupAutomaticDisable: () => __TAURI_INVOKE<AppResult<AutomaticBackupStatus>>("backup_automatic_disable"),
 	backupPrepareRestore: () => typedError<AppResult<BackupRestoreCandidate | null>, null>(__TAURI_INVOKE("backup_prepare_restore")),
+	backupPreparePortableRestore: (recoveryKey: string) => typedError<AppResult<BackupRestoreCandidate | null>, null>(__TAURI_INVOKE("backup_prepare_portable_restore", { recoveryKey })),
 	backupRecoveryPrepare: () => typedError<AppResult<BackupRestoreCandidate | null>, null>(__TAURI_INVOKE("backup_recovery_prepare")),
 	backupRecoveryRestore: (candidateId: string) => typedError<AppResult<boolean>, null>(__TAURI_INVOKE("backup_recovery_restore", { candidateId })),
 	backupRestore: (candidateId: string) => typedError<AppResult<boolean>, null>(__TAURI_INVOKE("backup_restore", { candidateId })),
@@ -140,6 +145,14 @@ export type AuthStatus = {
 };
 
 export type AuthStatusKind = "unconfigured" | "signed_out" | "verification_required" | "connected" | "offline";
+
+export type AutomaticBackupStatus = {
+	enabled: boolean,
+	intervalDays: number,
+	retentionCount: number,
+	destinationLabel: string | null,
+	lastSuccessAtUtcMs: number | null,
+};
 
 export type BackupRestoreCandidate = {
 	id: string,
@@ -741,6 +754,11 @@ export type PerspectiveQuad = {
 	topRight: NormalizedPoint,
 	bottomRight: NormalizedPoint,
 	bottomLeft: NormalizedPoint,
+};
+
+export type PortableBackupReceipt = {
+	summary: BackupSummary,
+	recoveryKey: string,
 };
 
 export type ProblemAnswerState = "any" | "has_answer" | "missing_answer";

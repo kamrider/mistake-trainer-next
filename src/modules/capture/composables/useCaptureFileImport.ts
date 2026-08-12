@@ -42,6 +42,10 @@ export interface CaptureFileImportOutcome {
   documentReports?: CaptureDocumentImportReport[]
 }
 
+export type CaptureImportBinaryInput = Omit<CaptureImportBytesInput, 'bytes'> & {
+  bytes: Uint8Array
+}
+
 const supportedImageMimeTypes = new Set([
   'image/jpeg',
   'image/png',
@@ -63,7 +67,7 @@ interface CaptureFileImportOptions {
   isBlocked: () => boolean
   onBusyChange: (busy: boolean) => void
   importBytes: (
-    input: CaptureImportBytesInput,
+    input: CaptureImportBinaryInput,
   ) => Promise<AppResult<CaptureItemSummary>>
   createUploadId?: () => string
   maxBatchItems?: number
@@ -145,7 +149,7 @@ export function useCaptureFileImport(
         attemptedCount += 1
         let imported = false
         try {
-          const bytes = [...new Uint8Array(await file.arrayBuffer())]
+          const bytes = new Uint8Array(await file.arrayBuffer())
           const result = await options.importBytes({
             batchId,
             clientUploadId: createUploadId(),
@@ -285,7 +289,7 @@ export function useCaptureFileImport(
     const importOne = async (file: File) => {
       const sourceName = file.name || 'clipboard-image'
       try {
-        const bytes = [...new Uint8Array(await file.arrayBuffer())]
+        const bytes = new Uint8Array(await file.arrayBuffer())
         const result = await options.importBytes({
           batchId,
           clientUploadId: createUploadId(),
