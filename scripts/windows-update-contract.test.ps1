@@ -78,8 +78,8 @@ try {
     Assert-Contract (($platformNames -join ',') -eq 'windows-aarch64,windows-x86_64') 'manifest platform set was not exact.'
     Assert-Contract ($manifest.platforms.'windows-x86_64'.signature -eq 'trusted-x64-updater-signature') 'x64 signature content was not embedded.'
     Assert-Contract ($manifest.platforms.'windows-aarch64'.signature -eq 'trusted-arm64-updater-signature') 'ARM64 signature content was not embedded.'
-    Assert-Contract ($manifest.platforms.'windows-x86_64'.url -eq 'https://github.com/kamrider/mistake-trainer-next/releases/download/v0.1.0/Mistake%20Trainer%20Next_0.1.0_x64-setup.exe') 'x64 artifact URL was not immutable and tag-scoped.'
-    Assert-Contract ($manifest.platforms.'windows-aarch64'.url -eq 'https://github.com/kamrider/mistake-trainer-next/releases/download/v0.1.0/Mistake%20Trainer%20Next_0.1.0_arm64-setup.exe') 'ARM64 artifact URL was not immutable and tag-scoped.'
+    Assert-Contract ($manifest.platforms.'windows-x86_64'.url -eq 'https://github.com/kamrider/mistake-trainer-next/releases/download/v0.1.0/Mistake.Trainer.Next_0.1.0_x64-setup.exe') 'x64 artifact URL did not match GitHub release asset filename normalization.'
+    Assert-Contract ($manifest.platforms.'windows-aarch64'.url -eq 'https://github.com/kamrider/mistake-trainer-next/releases/download/v0.1.0/Mistake.Trainer.Next_0.1.0_arm64-setup.exe') 'ARM64 artifact URL did not match GitHub release asset filename normalization.'
     Assert-Contract ($manifest.platforms.'windows-x86_64'.url -notmatch '\.sig$') 'x64 URL pointed to a signature instead of an installer.'
     Assert-Contract ($manifest.platforms.'windows-aarch64'.url -notmatch '\.sig$') 'ARM64 URL pointed to a signature instead of an installer.'
 
