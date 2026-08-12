@@ -66,6 +66,12 @@ $resultPath = Join-Path $ResultDirectory 'result.json'
 $job = $null
 $firstProcess = $null
 $failureCodes = @()
+$failureStage = 'selection'
+$allowedFailureStages = @(
+  'selection', 'install', 'installed_layout', 'self_check', 'product_check',
+  'gui_launch', 'single_instance', 'gui_shutdown', 'first_run_data',
+  'reinstall', 'reinstall_preservation'
+)
 $status = 'failed'
 $checksPassed = $false
 $installer = $null
@@ -100,10 +106,12 @@ try {
   $env:LOCALAPPDATA = $isolatedLocalAppData
   $job = New-KillOnCloseJob
 
+  $failureStage = 'install'
   $install = Start-SmokeProcess -Job $job -FilePath $installer.FullName -ArgumentList @('/S', "/D=$installRoot")
   Assert-Smoke (Wait-JobProcessExit $install 90) 'installer timed out.'
   Assert-Smoke ($install.ExitCode -eq 0) "installer exit code $($install.ExitCode)."
 
+  $failureStage = 'installed_layout'
   $apps = @(Get-ChildItem -LiteralPath $installRoot -Recurse -File -Filter '*.exe' | Where-Object { $_.Name -notmatch '^(unins|uninstall)' })
   $uninstallers = @(Get-ChildItem -LiteralPath $installRoot -Recurse -File -Filter '*.exe' | Where-Object { $_.Name -match '^(unins|uninstall)' })
   Assert-Smoke ($apps.Count -eq 1) 'expected exactly one installed application executable.'
@@ -112,6 +120,7 @@ try {
   $applicationPath = Resolve-OwnedRegularExecutable -Path $application.FullName -Root $installRoot
   $uninstallerPath = Resolve-OwnedRegularExecutable -Path $uninstallers[0].FullName -Root $installRoot
 
+  $failureStage = 'self_check'
   $selfPath = Join-Path $smokeRoot 'windows-self-check.json'
   $selfCheck = Start-SmokeProcess -Job $job -FilePath $applicationPath -ArgumentList @('--windows-self-check', $selfPath)
   Assert-Smoke (Wait-JobProcessExit $selfCheck 60) 'self-check timed out.'
@@ -120,6 +129,7 @@ try {
   Assert-Smoke ($self.ready -eq $true -and @($self.failureCodes).Count -eq 0) 'self-check reported a failure.'
   Assert-Smoke ($self.windows.processArchitecture -eq $ExpectedArchitecture) 'installed architecture mismatch.'
 
+  $failureStage = 'product_check'
   $productPath = Join-Path $smokeRoot 'windows-product-check.json'
   $productCheck = Start-SmokeProcess -Job $job -FilePath $applicationPath -ArgumentList @('--windows-product-check', $productPath, $scratch)
   Assert-Smoke (Wait-JobProcessExit $productCheck 90) 'product check timed out.'
@@ -127,15 +137,19 @@ try {
   $product = Get-Content -LiteralPath $productPath -Raw | ConvertFrom-Json
   Assert-Smoke ($product.ready -eq $true -and @($product.failureCodes).Count -eq 0) 'product lifecycle check reported a failure.'
 
+  $failureStage = 'gui_launch'
   $firstProcess = Start-SmokeProcess -Job $job -FilePath $applicationPath
   Assert-Smoke (Wait-MainWindow $firstProcess 25) 'installed GUI did not create a main window.'
+  $failureStage = 'single_instance'
   $second = Start-SmokeProcess -Job $job -FilePath $applicationPath
   Assert-Smoke (Wait-JobProcessExit $second 15) 'second launch did not hand off.'
   Assert-Smoke ($second.ExitCode -eq 0) 'second launch handoff failed.'
   Start-Sleep -Seconds 10
+  $failureStage = 'gui_shutdown'
   Assert-Smoke ($firstProcess.CloseMainWindow()) 'main window rejected normal close.'
   Assert-Smoke (Wait-JobProcessExit $firstProcess 15) 'main window did not exit.'
 
+  $failureStage = 'first_run_data'
   $controlRoot = Join-Path $isolatedAppData 'com.mistaketrainer.next'
   $libraryPath = Join-Path $controlRoot 'library'
   Assert-Smoke (Test-Path -LiteralPath (Join-Path $libraryPath 'library.db') -PathType Leaf) 'first run did not create the isolated encrypted library.'
@@ -147,15 +161,18 @@ try {
   $sentinelHash = (Get-FileHash -LiteralPath $sentinelPath -Algorithm SHA256).Hash.ToLowerInvariant()
   $libraryFingerprint = Get-SmokeTreeFingerprint $libraryPath
 
+  $failureStage = 'reinstall'
   $reinstall = Start-SmokeProcess -Job $job -FilePath $installer.FullName -ArgumentList @('/S', "/D=$installRoot")
   Assert-Smoke (Wait-JobProcessExit $reinstall 90) 'same-version reinstall timed out.'
   Assert-Smoke ($reinstall.ExitCode -eq 0) 'same-version reinstall failed.'
+  $failureStage = 'reinstall_preservation'
   Assert-Smoke ((Get-FileHash -LiteralPath $sentinelPath -Algorithm SHA256).Hash.ToLowerInvariant() -eq $sentinelHash) 'same-version reinstall changed the sentinel.'
   Assert-Smoke ((Get-SmokeTreeFingerprint $libraryPath) -ceq $libraryFingerprint) 'same-version reinstall changed the encrypted library.'
   $checksPassed = $true
 }
 catch {
-  $failureCodes += 'installer_smoke_failed'
+  $boundedStage = if ($allowedFailureStages -ccontains $failureStage) { $failureStage } else { 'unknown' }
+  $failureCodes += "installer_smoke_$boundedStage"
   Write-Warning 'Windows installer smoke checks failed; cleanup and bounded result reporting will continue.'
 }
 finally {

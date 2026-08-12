@@ -54,6 +54,8 @@ describe('Windows installer smoke isolation', () => {
     expect(inner).toContain('installer-preservation-sentinel.bin')
     expect(inner).toContain('uninstall_data_preservation_failed')
     expect(inner).toContain('$cleanupJob = New-KillOnCloseJob')
+    expect(inner).toContain('$allowedFailureStages -ccontains $failureStage')
+    expect(inner).toContain('installer_smoke_$boundedStage')
   })
 
   it('fingerprints host credentials and installed binaries even when the guest fails', () => {
