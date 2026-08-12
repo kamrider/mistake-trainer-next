@@ -11,7 +11,6 @@ namespace MistakeTrainer {
   public static class JobObjects {
     const uint CREATE_SUSPENDED = 0x00000004;
     const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
-    const uint JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x00000800;
     const int JobObjectExtendedLimitInformation = 9;
 
     [StructLayout(LayoutKind.Sequential)] struct JOBOBJECT_BASIC_LIMIT_INFORMATION {
@@ -50,11 +49,10 @@ namespace MistakeTrainer {
 
     static void Fail(string operation) { throw new Win32Exception(Marshal.GetLastWin32Error(), operation); }
 
-    public static IntPtr CreateKillOnClose(bool allowBreakaway) {
+    public static IntPtr CreateKillOnClose() {
       IntPtr job = CreateJobObjectW(IntPtr.Zero, null); if (job == IntPtr.Zero) Fail("CreateJobObjectW");
       var info = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
-      info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |
-        (allowBreakaway ? JOB_OBJECT_LIMIT_BREAKAWAY_OK : 0);
+      info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
       int size = Marshal.SizeOf(info); IntPtr ptr = Marshal.AllocHGlobal(size);
       try {
         Marshal.StructureToPtr(info, ptr, false);
@@ -91,8 +89,7 @@ namespace MistakeTrainer {
 }
 
 function New-KillOnCloseJob {
-  param([switch]$AllowBreakaway)
-  [pscustomobject]@{ Handle = [MistakeTrainer.JobObjects]::CreateKillOnClose($AllowBreakaway.IsPresent); Closed = $false }
+  [pscustomobject]@{ Handle = [MistakeTrainer.JobObjects]::CreateKillOnClose(); Closed = $false }
 }
 
 function Start-ProcessInJob {

@@ -33,6 +33,12 @@ function Start-SmokeProcess {
   $script:launchedProcesses.Add($process)
   return $process
 }
+function Start-InstallerProcess {
+  param([Parameter(Mandatory)][string]$FilePath, [string[]]$ArgumentList = @())
+  $process = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -PassThru
+  $script:launchedProcesses.Add($process)
+  return $process
+}
 function Get-SmokeTreeFingerprint([string]$Root) {
   if (-not (Test-Path -LiteralPath $Root -PathType Container)) { return '' }
   $entries = @(Get-ChildItem -LiteralPath $Root -Recurse -File -Force | Sort-Object FullName | ForEach-Object {
@@ -64,7 +70,6 @@ $smokeRoot = Join-Path $runnerTemp "mistake-trainer-installer-smoke-$RunId"
 $markerPath = Join-Path $smokeRoot '.mistake-trainer-installer-smoke.json'
 $resultPath = Join-Path $ResultDirectory 'result.json'
 $job = $null
-$installerJob = $null
 $firstProcess = $null
 $failureCodes = @()
 $failureStage = 'selection'
@@ -106,14 +111,12 @@ try {
   $env:APPDATA = $isolatedAppData
   $env:LOCALAPPDATA = $isolatedLocalAppData
   $job = New-KillOnCloseJob
-  # NSIS and prerequisite installers may explicitly create their own Job Object.
-  # Allow that narrow, requested breakaway while the outer ephemeral runner or
-  # Windows Sandbox remains the isolation boundary. Product processes stay in
-  # the strict kill-on-close job above.
-  $installerJob = New-KillOnCloseJob -AllowBreakaway
+  # NSIS installers may manage their own child/job topology and have failed when
+  # forced into this test's Job Object. They run only inside an ephemeral CI
+  # worker or Windows Sandbox; product processes remain in the strict job above.
 
   $failureStage = 'install_start'
-  $install = Start-SmokeProcess -Job $installerJob -FilePath $installer.FullName -ArgumentList @('/S', "/D=$installRoot")
+  $install = Start-InstallerProcess -FilePath $installer.FullName -ArgumentList @('/S', "/D=$installRoot")
   $failureStage = 'install_wait'
   Assert-Smoke (Wait-JobProcessExit $install 90) 'installer timed out.'
   $failureStage = 'install_exit'
@@ -170,7 +173,7 @@ try {
   $libraryFingerprint = Get-SmokeTreeFingerprint $libraryPath
 
   $failureStage = 'reinstall'
-  $reinstall = Start-SmokeProcess -Job $installerJob -FilePath $installer.FullName -ArgumentList @('/S', "/D=$installRoot")
+  $reinstall = Start-InstallerProcess -FilePath $installer.FullName -ArgumentList @('/S', "/D=$installRoot")
   Assert-Smoke (Wait-JobProcessExit $reinstall 90) 'same-version reinstall timed out.'
   Assert-Smoke ($reinstall.ExitCode -eq 0) 'same-version reinstall failed.'
   $failureStage = 'reinstall_preservation'
@@ -193,18 +196,14 @@ finally {
     } catch {}
   }
   if ($job) { Close-KillOnCloseJob $job }
-  if ($installerJob) { Close-KillOnCloseJob $installerJob }
 
   if ($uninstallerPath -and (Test-Path -LiteralPath $uninstallerPath -PathType Leaf)) {
-    $cleanupJob = $null
     try {
       $validatedUninstaller = Resolve-OwnedRegularExecutable -Path $uninstallerPath -Root $installRoot
-      $cleanupJob = New-KillOnCloseJob -AllowBreakaway
-      $uninstall = Start-ProcessInJob -Job $cleanupJob -FilePath $validatedUninstaller -ArgumentList @('/S')
+      $uninstall = Start-InstallerProcess -FilePath $validatedUninstaller -ArgumentList @('/S')
       if (-not (Wait-JobProcessExit $uninstall 90) -or $uninstall.ExitCode -ne 0) { throw 'uninstaller failed' }
     }
     catch { $failureCodes += 'uninstaller_cleanup_failed' }
-    finally { if ($cleanupJob) { Close-KillOnCloseJob $cleanupJob } }
   } elseif ($uninstallerPath) {
     $failureCodes += 'uninstaller_missing'
   }
