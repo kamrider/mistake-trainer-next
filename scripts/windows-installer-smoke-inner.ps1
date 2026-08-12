@@ -260,3 +260,4 @@ finally {
 
 if ($status -ne 'passed') { exit 1 }
 Write-Output 'Windows installer smoke passed'
+exit 0

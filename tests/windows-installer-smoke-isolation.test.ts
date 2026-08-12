@@ -61,6 +61,8 @@ describe('Windows installer smoke isolation', () => {
     expect(inner).not.toContain('$cleanupJob')
     expect(inner).toContain('$allowedFailureStages -ccontains $failureStage')
     expect(inner).toContain('installer_smoke_$boundedStage')
+    expect(inner).toContain("if ($status -ne 'passed') { exit 1 }")
+    expect(inner).toMatch(/Write-Output 'Windows installer smoke passed'\s+exit 0/)
     expect(inner).toContain("$failureStage = 'self_check_exit'")
     expect(inner).toContain("$failureStage = 'self_check_report'")
     expect(inner).toContain("$failureStage = 'product_check_exit'")
