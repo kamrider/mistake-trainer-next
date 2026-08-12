@@ -2,6 +2,14 @@
 
 All notable product changes are recorded in this file. Versions follow Semantic Versioning.
 
+## 0.1.2 — 2026-08-12
+
+### Fixed
+
+- Windows release jobs now explicitly authorize their ephemeral CI workers before running the
+  installed-product smoke test, preserving the sandbox safety contract while allowing verified
+  x64 and ARM64 release artifacts to be produced.
+
 ## 0.1.1 — 2026-08-11
 
 Adds the completed learning-loop upgrades and strengthens recovery and release safety.
