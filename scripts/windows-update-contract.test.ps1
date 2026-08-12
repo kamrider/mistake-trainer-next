@@ -121,6 +121,8 @@ try {
     Assert-Contract ($workflowText -notmatch 'vars\.WINDOWS_UPDATE_ENDPOINT') 'workflow still required a manually configured update endpoint.'
     Assert-Contract ($workflowText -notmatch 'vars\.WINDOWS_UPDATE_ARTIFACT_BASE_URL') 'workflow still required a manually configured artifact base URL.'
     Assert-Contract ($workflowText -match 'WINDOWS_AUTHENTICODE_MODE:\s*disabled') 'workflow did not explicitly select the free unsigned mode.'
+    Assert-Contract ($workflowText -match "CI:\s*'true'") 'release workflow did not identify the installer smoke worker as CI.'
+    Assert-Contract ($workflowText -match "MISTAKE_TRAINER_EPHEMERAL_WINDOWS:\s*'1'") 'release workflow did not explicitly authorize its ephemeral Windows smoke worker.'
     Assert-Contract ($workflowText -match 'Unknown publisher or Microsoft Defender SmartScreen warning') 'draft release did not disclose the unsigned installer warning.'
     Assert-Contract ($workflowText -match 'target_triple:\s*x86_64-pc-windows-msvc') 'workflow did not define the exact x64 target artifact root.'
     Assert-Contract ($workflowText -match 'target_triple:\s*aarch64-pc-windows-msvc') 'workflow did not define the exact ARM64 target artifact root.'
