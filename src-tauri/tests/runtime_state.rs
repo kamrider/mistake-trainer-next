@@ -161,7 +161,9 @@ fn lock_cycle_reopens_the_same_profile_problem_and_encrypted_assets() {
         .expect("initial startup")
     {
         LibraryStartup::Ready(runtime) => runtime,
-        LibraryStartup::Locked | LibraryStartup::AccessUnavailable(_) => {
+        LibraryStartup::Locked
+        | LibraryStartup::AccessUnavailable(_)
+        | LibraryStartup::RecoveryRequired(_) => {
             panic!("a new library must start unlocked")
         }
     };
@@ -208,7 +210,9 @@ fn lock_cycle_reopens_the_same_profile_problem_and_encrypted_assets() {
         .expect("unlocked restart")
     {
         LibraryStartup::Ready(runtime) => runtime,
-        LibraryStartup::Locked | LibraryStartup::AccessUnavailable(_) => {
+        LibraryStartup::Locked
+        | LibraryStartup::AccessUnavailable(_)
+        | LibraryStartup::RecoveryRequired(_) => {
             panic!("validated unlock must reopen the library")
         }
     };

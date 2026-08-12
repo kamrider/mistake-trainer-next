@@ -4,18 +4,21 @@ import { CheckCircle2, ShieldAlert, X } from '@lucide/vue'
 import { computed, nextTick, onErrorCaptured, onMounted, onUnmounted, provide, ref, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import { failure, type AppResult } from '../shared/api/app-result'
-import { commands, type BackupRestoreReceipt, type ProfileSummary, type SyncNowReport, type SystemStatus, type WindowsCompatibilityStatus } from '../shared/api/bindings'
+import { commands, type BackupRestoreCandidate, type BackupRestoreReceipt, type ProfileSummary, type SyncNowReport, type SystemStatus, type WindowsCompatibilityStatus } from '../shared/api/bindings'
 import { normalizeAppResult } from '../shared/api/normalize-result'
 import { loadSystemStatus } from '../shared/api/system-status'
 import AppShell, { type AppPage } from './AppShell.vue'
+import BackupRestoreDialog from './BackupRestoreDialog.vue'
 import StartupUpdateDialog from './components/StartupUpdateDialog.vue'
 import { useLibraryAccessLifecycle } from './composables/useLibraryAccessLifecycle'
 import { useProfileManagement } from './composables/useProfileManagement'
 import { useStartupUpdate } from './composables/useStartupUpdate'
 import LibraryAccessScreen from './LibraryAccessScreen.vue'
+import LibraryFreshStartDialog from './LibraryFreshStartDialog.vue'
 import { libraryAccessControllerKey } from './library-access-controller'
 import { formatSettingsTime } from './settings-formatters'
 import { createSyncController, syncControllerKey, syncStatusCopy, type SyncPhase, type SyncTrigger } from './sync-controller'
+import { createRecoverySingleFlight } from './recovery-single-flight'
 import { createWorkspaceTransitionGuard, workspaceTransitionGuardKey } from './workspace-transition-guard'
 
 const route = useRoute()
@@ -57,20 +60,109 @@ provide(workspaceTransitionGuardKey, workspaceTransitionGuard)
 const {
   phase: libraryAccessPhase,
   errorMessage: libraryAccessError,
-  errorReason: libraryAccessErrorReason,
+  recoveryReason: libraryRecoveryReason,
   workspaceInitialized,
   checkLibraryAccess: loadLibraryAccess,
   unlockLibrary,
+  retryLibraryAccess,
   enterRestarting,
 } = useLibraryAccessLifecycle({
   desktopRuntime,
   checkAccess: async () => normalizeAppResult(await commands.libraryAccessStatus()),
+  retry: async () => normalizeAppResult(await commands.libraryAccessRetry()),
   unlock: async () => normalizeAppResult(await commands.libraryUnlock()),
   initializeWorkspace,
 })
 provide(libraryAccessControllerKey, {
   enterRestarting,
 })
+const libraryRecoveryBusy = ref(false)
+const libraryRecoveryMessage = ref('')
+const recoveryCandidate = ref<BackupRestoreCandidate>()
+const recoveryRestoreDialogOpen = ref(false)
+const freshStartDialogOpen = ref(false)
+const runSingleLibraryRecovery = createRecoverySingleFlight()
+
+function runLibraryRecovery(operation: () => Promise<boolean>): Promise<boolean> {
+  return runSingleLibraryRecovery(async () => {
+    libraryRecoveryBusy.value = true
+    libraryRecoveryMessage.value = ''
+    try {
+      return await operation()
+    }
+    catch {
+      libraryRecoveryMessage.value = '恢复操作没有完成，原资料库状态没有被覆盖，请稍后重试。'
+      return false
+    }
+    finally {
+      libraryRecoveryBusy.value = false
+    }
+  })
+}
+
+function reconnectLibrary() {
+  return runLibraryRecovery(async () => {
+    const invocation = await commands.storageReconnectSelect()
+    if (invocation.status === 'error') throw new Error('reconnect command rejected')
+    const result = normalizeAppResult(invocation.data)
+    if (!result.ok) {
+      libraryRecoveryMessage.value = result.error.userMessage
+      return false
+    }
+    if (result.data) enterRestarting()
+    return result.data
+  })
+}
+
+function prepareRecoveryBackup() {
+  return runLibraryRecovery(async () => {
+    const invocation = await commands.backupRecoveryPrepare()
+    if (invocation.status === 'error') throw new Error('backup recovery command rejected')
+    const result = normalizeAppResult(invocation.data)
+    if (!result.ok) {
+      libraryRecoveryMessage.value = result.error.userMessage
+      return false
+    }
+    if (!result.data) return false
+    recoveryCandidate.value = result.data
+    recoveryRestoreDialogOpen.value = true
+    return true
+  })
+}
+
+function confirmRecoveryBackup() {
+  const candidate = recoveryCandidate.value
+  if (!candidate) return Promise.resolve(false)
+  return runLibraryRecovery(async () => {
+    const invocation = await commands.backupRecoveryRestore(candidate.id)
+    if (invocation.status === 'error') throw new Error('backup recovery restore rejected')
+    const result = normalizeAppResult(invocation.data)
+    if (!result.ok) {
+      libraryRecoveryMessage.value = result.error.userMessage
+      return false
+    }
+    if (result.data) {
+      recoveryRestoreDialogOpen.value = false
+      enterRestarting()
+    }
+    return result.data
+  })
+}
+
+function confirmFreshStart(confirmation: string) {
+  return runLibraryRecovery(async () => {
+    const result = normalizeAppResult(await commands.libraryRecoveryStartFresh(confirmation))
+    if (!result.ok) {
+      libraryRecoveryMessage.value = result.error.userMessage
+      return false
+    }
+    if (result.data) {
+      freshStartDialogOpen.value = false
+      enterRestarting()
+    }
+    return result.data
+  })
+}
 const activePage = computed(() => (route.meta.shellPage ?? route.name ?? 'dashboard') as AppPage)
 type PageDirection = 'forward' | 'backward'
 const pageOrder: Record<AppPage, number> = {
@@ -479,13 +571,31 @@ async function selectProfile(profileId: string): Promise<boolean> {
   <LibraryAccessScreen
     v-if="libraryAccessPhase !== 'unlocked'"
     :phase="libraryAccessPhase"
-    :message="libraryAccessError"
-    :reason="libraryAccessErrorReason"
+    :message="libraryRecoveryMessage || libraryAccessError"
+    :reason="libraryRecoveryReason"
+    :busy="libraryRecoveryBusy"
     @unlock="unlockLibrary"
-    @retry="loadLibraryAccess"
+    @retry="retryLibraryAccess"
+    @reconnect="reconnectLibrary"
+    @restore="prepareRecoveryBackup"
+    @start-fresh="freshStartDialogOpen = true"
+  />
+  <BackupRestoreDialog
+    v-if="recoveryRestoreDialogOpen && recoveryCandidate"
+    :candidate="recoveryCandidate"
+    :busy="libraryRecoveryBusy"
+    bootstrap
+    @cancel="recoveryRestoreDialogOpen = false"
+    @confirm="confirmRecoveryBackup"
+  />
+  <LibraryFreshStartDialog
+    v-if="freshStartDialogOpen"
+    :busy="libraryRecoveryBusy"
+    @cancel="freshStartDialogOpen = false"
+    @confirm="confirmFreshStart"
   />
   <AppShell
-    v-else
+    v-if="libraryAccessPhase === 'unlocked'"
     :profiles="shellProfiles"
     :active-profile-id="shellActiveProfileId"
     :profile-busy="profileBusy"

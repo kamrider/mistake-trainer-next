@@ -20,8 +20,10 @@ mod backup_validation;
 pub use backup_creation::create_backup;
 pub use backup_restore::{
     RestoreSwap, begin_pending_restore, prepare_backup_restore, record_failed_restore,
-    schedule_backup_restore, take_restore_receipt, validate_restore_candidate,
+    schedule_backup_restore, schedule_backup_restore_with_mode, take_restore_receipt,
+    validate_restore_candidate,
 };
+pub use backup_restore_repository::RestoreMode;
 pub use backup_validation::validate_backup;
 
 const FORMAT_VERSION: i32 = 1;

@@ -1,20 +1,20 @@
 import { readonly, ref } from 'vue'
 import type { AppResult } from '../../shared/api/app-result'
-import type { LibraryAccessStatus } from '../../shared/api/bindings'
+import type { LibraryAccessStatus, LibraryRecoveryReason } from '../../shared/api/bindings'
 
 export type LibraryAccessPhase =
   | 'checking'
   | 'unlocked'
   | 'locked'
+  | 'recovery'
   | 'error'
   | 'unlocking'
   | 'restarting'
 
-export type LibraryAccessErrorReason = 'credentials' | 'storage'
-
 interface LibraryAccessLifecycleOptions {
   desktopRuntime: boolean
   checkAccess: () => Promise<AppResult<LibraryAccessStatus>>
+  retry: () => Promise<AppResult<boolean>>
   unlock: () => Promise<AppResult<LibraryAccessStatus>>
   initializeWorkspace: () => Promise<void>
 }
@@ -22,11 +22,12 @@ interface LibraryAccessLifecycleOptions {
 export function useLibraryAccessLifecycle(options: LibraryAccessLifecycleOptions) {
   const phase = ref<LibraryAccessPhase>(options.desktopRuntime ? 'checking' : 'unlocked')
   const errorMessage = ref('')
-  const errorReason = ref<LibraryAccessErrorReason>('credentials')
+  const recoveryReason = ref<LibraryRecoveryReason>()
   const workspaceInitialized = ref(false)
   let accessTask: Promise<boolean> | undefined
   let initializationTask: Promise<boolean> | undefined
   let unlockTask: Promise<boolean> | undefined
+  let retryTask: Promise<boolean> | undefined
 
   function ensureWorkspaceInitialized(): Promise<boolean> {
     if (workspaceInitialized.value) return Promise.resolve(true)
@@ -40,7 +41,6 @@ export function useLibraryAccessLifecycle(options: LibraryAccessLifecycleOptions
       }
       catch {
         phase.value = 'error'
-        errorReason.value = 'credentials'
         errorMessage.value = '资料库已经解锁，但工作区没有完成初始化，请重新检查。'
         return false
       }
@@ -60,19 +60,21 @@ export function useLibraryAccessLifecycle(options: LibraryAccessLifecycleOptions
 
     phase.value = 'checking'
     errorMessage.value = ''
-    errorReason.value = 'credentials'
+    recoveryReason.value = undefined
     try {
       const result = await options.checkAccess()
       if (!result.ok) {
         phase.value = 'error'
         errorMessage.value = result.error.userMessage
-        errorReason.value = result.error.code === 'LIBRARY_STORAGE_UNAVAILABLE'
-          ? 'storage'
-          : 'credentials'
         return false
       }
-      if (result.data.locked) {
+      if (result.data.state === 'locked') {
         phase.value = 'locked'
+        return false
+      }
+      if (result.data.state === 'recovery_required') {
+        phase.value = 'recovery'
+        recoveryReason.value = result.data.recoveryReason ?? 'credentials_incomplete'
         return false
       }
 
@@ -82,14 +84,13 @@ export function useLibraryAccessLifecycle(options: LibraryAccessLifecycleOptions
     catch {
       phase.value = 'error'
       errorMessage.value = 'Windows 凭据管理器没有响应，请重新检查或使用当前账户解锁。'
-      errorReason.value = 'credentials'
       return false
     }
   }
 
   function checkLibraryAccess(): Promise<boolean> {
     if (accessTask) return accessTask
-    if (unlockTask || phase.value === 'restarting') return Promise.resolve(false)
+    if (unlockTask || retryTask || phase.value === 'restarting') return Promise.resolve(false)
     const task = runAccessCheck().finally(() => {
       if (accessTask === task) accessTask = undefined
     })
@@ -100,7 +101,7 @@ export function useLibraryAccessLifecycle(options: LibraryAccessLifecycleOptions
   async function runUnlock(): Promise<boolean> {
     phase.value = 'unlocking'
     errorMessage.value = ''
-    errorReason.value = 'credentials'
+    recoveryReason.value = undefined
     try {
       const result = await options.unlock()
       if (!result.ok) {
@@ -120,12 +121,41 @@ export function useLibraryAccessLifecycle(options: LibraryAccessLifecycleOptions
 
   function unlockLibrary(): Promise<boolean> {
     if (unlockTask) return unlockTask
-    if (!options.desktopRuntime || accessTask || phase.value === 'restarting')
+    if (!options.desktopRuntime || accessTask || retryTask || phase.value === 'restarting')
       return Promise.resolve(false)
     const task = runUnlock().finally(() => {
       if (unlockTask === task) unlockTask = undefined
     })
     unlockTask = task
+    return task
+  }
+
+  async function runRetry(): Promise<boolean> {
+    errorMessage.value = ''
+    try {
+      const result = await options.retry()
+      if (!result.ok) {
+        errorMessage.value = result.error.userMessage
+        return false
+      }
+      phase.value = 'restarting'
+      return true
+    }
+    catch {
+      errorMessage.value = '无法重新启动资料库检查，请稍后再试。'
+      return false
+    }
+  }
+
+  function retryLibraryAccess(): Promise<boolean> {
+    if (retryTask) return retryTask
+    if (!options.desktopRuntime || accessTask || unlockTask || phase.value === 'restarting')
+      return Promise.resolve(false)
+    if (phase.value !== 'recovery' && phase.value !== 'error') return Promise.resolve(false)
+    const task = runRetry().finally(() => {
+      if (retryTask === task) retryTask = undefined
+    })
+    retryTask = task
     return task
   }
 
@@ -137,10 +167,11 @@ export function useLibraryAccessLifecycle(options: LibraryAccessLifecycleOptions
   return {
     phase: readonly(phase),
     errorMessage: readonly(errorMessage),
-    errorReason: readonly(errorReason),
+    recoveryReason: readonly(recoveryReason),
     workspaceInitialized: readonly(workspaceInitialized),
     checkLibraryAccess,
     unlockLibrary,
+    retryLibraryAccess,
     enterRestarting,
   }
 }

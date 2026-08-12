@@ -8,8 +8,9 @@ use mistake_trainer_next_lib::{
         runtime::SecretStore,
     },
     modules::backup::{
-        BackupError, begin_pending_restore, create_backup, prepare_backup_restore,
-        schedule_backup_restore, take_restore_receipt, validate_backup,
+        BackupError, RestoreMode, begin_pending_restore, create_backup, prepare_backup_restore,
+        schedule_backup_restore, schedule_backup_restore_with_mode, take_restore_receipt,
+        validate_backup,
     },
 };
 use rusqlite::params;
@@ -163,6 +164,68 @@ fn normal_startup_swap_commits_only_after_the_restored_package_is_ready() {
             .unwrap(),
         receipt
     );
+}
+
+#[test]
+fn verified_backup_bootstraps_when_the_live_library_is_absent() {
+    let fixture = fixture();
+    let live = fixture.application_root.path().join("library");
+    fs::remove_dir_all(&live).unwrap();
+    fs::remove_file(fixture.application_root.path().join("restore-pending.json")).unwrap();
+    schedule_backup_restore_with_mode(
+        fixture.application_root.path(),
+        &fixture.candidate_id,
+        DATABASE_KEY,
+        &ASSET_KEY,
+        ACCOUNT_ID,
+        201,
+        RestoreMode::BootstrapMissing,
+    )
+    .unwrap();
+
+    let swap = begin_pending_restore(
+        fixture.application_root.path(),
+        DATABASE_KEY,
+        &ASSET_KEY,
+        ACCOUNT_ID,
+        202,
+    )
+    .unwrap()
+    .expect("bootstrap swap");
+    assert!(!swap.replaces_existing_library());
+    assert!(live.join("library.db").is_file());
+    swap.commit(203).unwrap();
+    assert!(
+        !fixture
+            .application_root
+            .path()
+            .join("restore-pending.json")
+            .exists()
+    );
+}
+
+#[test]
+fn invalid_bootstrap_candidate_never_creates_an_empty_live_library() {
+    let fixture = fixture();
+    let live = fixture.application_root.path().join("library");
+    fs::remove_dir_all(&live).unwrap();
+    fs::remove_file(fixture.application_root.path().join("restore-pending.json")).unwrap();
+    schedule_backup_restore_with_mode(
+        fixture.application_root.path(),
+        &fixture.candidate_id,
+        DATABASE_KEY,
+        &ASSET_KEY,
+        ACCOUNT_ID,
+        201,
+        RestoreMode::BootstrapMissing,
+    )
+    .unwrap();
+    let (stage, _) = control_paths(&fixture);
+    fs::write(stage.join("assets/aa/question.enc"), b"tampered").unwrap();
+
+    assert!(initialize_application_library(&live, &FixedSecrets, 202).is_err());
+    assert!(!live.exists());
+    assert!(stage.is_dir());
 }
 
 #[test]

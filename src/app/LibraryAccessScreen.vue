@@ -1,18 +1,23 @@
 <script setup lang="ts">
 import { BookOpenCheck, HardDrive, KeyRound, LoaderCircle, LockKeyhole, RotateCcw, ShieldCheck } from '@lucide/vue'
 import { computed } from 'vue'
+import type { LibraryRecoveryReason } from '../shared/api/bindings'
 
-type LibraryAccessPhase = 'checking' | 'locked' | 'error' | 'unlocking' | 'restarting'
+type LibraryAccessPhase = 'checking' | 'locked' | 'recovery' | 'error' | 'unlocking' | 'restarting'
 
 const props = defineProps<{
   phase: LibraryAccessPhase
   message?: string
-  reason?: 'credentials' | 'storage'
+  reason?: LibraryRecoveryReason | undefined
+  busy?: boolean
 }>()
 
 const emit = defineEmits<{
   unlock: []
   retry: []
+  reconnect: []
+  restore: []
+  startFresh: []
 }>()
 
 const content = computed(() => {
@@ -35,14 +40,52 @@ const content = computed(() => {
         title: '正在安全重启',
         detail: '重启后才会载入加密数据库、图片和学习档案。',
       }
-    case 'error':
-      if (props.reason === 'storage') {
-        return {
-          eyebrow: '原资料库未连接',
-          title: '请重新连接资料库位置',
-          detail: props.message || '配置的资料库位置当前不可用，请重新连接原磁盘或文件夹后再检查。',
-        }
+    case 'recovery':
+      switch (props.reason) {
+        case 'local_data_missing':
+          return {
+            eyebrow: '原资料库文件缺失',
+            title: '请恢复或重新连接原资料库',
+            detail: props.message || 'Windows 加密凭据仍然存在，但原数据库或图片目录已经不在默认位置。',
+          }
+        case 'credentials_incomplete':
+          return {
+            eyebrow: '本机凭据不完整',
+            title: '资料库凭据需要修复',
+            detail: props.message || '应用检测到资料库文件，但 Windows 凭据集合缺失或不完整，因此不会尝试打开或覆盖它。',
+          }
+        case 'setup_interrupted':
+          return {
+            eyebrow: '首次配置未完成',
+            title: '请完成安全初始化',
+            detail: props.message || '上一次启动在写入本机凭据时中断，但尚未创建任何资料库文件。可以安全清理这次未完成的配置后重试。',
+          }
+        case 'reset_incomplete':
+          return {
+            eyebrow: '清除数据未完成',
+            title: '请完成资料库恢复',
+            detail: props.message || '上一次清除数据只处理了部分资料。应用已停止启动，避免把残留状态误判成全新安装。',
+          }
+        case 'migration_interrupted':
+          return {
+            eyebrow: '迁移尚未完成',
+            title: '请恢复资料库迁移',
+            detail: props.message || '检测到未完成的存储迁移。原位置不会被删除，也不会创建替代空库。',
+          }
+        case 'restore_interrupted':
+          return {
+            eyebrow: '恢复尚未完成',
+            title: '请继续资料库恢复',
+            detail: props.message || '检测到未完成的备份恢复。应用会保留现场，等待重新启动后继续检查。',
+          }
+        default:
+          return {
+            eyebrow: '原资料库未连接',
+            title: '请重新连接资料库位置',
+            detail: props.message || '配置的资料库位置当前不可用，请重新连接原磁盘或文件夹后再检查。',
+          }
       }
+    case 'error':
       return {
         eyebrow: '访问检查未完成',
         title: '暂时无法确认资料库状态',
@@ -58,7 +101,12 @@ const content = computed(() => {
 })
 
 const isBusy = computed(() => ['checking', 'unlocking', 'restarting'].includes(props.phase))
-const isStorageError = computed(() => props.phase === 'error' && props.reason === 'storage')
+const isRecovery = computed(() => props.phase === 'recovery')
+const retryLabel = computed(() => {
+  if (props.reason === 'migration_interrupted') return '重新启动并继续迁移'
+  if (props.reason === 'restore_interrupted') return '重新启动并继续恢复'
+  return '重新启动并检查'
+})
 </script>
 
 <template>
@@ -96,7 +144,7 @@ const isStorageError = computed(() => props.phase === 'error' && props.reason ==
           :size="34"
         />
         <HardDrive
-          v-else-if="isStorageError"
+          v-else-if="isRecovery"
           :size="34"
         />
         <LockKeyhole
@@ -113,8 +161,8 @@ const isStorageError = computed(() => props.phase === 'error' && props.reason ==
       </h1>
       <p
         class="access-detail"
-        :role="phase === 'error' ? 'alert' : 'status'"
-        :aria-live="phase === 'error' ? 'assertive' : 'polite'"
+        :role="phase === 'error' || phase === 'recovery' ? 'alert' : 'status'"
+        :aria-live="phase === 'error' || phase === 'recovery' ? 'assertive' : 'polite'"
       >
         {{ content.detail }}
       </p>
@@ -130,13 +178,13 @@ const isStorageError = computed(() => props.phase === 'error' && props.reason ==
         </span>
       </div>
       <div
-        v-else-if="isStorageError"
+        v-else-if="isRecovery"
         class="access-explanation storage-explanation"
       >
         <HardDrive :size="18" />
         <span>
           <strong>不会在默认位置创建一个空资料库</strong>
-          请重新插入原磁盘、挂载原文件夹或恢复它的访问权限；确认后再让应用重新检查。
+          请先恢复缺失的磁盘、文件或凭据；确认后让应用重启，并从启动边界重新检查全部证据。
         </span>
       </div>
 
@@ -151,7 +199,7 @@ const isStorageError = computed(() => props.phase === 'error' && props.reason ==
       </button>
 
       <div
-        v-else-if="phase === 'error' && !isStorageError"
+        v-else-if="phase === 'error'"
         class="access-actions"
       >
         <button
@@ -160,7 +208,7 @@ const isStorageError = computed(() => props.phase === 'error' && props.reason ==
           @click="emit('retry')"
         >
           <RotateCcw :size="17" />
-          重新检查
+          重新启动并检查
         </button>
         <button
           type="button"
@@ -171,18 +219,60 @@ const isStorageError = computed(() => props.phase === 'error' && props.reason ==
           重新解锁
         </button>
       </div>
-      <button
-        v-else-if="isStorageError"
-        type="button"
-        class="access-primary"
-        @click="emit('retry')"
+      <div
+        v-else-if="isRecovery"
+        class="access-actions recovery-actions"
       >
-        <RotateCcw :size="17" />
-        已连接，重新检查
-      </button>
+        <button
+          v-if="reason === 'local_data_missing'"
+          type="button"
+          class="access-primary"
+          :disabled="busy"
+          @click="emit('restore')"
+        >
+          从加密备份恢复
+        </button>
+        <button
+          v-if="reason === 'storage_disconnected' || reason === 'local_data_missing'"
+          type="button"
+          class="access-secondary"
+          :disabled="busy"
+          @click="emit('reconnect')"
+        >
+          {{ reason === 'storage_disconnected' ? '重新连接原位置' : '查找已有资料库' }}
+        </button>
+        <button
+          v-if="reason === 'reset_incomplete' || reason === 'setup_interrupted'"
+          type="button"
+          class="access-primary"
+          :disabled="busy"
+          @click="emit('startFresh')"
+        >
+          {{ reason === 'reset_incomplete' ? '继续完成重新开始' : '清理未完成配置并重试' }}
+        </button>
+        <button
+          v-if="reason !== 'reset_incomplete' && reason !== 'setup_interrupted'"
+          type="button"
+          class="access-secondary"
+          :disabled="busy"
+          @click="emit('retry')"
+        >
+          <RotateCcw :size="17" />
+          {{ retryLabel }}
+        </button>
+        <button
+          v-if="reason === 'local_data_missing'"
+          type="button"
+          class="access-danger-link"
+          :disabled="busy"
+          @click="emit('startFresh')"
+        >
+          放弃原资料并重新开始
+        </button>
+      </div>
 
       <p class="access-footnote">
-        {{ isStorageError
+        {{ isRecovery
           ? '应用已停止在访问边界，没有打开原数据库，也没有改写存储位置。'
           : '锁定只阻止应用进程读取资料，不会删除题目、图片或训练记录。' }}
       </p>
@@ -388,6 +478,9 @@ h1 {
 }
 
 .access-actions .access-primary { margin-top: 0; }
+.recovery-actions { width: 100%; }
+.access-danger-link { flex-basis: 100%; color: var(--cinnabar); border: 0; background: transparent; font-size: 12px; text-decoration: underline; cursor: pointer; }
+.access-actions button:disabled { opacity: .5; cursor: default; transform: none; }
 
 .access-footnote {
   margin: 22px 0 0;

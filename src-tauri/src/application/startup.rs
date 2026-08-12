@@ -3,12 +3,19 @@ use std::path::Path;
 use thiserror::Error;
 
 use crate::{
+    application::library_inventory::{
+        StartupDisposition, StartupInventory, classify_startup_inventory, inspect_library_artifacts,
+    },
     infrastructure::{
         runtime::{
-            LibraryRuntime, RuntimeError, SecretStore, initialize_local_library, library_is_locked,
+            CredentialEnvelopeState, LibraryRuntime, RuntimeError, SecretStore,
+            initialize_local_library, inspect_local_credential_envelope, library_is_locked,
             load_restore_credentials,
         },
-        storage_location::{StorageLocationError, resolve_storage},
+        storage_location::{
+            RESET_PENDING_FILE, RESTORE_PENDING_FILE, STORAGE_PENDING_FILE, StorageLocationError,
+            control_file_present, resolve_storage, storage_pointer_present,
+        },
     },
     modules::{
         backup::{BackupError, begin_pending_restore, record_failed_restore},
@@ -20,6 +27,8 @@ use crate::{
 pub enum StartupError {
     #[error("local library startup failed")]
     Runtime(#[from] RuntimeError),
+    #[error("startup control evidence could not be inspected")]
+    Control(#[from] StorageLocationError),
     #[error("pending restore could not be applied")]
     Restore(#[from] BackupError),
     #[error("restored library failed to initialize and rollback also failed")]
@@ -38,7 +47,10 @@ pub enum LibraryStartup {
     Ready(LibraryRuntime),
     Locked,
     AccessUnavailable(StartupAccessUnavailable),
+    RecoveryRequired(LibraryRecoveryReason),
 }
+
+pub use crate::application::library_inventory::LibraryRecoveryReason;
 
 #[derive(Debug, Error)]
 pub enum StartupAccessUnavailable {
@@ -68,14 +80,32 @@ pub fn initialize_application_library_if_accessible(
     secrets: &dyn SecretStore,
     now_utc_ms: i64,
 ) -> Result<LibraryStartup, StartupError> {
-    match library_is_locked(secrets) {
-        Ok(false) => initialize_application_library(data_root, secrets, now_utc_ms)
-            .map(LibraryStartup::Ready),
-        Ok(true) => Ok(LibraryStartup::Locked),
-        Err(error) => Ok(LibraryStartup::AccessUnavailable(
-            StartupAccessUnavailable::Credentials(error),
-        )),
+    let credentials = match inspect_local_credential_envelope(secrets) {
+        Ok(state) => state,
+        Err(error) => {
+            return Ok(LibraryStartup::AccessUnavailable(
+                StartupAccessUnavailable::Credentials(error),
+            ));
+        }
+    };
+    if credentials == CredentialEnvelopeState::Complete {
+        match library_is_locked(secrets) {
+            Ok(true) => return Ok(LibraryStartup::Locked),
+            Err(error) => {
+                return Ok(LibraryStartup::AccessUnavailable(
+                    StartupAccessUnavailable::Credentials(error),
+                ));
+            }
+            Ok(false) => {}
+        }
     }
+    initialize_evidenced_library(
+        data_root.parent().ok_or(BackupError::InvalidDestination)?,
+        data_root,
+        false,
+        secrets,
+        now_utc_ms,
+    )
 }
 
 /// Resolves the movable encrypted library only after the process-start lock
@@ -87,31 +117,133 @@ pub fn initialize_configured_application_library_if_accessible(
     secrets: &dyn SecretStore,
     now_utc_ms: i64,
 ) -> Result<LibraryStartup, StartupError> {
-    match library_is_locked(secrets) {
-        Ok(true) => Ok(LibraryStartup::Locked),
-        Err(error) => Ok(LibraryStartup::AccessUnavailable(
-            StartupAccessUnavailable::Credentials(error),
-        )),
-        Ok(false) => {
-            match apply_pending_storage_migration(control_root, secrets, now_utc_ms) {
-                Ok(Some(runtime)) => return Ok(LibraryStartup::Ready(runtime)),
-                Ok(None) => {}
-                Err(error) => {
-                    return Ok(LibraryStartup::AccessUnavailable(
-                        StartupAccessUnavailable::StorageMigration(error),
-                    ));
-                }
+    match control_file_present(control_root, RESET_PENDING_FILE) {
+        Ok(false) => {}
+        Ok(true) | Err(_) => {
+            return Ok(LibraryStartup::RecoveryRequired(
+                LibraryRecoveryReason::ResetIncomplete,
+            ));
+        }
+    }
+    let credentials = match inspect_local_credential_envelope(secrets) {
+        Ok(state) => state,
+        Err(error) => {
+            return Ok(LibraryStartup::AccessUnavailable(
+                StartupAccessUnavailable::Credentials(error),
+            ));
+        }
+    };
+    if credentials == CredentialEnvelopeState::Complete {
+        match library_is_locked(secrets) {
+            Ok(true) => return Ok(LibraryStartup::Locked),
+            Err(error) => {
+                return Ok(LibraryStartup::AccessUnavailable(
+                    StartupAccessUnavailable::Credentials(error),
+                ));
             }
-            let storage = match resolve_storage(control_root) {
-                Ok(storage) => storage,
-                Err(error) => {
-                    return Ok(LibraryStartup::AccessUnavailable(
-                        StartupAccessUnavailable::Storage(error),
-                    ));
-                }
-            };
-            initialize_application_library(storage.library_root(), secrets, now_utc_ms)
+            Ok(false) => {}
+        }
+    }
+    if credentials == CredentialEnvelopeState::Complete {
+        match apply_pending_storage_migration(control_root, secrets, now_utc_ms) {
+            Ok(Some(runtime)) => return Ok(LibraryStartup::Ready(runtime)),
+            Ok(None) => {}
+            Err(error) => {
+                return Ok(LibraryStartup::AccessUnavailable(
+                    StartupAccessUnavailable::StorageMigration(error),
+                ));
+            }
+        }
+    }
+    let storage = match resolve_storage(control_root) {
+        Ok(storage) => storage,
+        Err(error) => {
+            return Ok(LibraryStartup::AccessUnavailable(
+                StartupAccessUnavailable::Storage(error),
+            ));
+        }
+    };
+    let pointer_present = match storage_pointer_present(control_root) {
+        Ok(value) => value,
+        Err(error) => {
+            return Ok(LibraryStartup::AccessUnavailable(
+                StartupAccessUnavailable::Storage(error),
+            ));
+        }
+    };
+    initialize_evidenced_library(
+        control_root,
+        storage.library_root(),
+        pointer_present,
+        secrets,
+        now_utc_ms,
+    )
+}
+
+fn initialize_evidenced_library(
+    control_root: &Path,
+    data_root: &Path,
+    pointer_present: bool,
+    secrets: &dyn SecretStore,
+    now_utc_ms: i64,
+) -> Result<LibraryStartup, StartupError> {
+    let application_root = data_root.parent().ok_or(BackupError::InvalidDestination)?;
+    let restore_pending = match control_file_present(application_root, RESTORE_PENDING_FILE) {
+        Ok(value) => value,
+        Err(_) => {
+            return Ok(LibraryStartup::RecoveryRequired(
+                LibraryRecoveryReason::RestoreInterrupted,
+            ));
+        }
+    };
+    if restore_pending {
+        return match initialize_application_library(data_root, secrets, now_utc_ms) {
+            Ok(runtime) => Ok(LibraryStartup::Ready(runtime)),
+            Err(_) => Ok(LibraryStartup::RecoveryRequired(
+                LibraryRecoveryReason::RestoreInterrupted,
+            )),
+        };
+    }
+
+    let credentials = match inspect_local_credential_envelope(secrets) {
+        Ok(state) => state,
+        Err(error) => {
+            return Ok(LibraryStartup::AccessUnavailable(
+                StartupAccessUnavailable::Credentials(error),
+            ));
+        }
+    };
+    let artifacts = inspect_library_artifacts(data_root).map_err(RuntimeError::File)?;
+    let storage_migration_pending = match control_file_present(control_root, STORAGE_PENDING_FILE) {
+        Ok(value) => value,
+        Err(_) => {
+            return Ok(LibraryStartup::RecoveryRequired(
+                LibraryRecoveryReason::MigrationInterrupted,
+            ));
+        }
+    };
+    let reset_pending = match control_file_present(control_root, RESET_PENDING_FILE) {
+        Ok(value) => value,
+        Err(_) => {
+            return Ok(LibraryStartup::RecoveryRequired(
+                LibraryRecoveryReason::ResetIncomplete,
+            ));
+        }
+    };
+    match classify_startup_inventory(StartupInventory {
+        credentials,
+        artifacts,
+        pointer_present,
+        storage_migration_pending,
+        restore_pending,
+        reset_pending,
+    }) {
+        StartupDisposition::FirstRun | StartupDisposition::OpenExisting => {
+            initialize_application_library(data_root, secrets, now_utc_ms)
                 .map(LibraryStartup::Ready)
+        }
+        StartupDisposition::RecoveryRequired(reason) => {
+            Ok(LibraryStartup::RecoveryRequired(reason))
         }
     }
 }
@@ -127,8 +259,7 @@ pub fn initialize_application_library(
     let application_root = data_root.parent().ok_or(BackupError::InvalidDestination)?;
     std::fs::create_dir_all(application_root).map_err(RuntimeError::File)?;
 
-    let marker_path = application_root.join("restore-pending.json");
-    if !marker_path.exists() {
+    if !control_file_present(application_root, RESTORE_PENDING_FILE)? {
         return initialize_local_library(data_root, secrets, now_utc_ms).map_err(Into::into);
     }
 
@@ -144,6 +275,9 @@ pub fn initialize_application_library(
     let Some(swap) = (match pending {
         Ok(value) => value,
         Err(restore) if is_candidate_validation_error(&restore) => {
+            if !data_root.join("library.db").is_file() {
+                return Err(restore.into());
+            }
             match initialize_local_library(data_root, secrets, now_utc_ms) {
                 Ok(runtime) => {
                     // Only consume the marker after proving the untouched live
@@ -168,8 +302,12 @@ pub fn initialize_application_library(
             Ok(runtime)
         }
         Err(runtime) => {
+            let replaces_existing = swap.replaces_existing_library();
             if let Err(rollback) = swap.rollback(now_utc_ms) {
                 return Err(StartupError::RollbackFailed { runtime, rollback });
+            }
+            if !replaces_existing {
+                return Err(runtime.into());
             }
             initialize_local_library(data_root, secrets, now_utc_ms).map_err(Into::into)
         }

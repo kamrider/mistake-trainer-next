@@ -9,10 +9,13 @@ use tauri::{AppHandle, State};
 use uuid::Uuid;
 
 use crate::{
-    application::result::AppResult,
+    application::{library_inventory::LibraryRecoveryReason, result::AppResult},
+    commands::access::{LibraryAccessGate, recovery_reason_for},
     infrastructure::{
-        runtime::LibraryRuntime,
-        storage_location::{ResolvedStorage, resolve_storage},
+        runtime::{KeyringSecretStore, LibraryRuntime, SecretStore, validate_existing_library},
+        storage_location::{
+            ResolvedStorage, resolve_storage, validate_custom_library_root, write_storage_pointer,
+        },
     },
     modules::{
         capture_lan::{CaptureLanError, CaptureLanManager},
@@ -25,6 +28,7 @@ use crate::{
 };
 
 const RESTART_DELAY: Duration = Duration::from_millis(450);
+const LOCAL_LIBRARY_SERVICE: &str = "com.mistaketrainer.next.local-library";
 
 pub struct ApplicationControlRoot(pub PathBuf);
 
@@ -166,6 +170,68 @@ pub async fn storage_migrate_select(
         }
         Ok(Err(error)) => storage_migration_failure(&error),
         Err(_) => storage_migration_failure(&StorageMigrationError::Lock),
+    })
+}
+
+pub fn reconnect_existing_library(
+    control_root: &Path,
+    selected_product_root: &Path,
+    secrets: &dyn SecretStore,
+) -> Result<(), StorageMigrationError> {
+    let library_root = selected_product_root.join("library");
+    validate_custom_library_root(control_root, &library_root)?;
+    validate_existing_library(&library_root, secrets).map_err(StorageMigrationError::Runtime)?;
+    write_storage_pointer(control_root, &library_root)?;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn storage_reconnect_select(
+    app: AppHandle,
+    gate: State<'_, LibraryAccessGate>,
+    control_root: State<'_, ApplicationControlRoot>,
+) -> Result<AppResult<bool>, ()> {
+    if !matches!(
+        recovery_reason_for(&gate),
+        Some(LibraryRecoveryReason::StorageDisconnected | LibraryRecoveryReason::LocalDataMissing)
+    ) {
+        return Ok(AppResult::failure(
+            "storage_reconnect_not_allowed",
+            "当前状态不允许重新连接资料库。",
+            false,
+            Uuid::now_v7().to_string(),
+        ));
+    }
+    let selected = tauri::async_runtime::spawn_blocking(|| {
+        rfd::FileDialog::new()
+            .set_title("选择原来的 Mistake Trainer Next Data 文件夹")
+            .pick_folder()
+    })
+    .await;
+    let Some(selected) = selected.unwrap_or(None) else {
+        return Ok(AppResult::success(false));
+    };
+    let control_root = control_root.0.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        reconnect_existing_library(
+            &control_root,
+            &selected,
+            &KeyringSecretStore::new(LOCAL_LIBRARY_SERVICE),
+        )
+    })
+    .await;
+    Ok(match result {
+        Ok(Ok(())) => {
+            schedule_restart(app);
+            AppResult::success(true)
+        }
+        Ok(Err(_)) | Err(_) => AppResult::failure(
+            "storage_reconnect_validation_failed",
+            "所选文件夹不是当前账户原来的完整资料库；没有更改存储位置。",
+            true,
+            Uuid::now_v7().to_string(),
+        ),
     })
 }
 

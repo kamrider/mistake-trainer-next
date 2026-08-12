@@ -11,6 +11,7 @@ pub mod diagnostics;
 pub mod exports;
 pub mod insights;
 pub mod legacy;
+pub mod library_reset;
 pub mod ocr_capability;
 pub mod preferences;
 pub mod problem_bulk_metadata;

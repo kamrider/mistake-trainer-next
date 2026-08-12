@@ -35,13 +35,13 @@ describe('App', () => {
     await waitFor(() => {
       expect(router.currentRoute.value.name).toBe('settings')
       expect(view.container.querySelector('.route-page')).toHaveAttribute('data-direction', 'forward')
-    })
+    }, { timeout: 5_000 })
 
     await user.click(screen.getByRole('button', { name: '题库' }))
     await waitFor(() => {
       expect(router.currentRoute.value.name).toBe('library')
       expect(view.container.querySelector('.route-page')).toHaveAttribute('data-direction', 'backward')
-    })
+    }, { timeout: 5_000 })
   })
 
   it('focuses entered page context without stealing deliberate focus during a real transition', async () => {

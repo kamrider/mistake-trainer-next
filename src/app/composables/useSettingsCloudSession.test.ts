@@ -19,8 +19,9 @@ const verificationRequired: CloudAuthState = {
   status: { kind: 'verification_required', emailHint: 'u***@example.com' },
 }
 const locked: LibraryAccessStatus = {
-  locked: true,
+  state: 'locked',
   trustedWindowsAccount: true,
+  recoveryReason: null,
 }
 
 function deferred<T>() {

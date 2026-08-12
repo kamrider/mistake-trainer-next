@@ -25,13 +25,29 @@ pub(super) struct RestoreCandidateMetadata {
     pub(super) manifest_sha256: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RestoreMode {
+    #[default]
+    ReplaceExisting,
+    BootstrapMissing,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct PendingRestoreMarker {
+    #[serde(default = "default_marker_schema_version")]
+    pub(super) schema_version: u32,
     pub(super) candidate_id: String,
     pub(super) rollback_id: String,
     pub(super) label: String,
     pub(super) scheduled_at_utc_ms: i64,
+    #[serde(default)]
+    pub(super) mode: RestoreMode,
+}
+
+const fn default_marker_schema_version() -> u32 {
+    1
 }
 
 pub(super) fn read_pending_marker(
@@ -41,6 +57,9 @@ pub(super) fn read_pending_marker(
     let bytes = read_bounded(&path, MAX_RESTORE_CONTROL_BYTES)?;
     let marker: PendingRestoreMarker =
         serde_json::from_slice(&bytes).map_err(|_| BackupError::InvalidPackage)?;
+    if marker.schema_version != 1 {
+        return Err(BackupError::InvalidPackage);
+    }
     restore_directory_name(&marker.candidate_id)?;
     rollback_directory_name(&marker.rollback_id)?;
     Ok(marker)
@@ -190,17 +209,19 @@ mod tests {
         PendingRestoreMarker, RESTORE_PENDING_FILE, read_pending_marker, remove_exact_file,
         restore_directory_name, write_control_file,
     };
-    use crate::modules::backup::BackupError;
+    use crate::modules::backup::{BackupError, RestoreMode};
 
     const CANDIDATE_ID: &str = "0191365e-2f2f-7b89-b3b0-111111111111";
     const ROLLBACK_ID: &str = "0191365e-2f2f-7b89-b3b0-222222222222";
 
     fn marker() -> PendingRestoreMarker {
         PendingRestoreMarker {
+            schema_version: 1,
             candidate_id: CANDIDATE_ID.to_owned(),
             rollback_id: ROLLBACK_ID.to_owned(),
             label: "数学备份".to_owned(),
             scheduled_at_utc_ms: 42,
+            mode: RestoreMode::ReplaceExisting,
         }
     }
 

@@ -5,14 +5,19 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 /** Commands */
 export const commands = {
 	libraryAccessStatus: () => __TAURI_INVOKE<AppResult<LibraryAccessStatus>>("library_access_status"),
+	libraryAccessRetry: () => __TAURI_INVOKE<AppResult<boolean>>("library_access_retry"),
+	libraryRecoveryStartFresh: (confirmation: string) => __TAURI_INVOKE<AppResult<boolean>>("library_recovery_start_fresh", { confirmation }),
 	libraryLock: () => __TAURI_INVOKE<AppResult<LibraryAccessStatus>>("library_lock"),
 	libraryUnlock: () => __TAURI_INVOKE<AppResult<LibraryAccessStatus>>("library_unlock"),
 	backupCreate: () => typedError<AppResult<BackupSummary | null>, null>(__TAURI_INVOKE("backup_create")),
 	backupPrepareRestore: () => typedError<AppResult<BackupRestoreCandidate | null>, null>(__TAURI_INVOKE("backup_prepare_restore")),
+	backupRecoveryPrepare: () => typedError<AppResult<BackupRestoreCandidate | null>, null>(__TAURI_INVOKE("backup_recovery_prepare")),
+	backupRecoveryRestore: (candidateId: string) => typedError<AppResult<boolean>, null>(__TAURI_INVOKE("backup_recovery_restore", { candidateId })),
 	backupRestore: (candidateId: string) => typedError<AppResult<boolean>, null>(__TAURI_INVOKE("backup_restore", { candidateId })),
 	backupRestoreStatus: () => __TAURI_INVOKE<AppResult<BackupRestoreReceipt | null>>("backup_restore_status"),
 	storageStatus: () => typedError<AppResult<StorageLocationStatus>, null>(__TAURI_INVOKE("storage_status")),
 	storageMigrateSelect: () => typedError<AppResult<StorageMigrationReceipt | null>, null>(__TAURI_INVOKE("storage_migrate_select")),
+	storageReconnectSelect: () => typedError<AppResult<boolean>, null>(__TAURI_INVOKE("storage_reconnect_select")),
 	storageMigrationReceipt: () => __TAURI_INVOKE<AppResult<StorageMigrationReceipt | null>>("storage_migration_receipt"),
 	diagnosticsExport: () => typedError<AppResult<DiagnosticExportReceipt | null>, null>(__TAURI_INVOKE("diagnostics_export")),
 	ocrCapabilityStatus: () => typedError<AppResult<OcrCapabilityStatus>, null>(__TAURI_INVOKE("ocr_capability_status")),
@@ -634,9 +639,12 @@ export type LegacyScanReport = {
 	issues: LegacyIssue[],
 };
 
+export type LibraryAccessState = "unlocked" | "locked" | "recovery_required";
+
 export type LibraryAccessStatus = {
-	locked: boolean,
+	state: LibraryAccessState,
 	trustedWindowsAccount: boolean,
+	recoveryReason: LibraryRecoveryReason | null,
 };
 
 export type LibraryContext = {
@@ -644,6 +652,8 @@ export type LibraryContext = {
 	profileName: string,
 	storage: string,
 };
+
+export type LibraryRecoveryReason = "local_data_missing" | "setup_interrupted" | "credentials_incomplete" | "reset_incomplete" | "storage_disconnected" | "migration_interrupted" | "restore_interrupted";
 
 export type NormalizedCropRect = {
 	x: number | null,

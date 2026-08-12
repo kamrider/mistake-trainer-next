@@ -16,12 +16,22 @@ use crate::{
 #[path = "runtime_credentials.rs"]
 mod credentials;
 
-pub use credentials::LIBRARY_LOCK_STATE;
 pub(crate) use credentials::RestoreCredentials;
+pub use credentials::{CredentialEnvelopeState, LIBRARY_LOCK_STATE};
 pub use credentials::{KeyringSecretStore, SecretStore};
 
 pub fn library_is_locked(secrets: &dyn SecretStore) -> Result<bool, RuntimeError> {
     credentials::library_is_locked(secrets)
+}
+
+pub fn inspect_local_credential_envelope(
+    secrets: &dyn SecretStore,
+) -> Result<CredentialEnvelopeState, RuntimeError> {
+    credentials::inspect_local_credential_envelope(secrets)
+}
+
+pub fn delete_local_credential_envelope(secrets: &dyn SecretStore) -> Result<(), RuntimeError> {
+    credentials::delete_local_credential_envelope(secrets)
 }
 
 pub fn set_library_locked(secrets: &dyn SecretStore, locked: bool) -> Result<(), RuntimeError> {
@@ -30,6 +40,53 @@ pub fn set_library_locked(secrets: &dyn SecretStore, locked: bool) -> Result<(),
 
 pub fn validate_library_unlock_credentials(secrets: &dyn SecretStore) -> Result<(), RuntimeError> {
     credentials::load_restore_credentials(secrets).map(|_| ())
+}
+
+pub fn validate_existing_library(
+    root: &Path,
+    secrets: &dyn SecretStore,
+) -> Result<(), RuntimeError> {
+    use std::path::Component;
+
+    let credentials = credentials::load_restore_credentials(secrets)?;
+    let database_path = root.join("library.db");
+    let connection = crate::infrastructure::database::open_encrypted_database_read_only(
+        &database_path,
+        &credentials.database_key,
+    )?;
+    let quick_check: String =
+        connection.pragma_query_value(None, "quick_check", |row| row.get(0))?;
+    if quick_check != "ok" {
+        return Err(RuntimeError::Query(rusqlite::Error::InvalidQuery));
+    }
+    let matching_profiles: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM learner_profiles WHERE account_id = ?1",
+        [&credentials.account_id],
+        |row| row.get(0),
+    )?;
+    let foreign_profiles: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM learner_profiles WHERE account_id <> ?1",
+        [&credentials.account_id],
+        |row| row.get(0),
+    )?;
+    if matching_profiles < 1 || foreign_profiles != 0 {
+        return Err(RuntimeError::InvalidAccountId);
+    }
+
+    let mut statement = connection.prepare("SELECT encrypted_path FROM assets")?;
+    let paths = statement.query_map([], |row| row.get::<_, String>(0))?;
+    for path in paths {
+        let path = path?;
+        let path = Path::new(&path);
+        if path.is_absolute()
+            || path
+                .components()
+                .any(|part| !matches!(part, Component::Normal(_)))
+        {
+            return Err(RuntimeError::Query(rusqlite::Error::InvalidQuery));
+        }
+    }
+    Ok(())
 }
 
 pub struct LibraryRuntime {
