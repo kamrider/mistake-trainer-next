@@ -221,6 +221,80 @@ fn crop_collecting_requires_internal_permission() {
 }
 
 #[test]
+fn server_allocated_sequence_appends_after_hidden_crop_sources() {
+    let library = TestLibrary::new();
+    let mut connection = library.open();
+    let batch = create_batch(
+        &library,
+        &mut connection,
+        "math",
+        CaptureBatchState::Organizing,
+    );
+    let source = ingest_capture_item(
+        &mut connection,
+        &library.blob_root(),
+        &ASSET_KEY,
+        IngestCaptureItem {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch.id.clone(),
+            client_upload_id: "sequence-source".to_owned(),
+            source_name: "source.png".to_owned(),
+            source_sequence: None,
+            bytes: split_color_png(),
+            now_utc_ms: 20,
+        },
+    )
+    .unwrap();
+    let revision = get_capture_batch_detail(&connection, ACCOUNT, &library.profile_id, &batch.id)
+        .unwrap()
+        .batch
+        .revision;
+    apply_capture_crop(
+        &mut connection,
+        &library.blob_root(),
+        &ASSET_KEY,
+        ApplyCaptureCrop {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch.id.clone(),
+            expected_revision: revision,
+            item_id: source.id,
+            recipes: vec![crop_recipe(0.0, 0.5)],
+            allow_collecting: false,
+            now_utc_ms: 30,
+        },
+    )
+    .unwrap();
+    let max_before: i64 = connection
+        .query_row(
+            "SELECT MAX(source_sequence) FROM capture_items WHERE batch_id = ?1",
+            [&batch.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    let appended = ingest_capture_item(
+        &mut connection,
+        &library.blob_root(),
+        &ASSET_KEY,
+        IngestCaptureItem {
+            account_id: ACCOUNT.to_owned(),
+            profile_id: library.profile_id.clone(),
+            batch_id: batch.id,
+            client_upload_id: "sequence-appended".to_owned(),
+            source_name: "appended.png".to_owned(),
+            source_sequence: None,
+            bytes: png(91),
+            now_utc_ms: 40,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(i64::from(appended.source_sequence), max_before + 1);
+}
+
+#[test]
 fn multi_region_crop_is_atomic_non_destructive_and_reversible() {
     let library = TestLibrary::new();
     let mut connection = library.open();

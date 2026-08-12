@@ -4,7 +4,7 @@ import { inject, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import TrainingDashboard from '@/modules/dashboard/components/TrainingDashboard.vue'
 import QuickSessionDialog from '@/modules/review/components/QuickSessionDialog.vue'
-import { commands, type DashboardOverview, type ReviewQuickStartInput } from '@/shared/api/bindings'
+import { commands, type DashboardOverview, type LearningGoalInput, type ReviewQuickStartInput } from '@/shared/api/bindings'
 import { normalizeAppResult } from '@/shared/api/normalize-result'
 import { syncControllerKey } from '../sync-controller'
 
@@ -17,6 +17,8 @@ let requestSequence = 0
 const quickOpen = ref(false)
 const quickBusy = ref(false)
 const quickError = ref('')
+const goalBusy = ref(false)
+const goalError = ref('')
 
 async function loadOverview() {
   const sequence = ++requestSequence
@@ -73,6 +75,26 @@ async function startQuickSession(input: ReviewQuickStartInput) {
     quickBusy.value = false
   }
 }
+
+async function saveLearningGoal(input: LearningGoalInput) {
+  if (goalBusy.value) return
+  goalBusy.value = true
+  goalError.value = ''
+  try {
+    const result = normalizeAppResult(await commands.learningGoalSave(input))
+    if (!result.ok) {
+      goalError.value = result.error.userMessage
+      return
+    }
+    await loadOverview()
+  }
+  catch {
+    goalError.value = '学习目标没有保存成功，原有目标保持不变，请稍后重试。'
+  }
+  finally {
+    goalBusy.value = false
+  }
+}
 </script>
 
 <template>
@@ -80,12 +102,15 @@ async function startQuickSession(input: ReviewQuickStartInput) {
     :overview="overview"
     :loading="loading"
     :error-message="errorMessage"
+    :goal-busy="goalBusy"
+    :goal-error-message="goalError"
     @retry="loadOverview"
     @start-review="router.push({ name: 'review' })"
     @open-quick="openQuickSession"
     @open-inbox="router.push({ name: 'inbox' })"
     @open-library="router.push({ name: 'library' })"
     @open-report="router.push({ name: 'report' })"
+    @save-goal="saveLearningGoal"
   />
   <QuickSessionDialog
     :open="quickOpen"

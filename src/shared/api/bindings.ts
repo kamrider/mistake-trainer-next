@@ -61,6 +61,8 @@ export const commands = {
 	subjectPreferencesSave: (input: SubjectPreferencesInput) => __TAURI_INVOKE<AppResult<SubjectPreferences>>("subject_preferences_save", { input }),
 	reviewPreferencesGet: () => __TAURI_INVOKE<AppResult<ReviewPreferences>>("review_preferences_get"),
 	reviewPreferencesSave: (input: ReviewPreferencesInput) => __TAURI_INVOKE<AppResult<ReviewPreferences>>("review_preferences_save", { input }),
+	learningGoalGet: () => __TAURI_INVOKE<AppResult<LearningGoal>>("learning_goal_get"),
+	learningGoalSave: (input: LearningGoalInput) => __TAURI_INVOKE<AppResult<LearningGoal>>("learning_goal_save", { input }),
 	exportCandidates: (source: ExportCandidateSource) => __TAURI_INVOKE<AppResult<ExportCandidate[]>>("export_candidates", { source }),
 	exportList: () => __TAURI_INVOKE<AppResult<ExportSnapshotSummary[]>>("export_list"),
 	exportTrashList: () => __TAURI_INVOKE<AppResult<DeletedExportSnapshotSummary[]>>("export_trash_list"),
@@ -515,6 +517,16 @@ export type DailyActivity = {
 	durationMs: number | null,
 };
 
+export type DailyPlanOverview = {
+	reviewTarget: number,
+	minutesTarget: number,
+	completedReviews: number,
+	remainingReviews: number,
+	dueReviews: number,
+	suggestedReviews: number,
+	estimatedMinutes: number,
+};
+
 export type DashboardOverview = {
 	profileName: string,
 	activeProblemCount: number,
@@ -524,6 +536,7 @@ export type DashboardOverview = {
 	currentStreakDays: number,
 	pendingCaptureBatchCount: number,
 	pendingCaptureItemCount: number,
+	dailyPlan: DailyPlanOverview,
 };
 
 export type DeletedExportSnapshotSummary = {
@@ -583,6 +596,16 @@ export type GeneratedExportSummary = {
 };
 
 export type JsonValue = { kind: "null" } | { kind: "bool"; value: boolean } | { kind: "number"; value: string } | { kind: "string"; value: string } | { kind: "array"; value: JsonValue[] } | { kind: "object"; value: { [key in string]: JsonValue } };
+
+export type LearningGoal = {
+	dailyReviewTarget: number,
+	dailyMinutesTarget: number,
+};
+
+export type LearningGoalInput = {
+	dailyReviewTarget: number,
+	dailyMinutesTarget: number,
+};
 
 export type LegacyImportCandidate = {
 	candidateId: string,

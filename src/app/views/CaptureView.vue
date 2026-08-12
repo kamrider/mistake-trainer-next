@@ -416,7 +416,6 @@ const fileImporter = useCaptureFileImport({
     normalizeAppResult(await commands.captureImportBytes(input)),
   createUploadId: () => crypto.randomUUID(),
   maxBatchItems: 150,
-  concurrency: 2,
 })
 
 const importWorkflow = useCaptureImportWorkflow({
@@ -436,6 +435,7 @@ const {
   importFiles,
   importFromPaste,
   clearProgress: clearImportProgress,
+  cancelImport,
   dispose: disposeImportWorkflow,
 } = importWorkflow
 
@@ -899,6 +899,7 @@ onBeforeUnmount(() => {
     @discard-batch="discardBatch"
     @import-select="importSelect"
     @import-files="importFiles"
+    @cancel-import="cancelImport"
     @finish-collecting="finishCollecting"
     @apply-layout="applyLayout"
     @assign-batch-subject="assignBatchSubject"

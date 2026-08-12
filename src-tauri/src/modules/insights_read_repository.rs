@@ -4,8 +4,8 @@ use rusqlite::{Connection, params};
 use time::OffsetDateTime;
 
 use super::{
-    DailyActivity, DashboardOverview, DueForecastDay, InsightsError, ReportSummary,
-    SettingsOverview, SubjectActivity, WeakAreaSummary,
+    DailyActivity, DailyPlanOverview, DashboardOverview, DueForecastDay, InsightsError,
+    ReportSummary, SettingsOverview, SubjectActivity, WeakAreaSummary,
 };
 
 const DAY_MS: i64 = 86_400_000;
@@ -31,7 +31,15 @@ pub(super) fn dashboard_overview(
     let profile_name = connection.query_row(
         "SELECT name FROM learner_profiles WHERE account_id = ?1 AND id = ?2",
         params![account_id, profile_id],
-        |row| row.get(0),
+        |row| row.get::<_, String>(0),
+    )?;
+    let (review_target, minutes_target): (i64, i64) = connection.query_row(
+        "SELECT COALESCE(MAX(daily_review_target), 20),
+                COALESCE(MAX(daily_minutes_target), 20)
+         FROM profile_preferences
+         WHERE account_id = ?1 AND profile_id = ?2",
+        params![account_id, profile_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
     let active_problem_count = scalar(
         connection,
@@ -74,6 +82,18 @@ pub(super) fn dashboard_overview(
     )?;
     let remembered_rate_30_days = (recent_review_count > 0)
         .then(|| recent_remembered_count as f64 / recent_review_count as f64);
+    let recent_average_duration_ms: Option<f64> = connection.query_row(
+        "SELECT AVG(duration_ms) FROM review_events
+         WHERE account_id = ?1 AND profile_id = ?2
+           AND occurred_at_utc_ms >= ?3 AND occurred_at_utc_ms < ?4",
+        params![
+            account_id,
+            profile_id,
+            thirty_day_start_utc_ms,
+            tomorrow_start_utc_ms
+        ],
+        |row| row.get(0),
+    )?;
 
     let review_day_buckets = {
         let mut statement = connection.prepare(
@@ -104,6 +124,21 @@ pub(super) fn dashboard_overview(
         |row| row.get::<_, i64>(0),
     )?;
 
+    let completed_reviews = bounded_i32(reviewed_today_count);
+    let review_target = bounded_i32(review_target);
+    let due_reviews = bounded_i32(due_problem_count);
+    let remaining_reviews = review_target.saturating_sub(completed_reviews).max(0);
+    let suggested_reviews = due_reviews.max(remaining_reviews);
+    let estimated_minutes = if suggested_reviews == 0 {
+        0
+    } else {
+        let average_duration_ms = recent_average_duration_ms
+            .filter(|duration| duration.is_finite() && *duration > 0.0)
+            .unwrap_or(60_000.0);
+        ((average_duration_ms * f64::from(suggested_reviews) / 60_000.0).ceil() as i32)
+            .clamp(1, 240)
+    };
+
     Ok(DashboardOverview {
         profile_name,
         active_problem_count: bounded_i32(active_problem_count),
@@ -113,6 +148,15 @@ pub(super) fn dashboard_overview(
         current_streak_days,
         pending_capture_batch_count: bounded_i32(pending_capture_batch_count),
         pending_capture_item_count: bounded_i32(pending_capture_item_count),
+        daily_plan: DailyPlanOverview {
+            review_target,
+            minutes_target: bounded_i32(minutes_target),
+            completed_reviews,
+            remaining_reviews,
+            due_reviews,
+            suggested_reviews,
+            estimated_minutes,
+        },
     })
 }
 

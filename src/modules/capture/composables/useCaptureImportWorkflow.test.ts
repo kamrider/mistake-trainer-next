@@ -30,6 +30,7 @@ function harness() {
       batchId: 'batch-1', failedNames: [], unsupportedNames: [], attemptedCount: 1, skippedCount: 0,
     }),
     clearProgress: vi.fn(),
+    cancelImport: vi.fn(),
     dispose: vi.fn(),
   } as CaptureFileImportController
   const select = vi.fn().mockResolvedValue(success(pickerReport))
@@ -130,12 +131,39 @@ describe('useCaptureImportWorkflow', () => {
     } satisfies CaptureFileImportOutcome)
     await current.controller.importFiles([new File(['x'], '题目.png')])
     expect(current.onError).toHaveBeenLastCalledWith(
-      '说明.pdf 不是支持的图片格式；仅支持 PNG、JPEG 和 WebP。 本批最多保存 150 张，已跳过最后 2 张图片。 坏图1.png、坏图2.png、坏图3.png 等 4 张 未能加入采集箱，其余图片已继续导入。',
+      '说明.pdf 不是支持的文件格式；仅支持 PDF、PNG、JPEG 和 WebP。 本批最多保存 150 张，已跳过最后 2 张图片。 坏图1.png、坏图2.png、坏图3.png 等 4 张 未能加入采集箱，其余图片已继续导入。',
     )
     expect(current.loadDetail).toHaveBeenCalledWith('batch-1')
     expect(current.loadBatches).not.toHaveBeenCalled()
     expect(current.onBusyChange.mock.calls).toEqual([[true], [false]])
     expect(current.fileImporter.clearProgress).toHaveBeenCalledOnce()
+  })
+
+  it('reports retained pages truthfully when later PDF rendering fails', async () => {
+    const current = harness()
+    current.fileImporter.importFiles = vi.fn().mockResolvedValue({
+      batchId: 'batch-1',
+      failedNames: [],
+      unsupportedNames: [],
+      attemptedCount: 2,
+      skippedCount: 0,
+      documentReports: [{
+        sourceName: '整套试卷.pdf',
+        pageCount: 5,
+        importedCount: 2,
+        failedCount: 0,
+        skippedCount: 0,
+        canceled: false,
+        errorCode: 'render_failed',
+      }],
+    } satisfies CaptureFileImportOutcome)
+
+    await current.controller.importFiles([new File(['pdf'], '整套试卷.pdf', { type: 'application/pdf' })])
+
+    expect(current.onError).toHaveBeenLastCalledWith(
+      '整套试卷.pdf 已加密保存 2 页；后续页面处理失败：PDF 损坏或无法读取。',
+    )
+    expect(current.loadDetail).toHaveBeenCalledWith('batch-1')
   })
 
   it('refreshes only the list and suppresses detail notices after leaving', async () => {
@@ -170,7 +198,7 @@ describe('useCaptureImportWorkflow', () => {
     await current.controller.importFiles([new File(['pdf'], '讲义.pdf', { type: 'application/pdf' })])
 
     expect(current.onError).toHaveBeenLastCalledWith(
-      '讲义.pdf 不是支持的图片格式；仅支持 PNG、JPEG 和 WebP。',
+      '讲义.pdf 不是支持的文件格式；仅支持 PDF、PNG、JPEG 和 WebP。',
     )
     expect(current.loadDetail).not.toHaveBeenCalled()
     expect(current.loadBatches).not.toHaveBeenCalled()

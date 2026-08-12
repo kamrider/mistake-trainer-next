@@ -64,6 +64,8 @@ pub fn builder() -> Builder<tauri::Wry> {
         commands::preferences::subject_preferences_save,
         commands::preferences::review_preferences_get,
         commands::preferences::review_preferences_save,
+        commands::preferences::learning_goal_get,
+        commands::preferences::learning_goal_save,
         commands::exports::export_candidates,
         commands::exports::export_list,
         commands::exports::export_trash_list,

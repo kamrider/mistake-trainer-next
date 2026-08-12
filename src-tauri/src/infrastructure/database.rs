@@ -270,7 +270,7 @@ fn run_migrations_to_v11(connection: &mut Connection) -> Result<(), DatabaseErro
 
 pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> {
     let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if version > 17 {
+    if version > 18 {
         return Err(DatabaseError::UnsupportedSchema(version));
     }
     if version < 11 {
@@ -324,6 +324,13 @@ pub fn run_migrations(connection: &mut Connection) -> Result<(), DatabaseError> 
             "../../migrations/0017_capture_recognition_pair_state.sql"
         ))?;
         transaction.pragma_update(None, "user_version", 17)?;
+        transaction.commit()?;
+    }
+    let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version == 17 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(include_str!("../../migrations/0018_learning_goals.sql"))?;
+        transaction.pragma_update(None, "user_version", 18)?;
         transaction.commit()?;
     }
     Ok(())

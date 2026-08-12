@@ -79,6 +79,7 @@ const emit = defineEmits<{
   discardBatch: [batchId: string]
   importSelect: []
   importFiles: [files: File[]]
+  cancelImport: []
   finishCollecting: [subject: string]
   assignBatchSubject: [subject: string]
   applyLayout: [mode: CaptureLayoutMode, questions: number, answers: number, splitIndex: number | null]
@@ -122,6 +123,7 @@ const emit = defineEmits<{
 }>()
 
 const newSubject = ref('')
+const fileInput = ref<HTMLInputElement>()
 const dropActive = ref(false)
 const dropEnabled = computed(() => Boolean(
   props.detail
@@ -130,10 +132,32 @@ const dropEnabled = computed(() => Boolean(
   && !props.busy,
 ))
 const dropHint = computed(() => {
-  if (props.busy) return '当前操作完成后可继续拖入图片'
-  if (!props.desktopAvailable) return '桌面版支持拖入 PNG、JPEG 和 WebP 图片'
-  return '拖入一组图片，按文件顺序进入当前批次'
+  if (props.busy) return '当前操作完成后可继续拖入 PDF 或图片'
+  if (!props.desktopAvailable) return '桌面版支持拖入 PDF、PNG、JPEG 和 WebP 文件'
+  return '拖入整套 PDF 或一组图片，按文件顺序进入当前批次'
 })
+const importProgressLabel = computed(() => {
+  const current = props.importProgress
+  if (!current) return ''
+  if (current.phase === 'reading_pdf') return `正在读取 ${current.sourceName ?? 'PDF'}…`
+  if (current.phase === 'rendering_pdf') {
+    const page = current.currentPage ?? 0
+    const pages = current.pageCount ?? current.total
+    return `正在处理 ${current.sourceName ?? 'PDF'} 第 ${page}/${pages} 页，已保存 ${current.completed} 张`
+  }
+  return `正在导入 ${current.completed}/${current.total} 张${current.failed ? `，${current.failed} 张失败` : ''}`
+})
+
+function chooseImportFiles() {
+  fileInput.value?.click()
+}
+
+function handleFileSelection(event: Event) {
+  const input = event.currentTarget as HTMLInputElement
+  const selected = [...(input.files ?? [])]
+  input.value = ''
+  if (selected.length) emit('importFiles', selected)
+}
 const showLanPanel = ref(false)
 const lanLauncher = ref<HTMLButtonElement>()
 let lanFocusReturn: HTMLElement | null = null
@@ -683,7 +707,7 @@ function statusLabel(batch: CaptureBatchSummary) {
       >
         <div class="capture-toolbar-heading">
           <p>添加素材</p>
-          <span>选择一种来源；也可以直接粘贴或拖入图片。</span>
+          <span>可选择整套 PDF；也可以直接粘贴或拖入图片。</span>
         </div>
         <div class="capture-toolbar-actions">
           <button
@@ -698,12 +722,20 @@ function statusLabel(batch: CaptureBatchSummary) {
           <button
             type="button"
             :disabled="busy || !desktopAvailable"
-            @click="emit('importSelect')"
+            @click="chooseImportFiles"
           >
-            <FolderOpen :size="18" /><span><strong>电脑批量选择</strong><small>PNG · JPEG · WebP</small></span>
+            <FolderOpen :size="18" /><span><strong>电脑批量选择</strong><small>PDF · PNG · JPEG · WebP</small></span>
           </button>
+          <input
+            ref="fileInput"
+            hidden
+            type="file"
+            multiple
+            accept="application/pdf,.pdf,image/png,.png,image/jpeg,.jpg,.jpeg,image/webp,.webp"
+            @change="handleFileSelection"
+          >
           <div class="tool-hint">
-            <ClipboardPaste :size="17" /><span><strong>Ctrl + V 粘贴</strong><small>也可把图片拖到窗口</small></span>
+            <ClipboardPaste :size="17" /><span><strong>Ctrl + V 粘贴</strong><small>也可把 PDF 或图片拖到窗口</small></span>
           </div>
         </div>
         <div
@@ -713,12 +745,20 @@ function statusLabel(batch: CaptureBatchSummary) {
           aria-live="polite"
         >
           <span>
-            正在导入 {{ importProgress.completed }}/{{ importProgress.total }} 张<template v-if="importProgress.failed">，{{ importProgress.failed }} 张失败</template>
+            {{ importProgressLabel }}
           </span>
           <progress
-            :max="importProgress.total"
+            :max="Math.max(1, importProgress.total)"
             :value="importProgress.completed"
           />
+          <button
+            v-if="importProgress.cancelable"
+            type="button"
+            class="cancel-import"
+            @click="emit('cancelImport')"
+          >
+            取消导入
+          </button>
         </div>
       </section>
 
@@ -1040,7 +1080,7 @@ function statusLabel(batch: CaptureBatchSummary) {
                 :error-message="qualityErrors[selectedMaterial.id]"
                 @dismiss="emit('qualityDismiss', selectedMaterial.id)"
                 @retry="emit('qualityCheck', selectedMaterial.id)"
-                @reselect="emit('importSelect')"
+                @reselect="chooseImportFiles"
                 @crop="emit('crop', selectedMaterial.id)"
               />
               <div class="material-role-actions">
@@ -1282,7 +1322,7 @@ input, textarea, select { box-sizing: border-box; padding: 10px 12px; color: var
 .empty-inbox { display: grid; min-height: 210px; margin-top: 17px; place-content: center; justify-items: center; gap: 13px; color: var(--ink-muted); border: 1px dashed rgba(33,51,45,.2); border-radius: 16px; }.empty-inbox p { max-width: 380px; margin: 0; text-align: center; }.completed-section { margin-top: 30px; color: var(--ink-muted); }.completed-section button { margin: 10px 8px 0 0; padding: 8px 12px; color: inherit; border: 1px solid var(--line); border-radius: 9px; background: transparent; }
 .workbench-header { align-items: center; }.back-button { display: inline-flex; gap: 7px; align-items: center; min-height:44px; padding: 9px 12px; color: var(--ink-muted); border: 1px solid var(--line); border-radius: 999px; background: rgba(255,253,247,.5); cursor: pointer; }.batch-title { flex: 1; }.batch-title h1 { font-size: clamp(32px,4vw,50px); }.workbench-stats { display: flex; gap: 7px; }.workbench-stats span { display: grid; min-width: 58px; padding: 9px; text-align: center; color: var(--ink-muted); border-radius: 10px; background: rgba(232,221,199,.48); font-size: 12px; }.workbench-stats strong { color: var(--ink); font-family: serif; font-size: 20px; }.workbench-stats .ready strong { color: var(--cinnabar); }
 .capture-toolbar { margin-top:31px; padding:15px; border:1px solid var(--line); border-radius:15px; background:rgba(255,253,247,.58); }.capture-toolbar-heading { display:flex; justify-content:space-between; gap:18px; align-items:center; margin-bottom:10px; }.capture-toolbar-heading p,.capture-toolbar-heading span { margin:0; }.capture-toolbar-heading p { font-weight:800; }.capture-toolbar-heading span { color:var(--ink-muted); font-size:12px; }.capture-toolbar-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)) minmax(180px,.75fr); gap:10px; }.capture-toolbar button,.tool-hint { display:flex; gap:11px; align-items:center; min-height:54px; padding:0 17px; color:var(--ink); border:1px solid var(--line); border-radius:13px; background:rgba(255,253,247,.8); text-align:left; }.capture-toolbar button { justify-content:flex-start; cursor:pointer; }.capture-toolbar .primary-tool { color:var(--paper); border-color:var(--green-deep); background:var(--green-deep); }.capture-toolbar button span,.tool-hint span { display:grid; gap:2px; }.capture-toolbar strong,.tool-hint strong { font-size:13px; }.capture-toolbar small,.tool-hint small { opacity:.68; font-size:12px; }
-.import-progress { display:grid; grid-template-columns:minmax(0,1fr) minmax(160px,.45fr); gap:12px; align-items:center; margin-top:11px; padding:10px 12px; color:var(--green-deep); border:1px solid rgba(79,128,110,.24); border-radius:11px; background:rgba(225,235,229,.62); font-size:12px; font-weight:740; }.import-progress progress { width:100%; height:8px; accent-color:var(--green-deep); }
+.import-progress { display:grid; grid-template-columns:minmax(0,1fr) minmax(160px,.45fr) auto; gap:12px; align-items:center; margin-top:11px; padding:10px 12px; color:var(--green-deep); border:1px solid rgba(79,128,110,.24); border-radius:11px; background:rgba(225,235,229,.62); font-size:12px; font-weight:740; }.import-progress progress { width:100%; height:8px; accent-color:var(--green-deep); }.capture-toolbar .cancel-import { min-height:32px; padding:0 12px; color:var(--green-deep); border-color:rgba(79,128,110,.32); border-radius:999px; background:rgba(255,253,247,.8); font-size:12px; white-space:nowrap; }
 .external-drop { display: flex; gap: 9px; align-items: center; justify-content: center; min-height: 44px; margin-top: 10px; color: var(--ink-muted); border: 1px dashed rgba(33,51,45,.24); border-radius: 11px; font-size: 12px; transition: background var(--motion-feedback), border-color var(--motion-feedback); }.external-drop.is-active { color: var(--green-deep); border-color: var(--green-deep); background: var(--green-soft); }.external-drop.is-disabled { opacity: .58; }
 .collecting-panel { display: grid; grid-template-columns: minmax(0,1fr) 240px auto; gap: 20px; align-items: end; margin-top: 24px; padding: 26px; border: 1px solid var(--line); border-radius: 5px 20px 20px; background: rgba(255,253,247,.73); box-shadow: var(--shadow-soft); }.collecting-copy { display: flex; gap: 13px; align-items: flex-start; }.collecting-panel h2,.collecting-panel p { margin: 0; }.collecting-panel p { max-width: 550px; margin-top: 5px; color: var(--ink-muted); font-size: 12px; }.collecting-panel label { display: grid; gap: 6px; color: var(--ink-muted); font-size: 12px; font-weight: 720; }.collecting-panel .lan-live { grid-column: 1/-1; display: flex; align-items: center; gap: 8px; color: var(--green-deep); font-weight: 720; }.lan-live span { width: 8px; height: 8px; border-radius: 50%; background: #4f806e; box-shadow: 0 0 0 4px rgba(79,128,110,.14); }
 .recognition-result { display: flex; gap: 18px; align-items: center; justify-content: space-between; margin-top: 16px; padding: 15px 18px; border: 1px solid rgba(79,128,110,.28); border-radius: 14px; background: rgba(225,235,229,.72); }.recognition-result>div { display: flex; gap: 11px; align-items: flex-start; color: var(--green-deep); }.recognition-result p,.recognition-result strong,.recognition-result span,.recognition-result small { display: block; margin: 0; }.recognition-result span { margin-top: 2px; color: var(--ink); font-size: 12px; }.recognition-result small { margin-top: 3px; color: var(--ink-muted); }.recognition-result button { display: inline-flex; flex: 0 0 auto; gap: 7px; align-items: center; min-height: 44px; padding: 0 14px; border: 1px solid rgba(33,51,45,.24); border-radius: 999px; background: var(--paper); color: var(--green-deep); font-weight: 740; cursor: pointer; }

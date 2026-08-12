@@ -27,7 +27,7 @@ pub use backup_restore_repository::RestoreMode;
 pub use backup_validation::validate_backup;
 
 const FORMAT_VERSION: i32 = 1;
-const CURRENT_SCHEMA_VERSION: i64 = 17;
+const CURRENT_SCHEMA_VERSION: i64 = 18;
 const DATABASE_FILE: &str = "library.db";
 const MANIFEST_FILE: &str = "manifest.json";
 const ASSETS_DIRECTORY: &str = "assets";

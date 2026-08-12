@@ -54,7 +54,7 @@ fn initial_migration_creates_the_offline_first_core_schema() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        17
+        18
     );
 }
 
@@ -101,7 +101,7 @@ fn version_nine_library_adds_reversible_legacy_import_ledger_without_changing_ro
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        17
+        18
     );
     let import_columns = connection
         .prepare("SELECT name FROM pragma_table_info('legacy_imports') ORDER BY cid")
@@ -185,7 +185,7 @@ fn version_two_library_upgrades_without_changing_existing_problem_data() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        17
+        18
     );
 
     let staged_role: String = connection
@@ -248,7 +248,7 @@ fn version_five_library_adds_active_profile_preferences_without_changing_existin
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        17
+        18
     );
 }
 
@@ -319,7 +319,7 @@ fn version_six_library_adds_exam_state_without_changing_existing_session_progres
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        17
+        18
     );
 
     let invalid_phase = connection.execute(
@@ -446,7 +446,7 @@ fn version_seven_library_adds_focus_state_without_changing_existing_preferences_
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        17
+        18
     );
 
     assert!(connection.execute(
@@ -572,7 +572,7 @@ fn version_eight_library_adds_review_history_index_without_changing_existing_row
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        17
+        18
     );
 }
 
@@ -692,7 +692,7 @@ fn version_ten_library_adds_cloud_sync_state_without_changing_existing_data() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        17
+        18
     );
     assert_eq!(
         connection.query_row(
@@ -783,7 +783,7 @@ fn version_eleven_library_adds_non_destructive_crop_ledger_without_changing_capt
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        17
+        18
     );
 }
 
@@ -829,7 +829,7 @@ fn version_twelve_library_adds_sync_merge_state_without_changing_open_conflicts(
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        17
+        18
     );
     assert_eq!(
         connection
@@ -1024,7 +1024,7 @@ fn version_thirteen_library_adds_recognition_jobs_without_changing_capture_rows(
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        17
+        18
     );
     for table in [
         "capture_recognition_jobs",
@@ -1104,7 +1104,7 @@ fn version_fourteen_library_preserves_derivations_and_expands_the_position_budge
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        17
+        18
     );
     assert_eq!(
         connection
@@ -1198,13 +1198,13 @@ fn version_fifteen_library_adds_empty_pair_suggestions_without_changing_existing
         )
         .unwrap();
 
-    run_migrations(&mut connection).expect("upgrade schema v15 to v17");
+    run_migrations(&mut connection).expect("upgrade schema v15 to v18");
 
     assert_eq!(
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        17
+        18
     );
     assert_eq!(
         connection
@@ -1247,6 +1247,60 @@ fn version_fifteen_library_adds_empty_pair_suggestions_without_changing_existing
             "missing table {table}"
         );
     }
+}
+
+#[test]
+fn version_eighteen_adds_bounded_learning_goal_defaults() {
+    let directory = tempdir().unwrap();
+    let mut connection =
+        open_encrypted_database(&directory.path().join("library.db"), "key").unwrap();
+    run_migrations(&mut connection).unwrap();
+    connection
+        .execute(
+            "INSERT INTO learner_profiles(
+                 id, account_id, name, created_at_utc_ms, updated_at_utc_ms, revision
+             ) VALUES('profile', 'account', '学习者', 1, 1, 1)",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO profile_preferences(
+                 account_id, profile_id, enabled_subjects_json, custom_subjects_json,
+                 capture_sound_enabled, updated_at_utc_ms
+             ) VALUES('account', 'profile', '[\"数学\"]', '[]', 1, 2)",
+            [],
+        )
+        .unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT daily_review_target, daily_minutes_target
+                 FROM profile_preferences WHERE profile_id = 'profile'",
+                [],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .unwrap(),
+        (20, 20)
+    );
+    assert!(
+        connection
+            .execute(
+                "UPDATE profile_preferences SET daily_review_target = 0
+                 WHERE profile_id = 'profile'",
+                [],
+            )
+            .is_err()
+    );
+    assert!(
+        connection
+            .execute(
+                "UPDATE profile_preferences SET daily_minutes_target = 241
+                 WHERE profile_id = 'profile'",
+                [],
+            )
+            .is_err()
+    );
 }
 
 #[test]
@@ -1304,13 +1358,13 @@ fn version_sixteen_library_adds_durable_pair_state_without_changing_existing_pai
         )
         .unwrap();
 
-    run_migrations(&mut connection).expect("upgrade schema v16 to v17");
+    run_migrations(&mut connection).expect("upgrade schema v16 to v18");
 
     assert_eq!(
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        17
+        18
     );
     assert_eq!(
         connection

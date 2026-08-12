@@ -7,6 +7,11 @@ import {
   success,
   type AppResult,
 } from '../../../shared/api/app-result'
+import {
+  PdfRenderError,
+  type PdfPageRenderOptions,
+  type RenderedPdfPage,
+} from '../services/pdfPageRenderer'
 import { useCaptureFileImport } from './useCaptureFileImport'
 
 function deferred<T>() {
@@ -26,7 +31,10 @@ function files(...names: string[]): File[] {
 
 const importedItem = {} as CaptureItemSummary
 
-function createHarness() {
+function createHarness(renderPdfPages?: (
+  file: File,
+  options: PdfPageRenderOptions,
+) => AsyncGenerator<RenderedPdfPage>) {
   let activeBatchId: string | undefined = 'batch-1'
   let currentItemCount = 4
   let blocked = false
@@ -42,6 +50,7 @@ function createHarness() {
     onBusyChange,
     importBytes,
     createUploadId: () => `upload-${++uploadId}`,
+    ...(renderPdfPages ? { renderPdfPages } : {}),
   })
   return {
     controller,
@@ -54,7 +63,7 @@ function createHarness() {
 }
 
 describe('useCaptureFileImport', () => {
-  it('uses two workers while preserving source sequence', async () => {
+  it('dispatches imports in order and delegates durable sequence allocation', async () => {
     const first = deferred<AppResult<CaptureItemSummary>>()
     const second = deferred<AppResult<CaptureItemSummary>>()
     const third = deferred<AppResult<CaptureItemSummary>>()
@@ -65,15 +74,16 @@ describe('useCaptureFileImport', () => {
       .mockReturnValueOnce(third.promise)
 
     const importing = harness.controller.importFiles(files('a.png', 'b.png', 'c.png'))
-    await vi.waitFor(() => expect(harness.importBytes).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(harness.importBytes).toHaveBeenCalledOnce())
     first.resolve(success(importedItem))
-    await vi.waitFor(() => expect(harness.importBytes).toHaveBeenCalledTimes(3))
+    await vi.waitFor(() => expect(harness.importBytes).toHaveBeenCalledTimes(2))
     second.resolve(success(importedItem))
+    await vi.waitFor(() => expect(harness.importBytes).toHaveBeenCalledTimes(3))
     third.resolve(success(importedItem))
     await importing
 
     expect(harness.importBytes.mock.calls.map(call => call[0].sourceSequence))
-      .toEqual([4, 5, 6])
+      .toEqual([null, null, null])
     expect(harness.importBytes.mock.calls.map(call => call[0].clientUploadId))
       .toEqual(['upload-1', 'upload-2', 'upload-3'])
   })
@@ -92,7 +102,7 @@ describe('useCaptureFileImport', () => {
       attemptedCount: 1,
       skippedCount: 2,
     })
-    expect(harness.importBytes.mock.calls[0]![0].sourceSequence).toBe(149)
+    expect(harness.importBytes.mock.calls[0]![0].sourceSequence).toBeNull()
   })
 
   it('accepts supported image types by MIME or fallback extension before reading bytes', async () => {
@@ -111,21 +121,21 @@ describe('useCaptureFileImport', () => {
       type: 'image/webp',
       arrayBuffer: vi.fn().mockResolvedValue(new Uint8Array([3]).buffer),
     } as unknown as File
-    const pdf = {
-      name: 'notes.pdf',
-      type: 'application/pdf',
+    const text = {
+      name: 'notes.txt',
+      type: 'text/plain',
       arrayBuffer: vi.fn().mockResolvedValue(new Uint8Array([4]).buffer),
     } as unknown as File
     const harness = createHarness()
 
-    const result = await harness.controller.importFiles([png, jpeg, webp, pdf])
+    const result = await harness.controller.importFiles([png, jpeg, webp, text])
 
     expect(harness.importBytes).toHaveBeenCalledTimes(3)
-    expect(pdf.arrayBuffer).not.toHaveBeenCalled()
+    expect(text.arrayBuffer).not.toHaveBeenCalled()
     expect(result).toMatchObject({
       batchId: 'batch-1',
       failedNames: [],
-      unsupportedNames: ['notes.pdf'],
+      unsupportedNames: ['notes.txt'],
       attemptedCount: 3,
       skippedCount: 0,
     })
@@ -133,8 +143,8 @@ describe('useCaptureFileImport', () => {
 
   it('applies capacity after removing unsupported files', async () => {
     const unsupported = {
-      name: 'notes.pdf',
-      type: 'application/pdf',
+      name: 'notes.txt',
+      type: 'text/plain',
       arrayBuffer: vi.fn(),
     } as unknown as File
     const harness = createHarness()
@@ -148,9 +158,104 @@ describe('useCaptureFileImport', () => {
     expect(harness.importBytes).toHaveBeenCalledOnce()
     expect(unsupported.arrayBuffer).not.toHaveBeenCalled()
     expect(result).toMatchObject({
-      unsupportedNames: ['notes.pdf'],
+      unsupportedNames: ['notes.txt'],
       attemptedCount: 1,
       skippedCount: 1,
+    })
+  })
+
+  it('imports a PDF as ordered page images alongside ordinary images', async () => {
+    async function* renderPages(): AsyncGenerator<RenderedPdfPage> {
+      yield {
+        pageNumber: 1,
+        pageCount: 2,
+        file: files('exam-p001.png')[0]!,
+      }
+      yield {
+        pageNumber: 2,
+        pageCount: 2,
+        file: files('exam-p002.png')[0]!,
+      }
+    }
+    const harness = createHarness(renderPages)
+    const pdf = {
+      name: 'exam.pdf',
+      type: 'application/pdf',
+      arrayBuffer: vi.fn(),
+    } as unknown as File
+
+    const result = await harness.controller.importFiles([
+      files('cover.png')[0]!,
+      pdf,
+      files('answer.png')[0]!,
+    ])
+
+    expect(pdf.arrayBuffer).not.toHaveBeenCalled()
+    expect(harness.importBytes.mock.calls.map(call => call[0].sourceName)).toEqual([
+      'cover.png',
+      'exam-p001.png',
+      'exam-p002.png',
+      'answer.png',
+    ])
+    expect(harness.importBytes.mock.calls.map(call => call[0].sourceSequence)).toEqual([
+      null,
+      null,
+      null,
+      null,
+    ])
+    expect(result).toMatchObject({
+      attemptedCount: 4,
+      skippedCount: 0,
+      documentReports: [{
+        sourceName: 'exam.pdf',
+        pageCount: 2,
+        importedCount: 2,
+        failedCount: 0,
+        skippedCount: 0,
+        canceled: false,
+      }],
+    })
+  })
+
+  it('keeps imported PDF pages when the remaining document is canceled', async () => {
+    const continueRendering = deferred<void>()
+    async function* renderPages(
+      _file: File,
+      options: PdfPageRenderOptions,
+    ): AsyncGenerator<RenderedPdfPage> {
+      yield {
+        pageNumber: 1,
+        pageCount: 3,
+        file: files('exam-p001.png')[0]!,
+      }
+      await continueRendering.promise
+      if (options.signal?.aborted) throw new PdfRenderError('canceled')
+      yield {
+        pageNumber: 2,
+        pageCount: 3,
+        file: files('exam-p002.png')[0]!,
+      }
+    }
+    const harness = createHarness(renderPages)
+    const importing = harness.controller.importFiles([
+      new File(['pdf'], 'exam.pdf', { type: 'application/pdf' }),
+    ])
+
+    await vi.waitFor(() => expect(harness.importBytes).toHaveBeenCalledOnce())
+    harness.controller.cancelImport()
+    continueRendering.resolve()
+    const result = await importing
+
+    expect(harness.importBytes).toHaveBeenCalledOnce()
+    expect(result).toMatchObject({
+      attemptedCount: 1,
+      documentReports: [{
+        sourceName: 'exam.pdf',
+        pageCount: 3,
+        importedCount: 1,
+        canceled: true,
+        errorCode: 'canceled',
+      }],
     })
   })
 
@@ -163,7 +268,7 @@ describe('useCaptureFileImport', () => {
       .mockReturnValueOnce(good.promise)
 
     const importing = harness.controller.importFiles(files('bad.png', 'good.png'))
-    await vi.waitFor(() => expect(harness.importBytes).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(harness.importBytes).toHaveBeenCalledOnce())
     bad.resolve(failure('invalid', '损坏', false, 'diag-1'))
     await vi.waitFor(() => {
       expect(harness.controller.progress.value).toEqual({
@@ -172,6 +277,7 @@ describe('useCaptureFileImport', () => {
         failed: 1,
       })
     })
+    await vi.waitFor(() => expect(harness.importBytes).toHaveBeenCalledTimes(2))
     good.resolve(success(importedItem))
     const result = await importing
 

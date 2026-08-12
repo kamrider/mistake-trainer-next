@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createAppRouter } from '../router'
 import DashboardView from './DashboardView.vue'
 
-const api = vi.hoisted(() => ({ dashboardOverview: vi.fn(), reviewQuickStart: vi.fn() }))
+const api = vi.hoisted(() => ({ dashboardOverview: vi.fn(), reviewQuickStart: vi.fn(), learningGoalSave: vi.fn() }))
 
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => true }))
 vi.mock('../../shared/api/bindings', () => ({ commands: api }))
@@ -19,6 +19,15 @@ const dashboardData = {
   currentStreakDays: 4,
   pendingCaptureBatchCount: 1,
   pendingCaptureItemCount: 9,
+  dailyPlan: {
+    reviewTarget: 20,
+    minutesTarget: 20,
+    completedReviews: 2,
+    remainingReviews: 18,
+    dueReviews: 6,
+    suggestedReviews: 18,
+    estimatedMinutes: 18,
+  },
 }
 
 async function renderWithRouter() {
@@ -36,6 +45,10 @@ describe('DashboardView', () => {
     api.reviewQuickStart.mockResolvedValue({
       ok: true,
       data: { sessionId: 'quick-1', mode: 'manual', resumed: false, completedCount: 0, totalCount: 8, items: [] },
+    })
+    api.learningGoalSave.mockResolvedValue({
+      ok: true,
+      data: { dailyReviewTarget: 30, dailyMinutesTarget: 25 },
     })
   })
 
@@ -101,5 +114,22 @@ describe('DashboardView', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('调整科目或标签')
     expect(router.currentRoute.value.name).toBe('dashboard')
     expect(screen.getByRole('button', { name: '开始这轮训练' })).toBeEnabled()
+  })
+
+  it('saves a learning goal and refreshes the daily plan', async () => {
+    const user = userEvent.setup()
+    await renderWithRouter()
+    await user.click(await screen.findByRole('button', { name: '调整学习目标' }))
+    await user.clear(screen.getByLabelText('每日复习题数'))
+    await user.type(screen.getByLabelText('每日复习题数'), '30')
+    await user.clear(screen.getByLabelText('每日学习时间（分钟）'))
+    await user.type(screen.getByLabelText('每日学习时间（分钟）'), '25')
+    await user.click(screen.getByRole('button', { name: '保存目标' }))
+
+    await waitFor(() => expect(api.learningGoalSave).toHaveBeenCalledWith({
+      dailyReviewTarget: 30,
+      dailyMinutesTarget: 25,
+    }))
+    await waitFor(() => expect(api.dashboardOverview).toHaveBeenCalledTimes(2))
   })
 })

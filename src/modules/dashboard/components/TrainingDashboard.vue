@@ -3,11 +3,15 @@ import { computed } from 'vue'
 import { ArrowRight, BookOpen, Check, Clock3, Flame, Inbox, RotateCcw, TrendingUp } from '@lucide/vue'
 import type { DashboardOverview } from '@/shared/api/bindings'
 import { useAnimatedNumber } from '@/shared/composables/useAnimatedNumber'
+import type { LearningGoalInput } from '@/shared/api/bindings'
+import LearningPlanPanel from './LearningPlanPanel.vue'
 
 const props = defineProps<{
   overview: DashboardOverview | null
   loading?: boolean
   errorMessage?: string
+  goalBusy?: boolean
+  goalErrorMessage?: string
 }>()
 
 const emit = defineEmits<{
@@ -17,6 +21,7 @@ const emit = defineEmits<{
   'open-library': []
   'open-report': []
   retry: []
+  'save-goal': [input: LearningGoalInput]
 }>()
 
 const hasProblems = computed(() => (props.overview?.activeProblemCount ?? 0) > 0)
@@ -221,6 +226,13 @@ function openFirstRoute() {
           <div><p>今日已复习</p><strong>{{ animatedReviewedToday }} 道</strong></div>
         </article>
       </section>
+
+      <LearningPlanPanel
+        :plan="overview.dailyPlan"
+        :busy="goalBusy"
+        :error-message="goalErrorMessage"
+        @save="$emit('save-goal', $event)"
+      />
 
       <section
         class="day-plan"

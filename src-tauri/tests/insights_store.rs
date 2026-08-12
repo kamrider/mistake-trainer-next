@@ -215,6 +215,17 @@ fn dashboard_is_profile_scoped_uses_local_days_and_real_capture_backlog() {
             .unwrap();
     }
 
+    connection
+        .execute(
+            "INSERT INTO profile_preferences(
+                 account_id, profile_id, enabled_subjects_json, custom_subjects_json,
+                 capture_sound_enabled, updated_at_utc_ms, daily_review_target,
+                 daily_minutes_target
+             ) VALUES('account-1', ?1, '[\"数学\"]', '[]', 1, ?2, 3, 25)",
+            params![profile.id, now_utc_ms],
+        )
+        .unwrap();
+
     let overview = dashboard_overview(
         &connection,
         "account-1",
@@ -231,6 +242,13 @@ fn dashboard_is_profile_scoped_uses_local_days_and_real_capture_backlog() {
     assert_eq!(overview.current_streak_days, 2);
     assert_eq!(overview.pending_capture_batch_count, 2);
     assert_eq!(overview.pending_capture_item_count, 2);
+    assert_eq!(overview.daily_plan.review_target, 3);
+    assert_eq!(overview.daily_plan.minutes_target, 25);
+    assert_eq!(overview.daily_plan.completed_reviews, 1);
+    assert_eq!(overview.daily_plan.remaining_reviews, 2);
+    assert_eq!(overview.daily_plan.due_reviews, 1);
+    assert_eq!(overview.daily_plan.suggested_reviews, 2);
+    assert_eq!(overview.daily_plan.estimated_minutes, 1);
 
     assert!(matches!(
         dashboard_overview(&connection, "account-1", &profile.id, now_utc_ms, 841),

@@ -10,6 +10,8 @@ pub const DEFAULT_SUBJECTS: [&str; 9] = [
 ];
 const MAX_CUSTOM_SUBJECTS: usize = 20;
 const MAX_SUBJECT_CHARS: usize = 40;
+pub const DEFAULT_DAILY_REVIEW_TARGET: i32 = 20;
+pub const DEFAULT_DAILY_MINUTES_TARGET: i32 = 20;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -63,6 +65,19 @@ pub struct ReviewPreferences {
 #[derive(Clone, Debug)]
 pub struct SaveReviewPreferences {
     pub focus_policy: ReviewFocusPolicy,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LearningGoal {
+    pub daily_review_target: i32,
+    pub daily_minutes_target: i32,
+}
+
+#[derive(Clone, Debug)]
+pub struct SaveLearningGoal {
+    pub daily_review_target: i32,
+    pub daily_minutes_target: i32,
 }
 
 #[derive(Debug, Error)]
@@ -188,6 +203,69 @@ pub fn save_review_preferences(
     )?;
     Ok(ReviewPreferences {
         focus_policy: input.focus_policy,
+    })
+}
+
+pub fn load_learning_goal(
+    connection: &Connection,
+    account_id: &str,
+    profile_id: &str,
+) -> Result<LearningGoal, PreferencesError> {
+    ensure_profile(connection, account_id, profile_id)?;
+    let stored = connection
+        .query_row(
+            "SELECT daily_review_target, daily_minutes_target
+             FROM profile_preferences WHERE account_id = ?1 AND profile_id = ?2",
+            params![account_id, profile_id],
+            |row| {
+                Ok(LearningGoal {
+                    daily_review_target: row.get(0)?,
+                    daily_minutes_target: row.get(1)?,
+                })
+            },
+        )
+        .optional()?;
+    Ok(stored.unwrap_or(LearningGoal {
+        daily_review_target: DEFAULT_DAILY_REVIEW_TARGET,
+        daily_minutes_target: DEFAULT_DAILY_MINUTES_TARGET,
+    }))
+}
+
+pub fn save_learning_goal(
+    connection: &Connection,
+    account_id: &str,
+    profile_id: &str,
+    input: SaveLearningGoal,
+    now_utc_ms: i64,
+) -> Result<LearningGoal, PreferencesError> {
+    ensure_profile(connection, account_id, profile_id)?;
+    if !(1..=200).contains(&input.daily_review_target)
+        || !(5..=240).contains(&input.daily_minutes_target)
+    {
+        return Err(PreferencesError::InvalidInput);
+    }
+    connection.execute(
+        "INSERT INTO profile_preferences(
+             account_id, profile_id, enabled_subjects_json, custom_subjects_json,
+             capture_sound_enabled, updated_at_utc_ms, daily_review_target,
+             daily_minutes_target
+         ) VALUES(?1, ?2, ?3, '[]', 1, ?4, ?5, ?6)
+         ON CONFLICT(account_id, profile_id) DO UPDATE SET
+             daily_review_target = excluded.daily_review_target,
+             daily_minutes_target = excluded.daily_minutes_target,
+             updated_at_utc_ms = excluded.updated_at_utc_ms",
+        params![
+            account_id,
+            profile_id,
+            serde_json::to_string(&DEFAULT_SUBJECTS)?,
+            now_utc_ms,
+            input.daily_review_target,
+            input.daily_minutes_target,
+        ],
+    )?;
+    Ok(LearningGoal {
+        daily_review_target: input.daily_review_target,
+        daily_minutes_target: input.daily_minutes_target,
     })
 }
 

@@ -227,7 +227,7 @@ fn schema_v11_backup_preserves_cloud_progress_and_requires_the_complete_shape() 
     let (_, package) = created_package(&fixture);
     let manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(package.join("manifest.json")).unwrap()).unwrap();
-    assert_eq!(manifest["schemaVersion"], 17);
+    assert_eq!(manifest["schemaVersion"], 18);
     validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID).unwrap();
     {
         let database =
@@ -918,6 +918,127 @@ fn validation_requires_focus_columns_for_schema_v8() {
             .unwrap();
     }
     refresh_database_manifest(&package, 8);
+    assert!(matches!(
+        validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID),
+        Err(BackupError::Integrity)
+    ));
+}
+
+#[test]
+fn validation_requires_learning_goal_columns_for_schema_v18() {
+    for missing_column in ["daily_review_target", "daily_minutes_target"] {
+        let fixture = fixture();
+        let (_, package) = created_package(&fixture);
+        {
+            let database =
+                open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+            database
+                .execute(
+                    &format!("ALTER TABLE profile_preferences DROP COLUMN {missing_column}"),
+                    [],
+                )
+                .unwrap();
+            database
+                .pragma_update(None, "journal_mode", "DELETE")
+                .unwrap();
+        }
+        refresh_database_manifest(&package, 18);
+        assert!(matches!(
+            validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID),
+            Err(BackupError::Integrity)
+        ));
+    }
+}
+
+#[test]
+fn validation_rejects_noncanonical_learning_goal_definitions_and_values() {
+    let malformed_definition = fixture();
+    let (_, package) = created_package(&malformed_definition);
+    {
+        let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        database
+            .execute(
+                "ALTER TABLE profile_preferences DROP COLUMN daily_review_target",
+                [],
+            )
+            .unwrap();
+        database
+            .execute(
+                "ALTER TABLE profile_preferences ADD COLUMN daily_review_target INTEGER",
+                [],
+            )
+            .unwrap();
+        database
+            .pragma_update(None, "journal_mode", "DELETE")
+            .unwrap();
+    }
+    refresh_database_manifest(&package, 18);
+    assert!(matches!(
+        validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID),
+        Err(BackupError::Integrity)
+    ));
+
+    let invalid_value = fixture();
+    {
+        let database = invalid_value.connection.lock().unwrap();
+        database
+            .execute(
+                "INSERT INTO profile_preferences(
+                   account_id, profile_id, enabled_subjects_json, custom_subjects_json,
+                   capture_sound_enabled, updated_at_utc_ms
+                 ) VALUES(?1, ?2, '[]', '[]', 1, 1)",
+                params![ACCOUNT_ID, PROFILE_ID],
+            )
+            .unwrap();
+    }
+    let (_, package) = created_package(&invalid_value);
+    {
+        let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        database
+            .pragma_update(None, "ignore_check_constraints", true)
+            .unwrap();
+        database
+            .execute(
+                "UPDATE profile_preferences SET daily_minutes_target = 0",
+                [],
+            )
+            .unwrap();
+        database
+            .pragma_update(None, "ignore_check_constraints", false)
+            .unwrap();
+        database
+            .pragma_update(None, "journal_mode", "DELETE")
+            .unwrap();
+    }
+    refresh_database_manifest(&package, 18);
+    assert!(matches!(
+        validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID),
+        Err(BackupError::Integrity)
+    ));
+
+    let missing_check = fixture();
+    let (_, package) = created_package(&missing_check);
+    {
+        let database = open_encrypted_database(&package.join("library.db"), DATABASE_KEY).unwrap();
+        database
+            .pragma_update(None, "writable_schema", true)
+            .unwrap();
+        database
+            .execute(
+                "UPDATE sqlite_master
+                 SET sql = replace(sql, 'CHECK(daily_review_target BETWEEN 1 AND 200)', '')
+                 WHERE type = 'table' AND name = 'profile_preferences'",
+                [],
+            )
+            .unwrap();
+        database
+            .pragma_update(None, "writable_schema", false)
+            .unwrap();
+        database
+            .pragma_update(None, "journal_mode", "DELETE")
+            .unwrap();
+    }
+    refresh_database_manifest(&package, 18);
     assert!(matches!(
         validate_backup(&package, DATABASE_KEY, &ASSET_KEY, ACCOUNT_ID),
         Err(BackupError::Integrity)

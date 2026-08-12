@@ -1,9 +1,10 @@
 use mistake_trainer_next_lib::{
     infrastructure::database::{open_encrypted_database, run_migrations},
     modules::preferences::{
-        DEFAULT_SUBJECTS, PreferencesError, ReviewFocusPolicy, SaveReviewPreferences,
-        SaveSubjectPreferences, load_review_preferences, load_subject_preferences,
-        save_review_preferences, save_subject_preferences,
+        DEFAULT_SUBJECTS, PreferencesError, ReviewFocusPolicy, SaveLearningGoal,
+        SaveReviewPreferences, SaveSubjectPreferences, load_learning_goal, load_review_preferences,
+        load_subject_preferences, save_learning_goal, save_review_preferences,
+        save_subject_preferences,
     },
 };
 use tempfile::tempdir;
@@ -276,4 +277,72 @@ fn review_preferences_reject_missing_or_cross_account_profiles() {
         ),
         Err(PreferencesError::ProfileNotFound)
     ));
+}
+
+#[test]
+fn learning_goals_default_validate_and_preserve_other_preferences() {
+    let (_directory, connection) = setup();
+
+    assert_eq!(
+        load_learning_goal(&connection, "account-1", "profile-1").unwrap(),
+        mistake_trainer_next_lib::modules::preferences::LearningGoal {
+            daily_review_target: 20,
+            daily_minutes_target: 20,
+        }
+    );
+    save_subject_preferences(
+        &connection,
+        "account-1",
+        "profile-1",
+        SaveSubjectPreferences {
+            enabled_subjects: vec!["数学".into(), "编程".into()],
+            custom_subjects: vec!["编程".into()],
+            capture_sound_enabled: false,
+        },
+        10,
+    )
+    .unwrap();
+    let saved = save_learning_goal(
+        &connection,
+        "account-1",
+        "profile-1",
+        SaveLearningGoal {
+            daily_review_target: 35,
+            daily_minutes_target: 45,
+        },
+        11,
+    )
+    .unwrap();
+    assert_eq!(saved.daily_review_target, 35);
+    assert_eq!(saved.daily_minutes_target, 45);
+    assert_eq!(
+        load_subject_preferences(&connection, "account-1", "profile-1")
+            .unwrap()
+            .enabled_subjects,
+        vec!["数学", "编程"]
+    );
+
+    for input in [
+        SaveLearningGoal {
+            daily_review_target: 0,
+            daily_minutes_target: 20,
+        },
+        SaveLearningGoal {
+            daily_review_target: 201,
+            daily_minutes_target: 20,
+        },
+        SaveLearningGoal {
+            daily_review_target: 20,
+            daily_minutes_target: 4,
+        },
+        SaveLearningGoal {
+            daily_review_target: 20,
+            daily_minutes_target: 241,
+        },
+    ] {
+        assert!(matches!(
+            save_learning_goal(&connection, "account-1", "profile-1", input, 12),
+            Err(PreferencesError::InvalidInput)
+        ));
+    }
 }
