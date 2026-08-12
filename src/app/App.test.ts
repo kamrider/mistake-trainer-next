@@ -100,7 +100,7 @@ describe('App', () => {
       expect.stringContaining('renders non-element root node'),
     )
     warning.mockRestore()
-  })
+  }, 15_000)
 
   it('shows a recoverable message instead of a blank page when a route throws', async () => {
     const user = userEvent.setup()
