@@ -62,6 +62,8 @@ describe('Windows installer smoke isolation', () => {
     expect(inner).toContain("$failureStage = 'self_check_report'")
     expect(inner).toContain("$failureStage = 'product_check_exit'")
     expect(inner).toContain("$failureStage = 'product_check_report'")
+    expect(inner).toContain('Wait-MainWindow $firstProcess 60')
+    expect(inner).toContain("{ 'gui_early_exit' } else { 'gui_window' }")
   })
 
   it('fingerprints host credentials and installed binaries even when the guest fails', () => {

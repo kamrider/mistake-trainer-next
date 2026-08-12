@@ -84,7 +84,7 @@ a separate product-owner decision.
 1. Update the same semantic version in `package.json`, `src-tauri/Cargo.toml`, and
    `src-tauri/tauri.conf.json`.
 2. Run all repository gates and the unsigned installer smoke test on a clean Windows machine.
-   The smoke must report runtime readiness, create a real WebView2 window, keep it alive for
+   The smoke must report runtime readiness, create a real WebView2 window within 60 seconds, keep it alive for
    10 seconds, prove a second launch hands off to the first instance, and close without producing
    `startup-failure.json`.
    Local runs always execute inside Windows Sandbox. A production-identity installer smoke must
