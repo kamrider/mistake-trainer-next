@@ -84,15 +84,23 @@ a separate product-owner decision.
 1. Update the same semantic version in `package.json`, `src-tauri/Cargo.toml`, and
    `src-tauri/tauri.conf.json`.
 2. Run all repository gates and the unsigned installer smoke test on a clean Windows machine.
-   The smoke must report runtime readiness, create a real WebView2 window, keep it alive for
+   The smoke must report runtime readiness, create a real WebView2 window within 60 seconds, keep it alive for
    10 seconds, prove a second launch hands off to the first instance, and close without producing
    `startup-failure.json`.
    Local runs always execute inside Windows Sandbox. A production-identity installer smoke must
    never run directly on a developer desktop; if Sandbox is unavailable, use the ephemeral CI
    Windows runner. CI must set both `CI=true` and `MISTAKE_TRAINER_EPHEMERAL_WINDOWS=1`.
-   All guest installer, application, helper, and uninstaller processes are assigned before launch
-   to a kill-on-close Windows Job Object, so closing the terminal, Codex, or Sandbox cannot leave
-   an orphaned GUI. Cleanup is restricted to the current run's marked temporary directory.
+   Every installer, application, helper, and uninstaller process runs only inside the outer
+   ephemeral CI runner or Windows Sandbox isolation boundary. Do not add an inner Job Object:
+   real NSIS and installed Tauri processes manage child/job topology that fails under that extra
+   boundary. The smoke records every entry-process PID, terminates any survivor, and restricts
+   recursive cleanup to the current run's marked temporary directory. Closing the runner or
+   Sandbox remains the final containment boundary. Installer prerequisite discovery and command-line
+   self-checks use the disposable runner profile; only the real GUI launch is switched to the isolated
+   APPDATA/LOCALAPPDATA profile whose first-run data is asserted and removed.
+   A healthy locked first launch is allowed to leave the profile empty; the smoke must not require
+   `library.db` before the user unlocks or creates a library. Reinstall/uninstall preservation is
+   tested with random sentinel and library bytes created explicitly inside that isolated profile.
 3. Merge only reviewed changes to `main` and wait for the CI `push` run on that exact commit to
    complete successfully.
 4. Create and push an annotated `vX.Y.Z` tag from that current `main` commit.

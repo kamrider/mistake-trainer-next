@@ -5,18 +5,16 @@ import { describe, expect, it } from 'vitest'
 const script = (name: string) => readFileSync(resolve('scripts', name), 'utf8')
 
 describe('Windows installer smoke isolation', () => {
-  it('requires an explicitly ephemeral inner runner and a kill-on-close job', () => {
+  it('requires an explicitly ephemeral inner runner and tracks only launched processes', () => {
     const inner = script('windows-installer-smoke-inner.ps1')
-    const job = script('windows-job-object.ps1')
 
     expect(inner).toContain("$env:CI -ne 'true'")
     expect(inner).toContain("$env:MISTAKE_TRAINER_EPHEMERAL_WINDOWS -ne '1'")
-    expect(inner).toContain('New-KillOnCloseJob')
-    expect(inner).toContain('Start-ProcessInJob')
+    expect(inner).toContain('function Start-SmokeProcess')
+    expect(inner).toContain('$script:launchedProcesses.Add($process)')
+    expect(inner).not.toContain('Start-ProcessInJob')
+    expect(inner).not.toContain('New-KillOnCloseJob')
     expect(inner).not.toContain('Stop-Process -Name')
-    expect(job).toContain('JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE')
-    expect(job).toContain('CREATE_SUSPENDED')
-    expect(job).toContain('AssignProcessToJobObject')
   })
 
   it('routes local execution through Sandbox with disabled integration surfaces', () => {
@@ -52,8 +50,31 @@ describe('Windows installer smoke isolation', () => {
     expect(inner).toContain('Start-Sleep -Seconds 10')
     expect(inner).toContain('same-version reinstall')
     expect(inner).toContain('installer-preservation-sentinel.bin')
+    expect(inner).toContain("Join-Path $libraryPath 'library.db'")
+    expect(inner).toContain("Assert-Smoke (-not (Test-Path -LiteralPath $startupFailurePath")
+    expect(inner).not.toContain('first run did not create the isolated encrypted library')
     expect(inner).toContain('uninstall_data_preservation_failed')
-    expect(inner).toContain('$cleanupJob = New-KillOnCloseJob')
+    expect(inner).toContain('$install = Start-SmokeProcess')
+    expect(inner).toContain('$reinstall = Start-SmokeProcess')
+    expect(inner).toContain('$uninstall = Start-SmokeProcess')
+    expect(inner).not.toContain('$installerJob')
+    expect(inner).not.toContain('$cleanupJob')
+    expect(inner).toContain('$allowedFailureStages -ccontains $failureStage')
+    expect(inner).toContain('installer_smoke_$boundedStage')
+    expect(inner).toContain("if ($status -ne 'passed') { exit 1 }")
+    expect(inner).toMatch(/Write-Output 'Windows installer smoke passed'\s+exit 0/)
+    expect(inner).toContain("$failureStage = 'self_check_exit'")
+    expect(inner).toContain("$failureStage = 'self_check_report'")
+    expect(inner).toContain("$failureStage = 'product_check_exit'")
+    expect(inner).toContain("$failureStage = 'product_check_report'")
+    expect(inner.indexOf('$env:APPDATA = $isolatedAppData')).toBeGreaterThan(
+      inner.indexOf("$failureStage = 'product_check_ready'"),
+    )
+    expect(inner).toContain('Wait-MainWindow $firstProcess 60')
+    expect(inner).toContain('$firstProcess = Start-Process -FilePath $applicationPath -PassThru')
+    expect(inner).toContain('$script:launchedProcesses.Add($firstProcess)')
+    expect(inner).toContain('$second = Start-Process -FilePath $applicationPath -PassThru')
+    expect(inner).toContain("{ 'gui_early_exit' } else { 'gui_window' }")
   })
 
   it('fingerprints host credentials and installed binaries even when the guest fails', () => {
