@@ -77,7 +77,17 @@ jobs:
       - run: pnpm tauri build
       - name: Smoke test installed GUI and single instance
         shell: powershell
+        env:
+          CI: 'true'
+          MISTAKE_TRAINER_EPHEMERAL_WINDOWS: '1'
         run: .\scripts\windows-installer-smoke.ps1
+      - name: Upload bounded installer smoke failure result
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-x64-installer-smoke-failure
+          path: ${{ runner.temp }}\mistake-trainer-installer-result-x86_64\result.json
+          if-no-files-found: ignore
 
   windows-arm64-package:
     runs-on: windows-11-arm
@@ -109,7 +119,17 @@ jobs:
         run: cargo test --release --manifest-path src-tauri/Cargo.toml --test windows_compatibility --test startup_safety
       - name: Smoke test native ARM64 GUI and single instance
         shell: powershell
+        env:
+          CI: 'true'
+          MISTAKE_TRAINER_EPHEMERAL_WINDOWS: '1'
         run: .\scripts\windows-installer-smoke.ps1 -InstallerDirectory src-tauri\target\aarch64-pc-windows-msvc\release\bundle\nsis -ExpectedArchitecture arm64
+      - name: Upload bounded ARM64 installer smoke failure result
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-arm64-installer-smoke-failure
+          path: ${{ runner.temp }}\mistake-trainer-installer-result-arm64\result.json
+          if-no-files-found: ignore
 
   supabase:
     runs-on: ubuntu-24.04
