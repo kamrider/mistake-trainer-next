@@ -7,7 +7,8 @@ use mistake_trainer_next_lib::{
     },
     infrastructure::runtime::{SecretStore, initialize_local_library},
     modules::problems::{
-        AssetRole, CaptureAsset, CreateProblem, ProblemStatusFilter, create_problem,
+        AssetRole, CaptureAsset, CreateProblem, ProblemAnswerState, ProblemListInput,
+        ProblemReviewState, ProblemStatusFilter, create_problem,
     },
     modules::review::{
         BeginExamGrading, StartExamReview, begin_exam_grading, start_exam_review_queue,
@@ -121,8 +122,15 @@ fn commands_use_runtime_identity_instead_of_accepting_account_or_profile_ids() {
     let context = serde_json::to_value(library_context_for(&runtime)).expect("context json");
     let problems = serde_json::to_value(problem_list_for(
         &runtime,
-        ProblemStatusFilter::Active,
-        None,
+        ProblemListInput {
+            status: ProblemStatusFilter::Active,
+            search: None,
+            subjects: vec!["数学".to_owned()],
+            tags: vec![],
+            review_state: ProblemReviewState::Any,
+            answer_state: ProblemAnswerState::Any,
+        },
+        300,
     ))
     .expect("problem list json");
 
@@ -132,4 +140,29 @@ fn commands_use_runtime_identity_instead_of_accepting_account_or_profile_ids() {
     assert_eq!(problems["ok"], true);
     assert_eq!(problems["data"][0]["subject"], "数学");
     assert_eq!(problems["data"][0]["questionAssetCount"], 1);
+}
+
+#[test]
+fn problem_list_reports_invalid_filters_as_non_retryable() {
+    let directory = tempdir().expect("tempdir");
+    let runtime = initialize_local_library(directory.path(), &MemorySecretStore::default(), 100)
+        .expect("runtime");
+
+    let result = serde_json::to_value(problem_list_for(
+        &runtime,
+        ProblemListInput {
+            status: ProblemStatusFilter::Active,
+            search: Some("筛".repeat(101)),
+            subjects: vec![],
+            tags: vec![],
+            review_state: ProblemReviewState::Any,
+            answer_state: ProblemAnswerState::Any,
+        },
+        300,
+    ))
+    .expect("problem list json");
+
+    assert_eq!(result["ok"], false);
+    assert_eq!(result["error"]["code"], "problem_filter_invalid");
+    assert_eq!(result["error"]["retryable"], false);
 }

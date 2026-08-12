@@ -16,6 +16,14 @@
 6. End-to-end mistake tags: normalized 20-tag/30-character validation, subject/note/tag
    search, compact card chips, accessible keyboard editing, detail display, and atomic
    revision/outbox persistence.
+7. Six canonical `错因·` quick tags shared by problem and capture editors without replacing
+   free-form tags or introducing a second save path.
+8. Typed advanced filters for subject, tag, review state, answer state, and literal text search,
+   with removable UI chips and stable filter state across detail editing.
+9. Atomic bulk subject/tag editing for 1–100 validated active problems, including canonical
+   revision and outbox updates for each changed problem.
+10. Lazy local capture quality checks with non-blocking warnings, suggested reversible crops,
+    and an explicit keyboard-accessible four-corner perspective correction mode.
 
 ## Remaining release acceptance
 

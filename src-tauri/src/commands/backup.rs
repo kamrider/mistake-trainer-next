@@ -8,16 +8,23 @@ use tauri::{AppHandle, State};
 use uuid::Uuid;
 
 use crate::{
-    application::result::AppResult,
-    infrastructure::runtime::LibraryRuntime,
+    application::{library_inventory::LibraryRecoveryReason, result::AppResult},
+    commands::{
+        access::{LibraryAccessGate, recovery_reason_for},
+        storage::ApplicationControlRoot,
+    },
+    infrastructure::runtime::{KeyringSecretStore, LibraryRuntime, load_restore_credentials},
     modules::{
         backup::{
-            BackupError, BackupRestoreCandidate, BackupRestoreReceipt, BackupSummary,
-            create_backup, prepare_backup_restore, schedule_backup_restore, take_restore_receipt,
+            BackupError, BackupRestoreCandidate, BackupRestoreReceipt, BackupSummary, RestoreMode,
+            create_backup, prepare_backup_restore, schedule_backup_restore,
+            schedule_backup_restore_with_mode, take_restore_receipt,
         },
         capture_lan::CaptureLanManager,
     },
 };
+
+const LOCAL_LIBRARY_SERVICE: &str = "com.mistaketrainer.next.local-library";
 
 #[tauri::command]
 #[specta::specta]
@@ -79,6 +86,99 @@ pub async fn backup_prepare_restore(
 
 #[tauri::command]
 #[specta::specta]
+pub async fn backup_recovery_prepare(
+    gate: State<'_, LibraryAccessGate>,
+    control_root: State<'_, ApplicationControlRoot>,
+) -> Result<AppResult<Option<BackupRestoreCandidate>>, ()> {
+    if recovery_reason_for(&gate) != Some(LibraryRecoveryReason::LocalDataMissing) {
+        return Ok(AppResult::failure(
+            "backup_recovery_not_allowed",
+            "当前状态不允许从备份引导恢复。",
+            false,
+            Uuid::now_v7().to_string(),
+        ));
+    }
+    let application_root = control_root.0.clone();
+    let credentials =
+        match load_restore_credentials(&KeyringSecretStore::new(LOCAL_LIBRARY_SERVICE)) {
+            Ok(credentials) => credentials,
+            Err(_) => {
+                return Ok(AppResult::failure(
+                    "backup_recovery_credentials_failed",
+                    "无法读取当前 Windows 账户的资料库恢复凭据，请稍后重试。",
+                    true,
+                    Uuid::now_v7().to_string(),
+                ));
+            }
+        };
+    let worker = tauri::async_runtime::spawn_blocking(move || {
+        let source = rfd::FileDialog::new()
+            .set_title("选择要恢复的 Mistake Trainer 加密备份目录")
+            .pick_folder();
+        prepare_selected_package(
+            application_root,
+            &credentials.database_key,
+            &credentials.asset_key,
+            &credentials.account_id,
+            source,
+        )
+    });
+    Ok(match worker.await {
+        Ok(Ok(candidate)) => AppResult::success(candidate),
+        Ok(Err(error)) => backup_failure("backup_recovery_prepare_failed", &error),
+        Err(_) => backup_failure("backup_recovery_prepare_failed", &BackupError::Lock),
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn backup_recovery_restore(
+    app: AppHandle,
+    gate: State<'_, LibraryAccessGate>,
+    control_root: State<'_, ApplicationControlRoot>,
+    candidate_id: String,
+) -> Result<AppResult<bool>, ()> {
+    if recovery_reason_for(&gate) != Some(LibraryRecoveryReason::LocalDataMissing) {
+        return Ok(AppResult::failure(
+            "backup_recovery_not_allowed",
+            "当前状态不允许从备份引导恢复。",
+            false,
+            Uuid::now_v7().to_string(),
+        ));
+    }
+    let application_root = control_root.0.clone();
+    let credentials =
+        match load_restore_credentials(&KeyringSecretStore::new(LOCAL_LIBRARY_SERVICE)) {
+            Ok(credentials) => credentials,
+            Err(_) => {
+                return Ok(AppResult::failure(
+                    "backup_recovery_credentials_failed",
+                    "无法读取当前 Windows 账户的资料库恢复凭据，请稍后重试。",
+                    true,
+                    Uuid::now_v7().to_string(),
+                ));
+            }
+        };
+    let worker = tauri::async_runtime::spawn_blocking(move || {
+        schedule_backup_restore_with_mode(
+            &application_root,
+            &candidate_id,
+            &credentials.database_key,
+            &credentials.asset_key,
+            &credentials.account_id,
+            current_utc_millis(),
+            RestoreMode::BootstrapMissing,
+        )
+    });
+    Ok(match worker.await {
+        Ok(Ok(_)) => schedule_restore_restart(app),
+        Ok(Err(error)) => backup_failure("backup_recovery_restore_failed", &error),
+        Err(_) => backup_failure("backup_recovery_restore_failed", &BackupError::Lock),
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn backup_restore(
     app: AppHandle,
     state: State<'_, LibraryRuntime>,
@@ -110,26 +210,28 @@ pub async fn backup_restore(
         )
     });
     Ok(match worker.await {
-        Ok(Ok(_)) => {
-            let restart = std::thread::Builder::new()
-                .name("mistake-trainer-restore-restart".to_owned())
-                .spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(450));
-                    app.restart();
-                });
-            match restart {
-                Ok(_) => AppResult::success(true),
-                Err(_) => AppResult::failure(
-                    "backup_restore_restart_failed",
-                    "恢复任务已安全安排，但自动重启没有启动。请关闭并重新打开应用，恢复会在下次启动时继续。",
-                    false,
-                    Uuid::now_v7().to_string(),
-                ),
-            }
-        }
+        Ok(Ok(_)) => schedule_restore_restart(app),
         Ok(Err(error)) => backup_failure("backup_restore_failed", &error),
         Err(_) => backup_failure("backup_restore_failed", &BackupError::Lock),
     })
+}
+
+fn schedule_restore_restart(app: AppHandle) -> AppResult<bool> {
+    let restart = std::thread::Builder::new()
+        .name("mistake-trainer-restore-restart".to_owned())
+        .spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(450));
+            app.restart();
+        });
+    match restart {
+        Ok(_) => AppResult::success(true),
+        Err(_) => AppResult::failure(
+            "backup_restore_restart_failed",
+            "恢复任务已安全安排，但自动重启没有启动。请关闭并重新打开应用，恢复会在下次启动时继续。",
+            false,
+            Uuid::now_v7().to_string(),
+        ),
+    }
 }
 
 #[tauri::command]

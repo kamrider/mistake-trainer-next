@@ -36,6 +36,7 @@ import {
   type CaptureBatchSummary,
   type CaptureDraftSummary,
   type CaptureCropRecipe,
+  type CaptureQualityReport,
   type SubjectPreferences,
 } from '../../shared/api/bindings'
 import { normalizeAppResult } from '../../shared/api/normalize-result'
@@ -63,6 +64,10 @@ const draftSaveUnsaved = computed(() =>
   || draftSaveQueueState.value.retryRequired)
 const draftSaveRetryAvailable = computed(() => draftSaveQueueState.value.retryRequired)
 const commitMessage = ref('')
+const qualityReports = ref<Record<string, CaptureQualityReport>>({})
+const qualityErrors = ref<Record<string, string>>({})
+const qualityCheckingItemId = ref('')
+const qualityDismissedItemIds = ref<string[]>([])
 const subjectPreferences = ref<SubjectPreferences>({
   enabledSubjects: ['语文', '数学', '英语', '政治', '历史', '地理', '物理', '化学', '生物'],
   customSubjects: [],
@@ -336,7 +341,7 @@ async function openVisibleCropEditor(itemId: string) {
   const batchId = detail.value?.batch.id
   if (!batchId) {
     cropReturnFocus.clear()
-    await openCropEditor(itemId)
+    await openCropEditor(itemId, qualityCropSeed(itemId))
     return
   }
   cropReturnFocus.capture({
@@ -346,7 +351,7 @@ async function openVisibleCropEditor(itemId: string) {
       ? activeElement
       : undefined,
   })
-  await openCropEditor(itemId)
+  await openCropEditor(itemId, qualityCropSeed(itemId))
   if (!cropEditor.value) await cropReturnFocus.restore()
 }
 
@@ -514,6 +519,55 @@ async function loadDetail(batchId: string) {
   }
   catch {
     if (requestedDetailBatchId === batchId) showError('没有读取到这个采集批次，请返回后重试。')
+  }
+}
+
+function qualityCropSeed(itemId: string) {
+  const report = qualityReports.value[itemId]
+  if (!report) return undefined
+  return {
+    ...(report.suggestedCrop
+      ? {
+          initialRecipes: [{
+            rect: report.suggestedCrop,
+            perspectiveQuad: null,
+            rotationDegrees: 0,
+            outputMediaType: 'image/png',
+            maxEdge: 4096,
+            jpegQuality: 90,
+          }] satisfies CaptureCropRecipe[],
+        }
+      : {}),
+    suggestedRotationDegrees: report.suggestedRotationDegrees ?? 0,
+  }
+}
+
+async function checkCaptureQuality(itemId: string) {
+  const batchId = detail.value?.batch.id
+  if (!desktopAvailable || !batchId || qualityReports.value[itemId] || qualityCheckingItemId.value === itemId) return
+  qualityCheckingItemId.value = itemId
+  const remainingErrors = { ...qualityErrors.value }
+  delete remainingErrors[itemId]
+  qualityErrors.value = remainingErrors
+  try {
+    const result = normalizeAppResult(await commands.captureQualityCheck(batchId, itemId))
+    if (detail.value?.batch.id !== batchId) return
+    if (result.ok) qualityReports.value = { ...qualityReports.value, [itemId]: result.data }
+    else qualityErrors.value = { ...qualityErrors.value, [itemId]: result.error.userMessage }
+  }
+  catch {
+    if (detail.value?.batch.id === batchId) {
+      qualityErrors.value = { ...qualityErrors.value, [itemId]: '图片仍可继续使用，也可以稍后重新检查。' }
+    }
+  }
+  finally {
+    if (qualityCheckingItemId.value === itemId) qualityCheckingItemId.value = ''
+  }
+}
+
+function dismissCaptureQuality(itemId: string) {
+  if (!qualityDismissedItemIds.value.includes(itemId)) {
+    qualityDismissedItemIds.value = [...qualityDismissedItemIds.value, itemId]
   }
 }
 
@@ -695,6 +749,10 @@ watch(busy, (isBusy) => {
 watch(() => detail.value?.batch.id, (batchId) => {
   previewCache.clear()
   clearImportProgress()
+  qualityReports.value = {}
+  qualityErrors.value = {}
+  qualityCheckingItemId.value = ''
+  qualityDismissedItemIds.value = []
   if (batchId) draftSaveQueue.retainBatch(batchId)
   else draftSaveQueue.clear()
 }, { flush: 'sync' })
@@ -831,6 +889,10 @@ onBeforeUnmount(() => {
     :recognition-notice="recognitionNotice"
     :recognition-busy="recognitionBusy"
     :recognition-operation-busy="recognitionOperationBusy"
+    :quality-reports="qualityReports"
+    :quality-errors="qualityErrors"
+    :quality-checking-item-id="qualityCheckingItemId"
+    :quality-dismissed-item-ids="qualityDismissedItemIds"
     @create-batch="createBatch"
     @open-batch="openBatch"
     @back="closeDetail"
@@ -865,12 +927,16 @@ onBeforeUnmount(() => {
     @recognition-edit="openRecognitionCropEditor"
     @recognition-apply="applyRecognition"
     @recognition-revert="revertRecognition"
+    @quality-check="checkCaptureQuality"
+    @quality-dismiss="dismissCaptureQuality"
   />
   <CaptureCropEditor
     v-if="visibleCropEditor"
     :data-url="visibleCropEditor.dataUrl"
     :item-name="visibleCropEditor.itemName"
     :busy="busy"
+    :initial-recipes="visibleCropEditor.initialRecipes"
+    :suggested-rotation-degrees="visibleCropEditor.suggestedRotationDegrees"
     @close="closeVisibleCropEditor"
     @apply="applyVisibleCrop"
   />

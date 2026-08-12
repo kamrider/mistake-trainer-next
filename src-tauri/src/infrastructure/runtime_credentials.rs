@@ -9,10 +9,27 @@ const ASSET_KEY: &str = "asset-key";
 const ACCOUNT_ID: &str = "account-id";
 const DEVICE_ID: &str = "device-id";
 pub const LIBRARY_LOCK_STATE: &str = "library-lock-state";
+const LOCAL_CREDENTIAL_NAMES: [&str; 5] = [
+    DATABASE_KEY,
+    ASSET_KEY,
+    ACCOUNT_ID,
+    DEVICE_ID,
+    LIBRARY_LOCK_STATE,
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CredentialEnvelopeState {
+    Absent,
+    Complete,
+    Partial,
+}
 
 pub trait SecretStore: Send + Sync {
     fn get(&self, name: &str) -> Result<Option<String>, String>;
     fn set(&self, name: &str, value: &str) -> Result<(), String>;
+    fn delete(&self, _name: &str) -> Result<(), String> {
+        Err("secret deletion is not supported".to_owned())
+    }
 }
 
 pub struct KeyringSecretStore {
@@ -43,6 +60,23 @@ impl SecretStore for KeyringSecretStore {
             .set_password(value)
             .map_err(|error| error.to_string())
     }
+
+    fn delete(&self, name: &str) -> Result<(), String> {
+        let entry = self.entry(name)?;
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+}
+
+pub(super) fn delete_local_credential_envelope(
+    secrets: &dyn SecretStore,
+) -> Result<(), RuntimeError> {
+    for name in LOCAL_CREDENTIAL_NAMES {
+        secrets.delete(name).map_err(RuntimeError::SecretStore)?;
+    }
+    Ok(())
 }
 
 pub(crate) struct RestoreCredentials {
@@ -68,6 +102,47 @@ pub(super) fn library_is_locked(secrets: &dyn SecretStore) -> Result<bool, Runti
         Some("locked") => Ok(true),
         Some(_) => Err(RuntimeError::InvalidLibraryLockState),
     }
+}
+
+pub(super) fn inspect_local_credential_envelope(
+    secrets: &dyn SecretStore,
+) -> Result<CredentialEnvelopeState, RuntimeError> {
+    let database_key = secrets
+        .get(DATABASE_KEY)
+        .map_err(RuntimeError::SecretStore)?;
+    let asset_key = secrets.get(ASSET_KEY).map_err(RuntimeError::SecretStore)?;
+    let account_id = secrets.get(ACCOUNT_ID).map_err(RuntimeError::SecretStore)?;
+    let device_id = secrets.get(DEVICE_ID).map_err(RuntimeError::SecretStore)?;
+    let lock_state = secrets
+        .get(LIBRARY_LOCK_STATE)
+        .map_err(RuntimeError::SecretStore)?;
+
+    if database_key.is_none()
+        && asset_key.is_none()
+        && account_id.is_none()
+        && device_id.is_none()
+        && lock_state.is_none()
+    {
+        return Ok(CredentialEnvelopeState::Absent);
+    }
+
+    let core_is_valid = database_key.as_deref().and_then(decode_key).is_some()
+        && asset_key.as_deref().and_then(decode_key).is_some()
+        && account_id
+            .as_deref()
+            .and_then(|value| Uuid::parse_str(value).ok())
+            .is_some();
+    let device_is_valid = device_id
+        .as_deref()
+        .map(|value| Uuid::parse_str(value).is_ok())
+        .unwrap_or(true);
+    let lock_is_valid = matches!(lock_state.as_deref(), None | Some("locked" | "unlocked"));
+
+    Ok(if core_is_valid && device_is_valid && lock_is_valid {
+        CredentialEnvelopeState::Complete
+    } else {
+        CredentialEnvelopeState::Partial
+    })
 }
 
 pub(super) fn set_library_locked(

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Crop, GripVertical, Image as ImageIcon, RotateCcw, Trash2 } from '@lucide/vue'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { CaptureItemSummary } from '../../../shared/api/bindings'
+import type { CaptureItemSummary, CaptureQualityIssueCode } from '../../../shared/api/bindings'
 
 const props = defineProps<{
   item: CaptureItemSummary
@@ -11,6 +11,7 @@ const props = defineProps<{
   variant?: 'compact' | 'gallery' | 'filmstrip'
   active?: boolean
   cropable?: boolean
+  qualityIssue?: CaptureQualityIssueCode | undefined
 }>()
 
 const emit = defineEmits<{
@@ -81,6 +82,10 @@ onBeforeUnmount(() => observer?.disconnect())
       >
         <GripVertical :size="15" />
       </span>
+      <span
+        v-if="qualityIssue"
+        class="quality-badge"
+      >需检查</span>
     </div>
     <div
       class="thumb-copy"
@@ -142,6 +147,7 @@ onBeforeUnmount(() => observer?.disconnect())
 .thumb-media { position: relative; display: grid; height: 60px; overflow: hidden; place-items: center; color: #7a8b84; border-radius: 8px; background: var(--sand-paper); }
 .thumb-media img { width: 100%; height: 100%; object-fit: cover; }
 .drag-mark { position: absolute; right: 3px; bottom: 3px; display: grid; width: 22px; height: 22px; place-items: center; color: var(--paper); border-radius: 6px; background: rgba(33,51,45,.72); }
+.quality-badge{position:absolute;top:4px;right:4px;padding:3px 6px;color:var(--paper);border-radius:999px;background:rgba(185,88,63,.92);font-size:12px;font-weight:800;letter-spacing:.04em}
 .thumb-copy { display: grid; min-width: 0; gap: 4px; }
 .thumb-copy strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .thumb-copy small { color: var(--ink-muted); font-size: 12px; }

@@ -24,6 +24,25 @@ pub struct SubjectActivity {
 
 #[derive(Clone, Debug, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
+pub struct WeakAreaSummary {
+    pub label: String,
+    pub kind: String,
+    pub reviewed_count: i32,
+    pub lapse_count: i32,
+    pub lapse_rate: f64,
+    pub average_duration_ms: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DueForecastDay {
+    pub local_date: String,
+    pub due_count: i32,
+    pub overdue_count: i32,
+}
+
+#[derive(Clone, Debug, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
 pub struct ReportSummary {
     pub active_problem_count: i32,
     pub due_problem_count: i32,
@@ -33,6 +52,8 @@ pub struct ReportSummary {
     pub current_streak_days: i32,
     pub daily_activity: Vec<DailyActivity>,
     pub subject_activity: Vec<SubjectActivity>,
+    pub weak_areas: Vec<WeakAreaSummary>,
+    pub due_forecast: Vec<DueForecastDay>,
 }
 
 #[derive(Clone, Debug, Serialize, Type)]
@@ -90,8 +111,15 @@ pub fn report_summary(
     account_id: &str,
     profile_id: &str,
     now_utc_ms: i64,
+    utc_offset_minutes: i32,
 ) -> Result<ReportSummary, InsightsError> {
-    read_repository::report_summary(connection, account_id, profile_id, now_utc_ms)
+    read_repository::report_summary(
+        connection,
+        account_id,
+        profile_id,
+        now_utc_ms,
+        utc_offset_minutes,
+    )
 }
 
 pub fn settings_overview(

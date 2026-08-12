@@ -81,12 +81,103 @@ impl ProblemStatusFilter {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ProblemReviewState {
+    Any,
+    NeverReviewed,
+    Due,
+    RecentlyForgotten,
+}
+
+impl ProblemReviewState {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Any => "any",
+            Self::NeverReviewed => "never_reviewed",
+            Self::Due => "due",
+            Self::RecentlyForgotten => "recently_forgotten",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ProblemAnswerState {
+    Any,
+    HasAnswer,
+    MissingAnswer,
+}
+
+impl ProblemAnswerState {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Any => "any",
+            Self::HasAnswer => "has_answer",
+            Self::MissingAnswer => "missing_answer",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ProblemListInput {
+    pub status: ProblemStatusFilter,
+    pub search: Option<String>,
+    pub subjects: Vec<String>,
+    pub tags: Vec<String>,
+    pub review_state: ProblemReviewState,
+    pub answer_state: ProblemAnswerState,
+}
+
+impl ProblemListInput {
+    fn validated(mut self) -> Result<Self, ProblemUseCaseError> {
+        self.search = match self.search {
+            Some(search) => {
+                let search = search.trim().to_owned();
+                if search.chars().count() > 100 {
+                    return Err(ProblemUseCaseError::InvalidQuery);
+                }
+                (!search.is_empty()).then_some(search)
+            }
+            None => None,
+        };
+        self.subjects = validate_query_values(self.subjects)?;
+        self.tags = validate_query_values(self.tags)?;
+        Ok(self)
+    }
+}
+
+fn validate_query_values(values: Vec<String>) -> Result<Vec<String>, ProblemUseCaseError> {
+    if values.len() > 20 {
+        return Err(ProblemUseCaseError::InvalidQuery);
+    }
+    let mut seen = BTreeSet::new();
+    values
+        .into_iter()
+        .map(|value| value.trim().to_owned())
+        .map(|value| {
+            if value.is_empty() || value.chars().count() > 30 {
+                Err(ProblemUseCaseError::InvalidQuery)
+            } else {
+                Ok(value)
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(|values| {
+            values
+                .into_iter()
+                .filter(|value| seen.insert(value.clone()))
+                .collect()
+        })
+}
+
 #[derive(Clone, Debug)]
 pub struct ProblemListQuery {
     pub account_id: String,
     pub profile_id: String,
-    pub status: ProblemStatusFilter,
-    pub search: Option<String>,
+    pub now_utc_ms: i64,
+    pub input: ProblemListInput,
 }
 
 #[derive(Clone, Debug, Serialize, Type)]
@@ -174,10 +265,16 @@ pub enum ProblemUseCaseError {
     InvalidText,
     #[error("problem tags exceed the allowed count or length")]
     InvalidTags,
+    #[error("problem list filters exceed the allowed count or length")]
+    InvalidQuery,
     #[error("problem time limit must be between 1 and 86400 seconds")]
     InvalidTimeLimit,
     #[error("at least one problem must be selected")]
     EmptySelection,
+    #[error("problem selection must contain between 1 and 100 unique identifiers")]
+    InvalidSelection,
+    #[error("at least one metadata change must be provided")]
+    EmptyChange,
     #[error("asset encryption failed")]
     Crypto(#[from] AssetCryptoError),
     #[error("asset file operation failed")]

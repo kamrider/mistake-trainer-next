@@ -63,7 +63,7 @@ fn report_and_settings_are_profile_scoped_and_derived_from_real_events() {
         params![other_profile.id, problem.id, now],
     ).unwrap();
 
-    let report = report_summary(&connection, "account-1", &profile.id, now).unwrap();
+    let report = report_summary(&connection, "account-1", &profile.id, now, 0).unwrap();
     assert_eq!(report.active_problem_count, 1);
     assert_eq!(report.due_problem_count, 1);
     assert_eq!(report.review_count, 1);
@@ -236,4 +236,184 @@ fn dashboard_is_profile_scoped_uses_local_days_and_real_capture_backlog() {
         dashboard_overview(&connection, "account-1", &profile.id, now_utc_ms, 841),
         Err(InsightsError::InvalidTimezoneOffset)
     ));
+}
+
+#[test]
+fn report_surfaces_evidence_based_weak_areas_and_seven_local_due_days() {
+    const DAY_MS: i64 = 86_400_000;
+    const HOUR_MS: i64 = 3_600_000;
+    let directory = tempdir().unwrap();
+    let mut connection = open_encrypted_database(
+        &directory.path().join("library.db"),
+        "insights-forecast-key",
+    )
+    .unwrap();
+    run_migrations(&mut connection).unwrap();
+    let profile = create_profile(
+        &mut connection,
+        CreateProfile {
+            account_id: "account-1".to_owned(),
+            name: "小树".to_owned(),
+            now_utc_ms: 10,
+        },
+    )
+    .unwrap();
+    let other_profile = create_profile(
+        &mut connection,
+        CreateProfile {
+            account_id: "account-1".to_owned(),
+            name: "另一档案".to_owned(),
+            now_utc_ms: 11,
+        },
+    )
+    .unwrap();
+    let math = create_problem(
+        &mut connection,
+        &directory.path().join("assets"),
+        &[9_u8; 32],
+        CreateProblem {
+            account_id: "account-1".to_owned(),
+            profile_id: profile.id.clone(),
+            subject: "数学".to_owned(),
+            note: String::new(),
+            assets: vec![CaptureAsset {
+                role: AssetRole::Question,
+                media_type: "image/png".to_owned(),
+                bytes: b"weak-math".to_vec(),
+            }],
+            now_utc_ms: 20,
+        },
+    )
+    .unwrap();
+    let physics = create_problem(
+        &mut connection,
+        &directory.path().join("assets"),
+        &[9_u8; 32],
+        CreateProblem {
+            account_id: "account-1".to_owned(),
+            profile_id: profile.id.clone(),
+            subject: "物理".to_owned(),
+            note: String::new(),
+            assets: vec![CaptureAsset {
+                role: AssetRole::Question,
+                media_type: "image/png".to_owned(),
+                bytes: b"weak-physics".to_vec(),
+            }],
+            now_utc_ms: 21,
+        },
+    )
+    .unwrap();
+    let future = create_problem(
+        &mut connection,
+        &directory.path().join("assets"),
+        &[9_u8; 32],
+        CreateProblem {
+            account_id: "account-1".to_owned(),
+            profile_id: profile.id.clone(),
+            subject: "英语".to_owned(),
+            note: String::new(),
+            assets: vec![CaptureAsset {
+                role: AssetRole::Question,
+                media_type: "image/png".to_owned(),
+                bytes: b"weak-future".to_vec(),
+            }],
+            now_utc_ms: 22,
+        },
+    )
+    .unwrap();
+    connection
+        .execute(
+            "UPDATE problems SET tags_json = '[\"错因·计算失误\"]' WHERE id = ?1",
+            [&math.id],
+        )
+        .unwrap();
+
+    let offset_minutes = 8 * 60;
+    let today_start_utc_ms = DAY_MS - 8 * HOUR_MS;
+    let now_utc_ms = today_start_utc_ms + 12 * HOUR_MS;
+    for (id, problem_id, rating, duration, age) in [
+        ("math-1", math.id.as_str(), "again", 1_000, 5),
+        ("math-2", math.id.as_str(), "again", 2_000, 4),
+        ("math-3", math.id.as_str(), "good", 3_000, 3),
+        ("physics-1", physics.id.as_str(), "again", 4_000, 2),
+        ("physics-2", physics.id.as_str(), "good", 6_000, 1),
+    ] {
+        connection
+            .execute(
+                "INSERT INTO review_events(id, account_id, profile_id, problem_id, device_id, rating, duration_ms, occurred_at_utc_ms, algorithm_version, parameter_version)
+                 VALUES(?1, 'account-1', ?2, ?3, 'device', ?4, ?5, ?6, 'fsrs-6', 'default')",
+                params![id, profile.id, problem_id, rating, duration, now_utc_ms - age * HOUR_MS],
+            )
+            .unwrap();
+    }
+    for (problem_id, due_at) in [
+        (math.id.as_str(), today_start_utc_ms - HOUR_MS),
+        (physics.id.as_str(), today_start_utc_ms + HOUR_MS),
+        (future.id.as_str(), today_start_utc_ms + DAY_MS + HOUR_MS),
+    ] {
+        connection
+            .execute(
+                "INSERT INTO schedule_states(problem_id, due_at_utc_ms, stability, difficulty, last_reviewed_at_utc_ms, algorithm_version, parameter_version, rebuilt_at_utc_ms)
+                 VALUES(?1, ?2, 1, 5, NULL, 'fsrs-6', 'default', ?3)",
+                params![problem_id, due_at, now_utc_ms],
+            )
+            .unwrap();
+    }
+    let other = create_problem(
+        &mut connection,
+        &directory.path().join("assets"),
+        &[9_u8; 32],
+        CreateProblem {
+            account_id: "account-1".to_owned(),
+            profile_id: other_profile.id,
+            subject: "数学".to_owned(),
+            note: String::new(),
+            assets: vec![CaptureAsset {
+                role: AssetRole::Question,
+                media_type: "image/png".to_owned(),
+                bytes: b"weak-other".to_vec(),
+            }],
+            now_utc_ms: 23,
+        },
+    )
+    .unwrap();
+    connection
+        .execute(
+            "INSERT INTO schedule_states(problem_id, due_at_utc_ms, stability, difficulty, last_reviewed_at_utc_ms, algorithm_version, parameter_version, rebuilt_at_utc_ms)
+             VALUES(?1, ?2, 1, 5, NULL, 'fsrs-6', 'default', ?3)",
+            params![other.id, today_start_utc_ms + HOUR_MS, now_utc_ms],
+        )
+        .unwrap();
+
+    let report = report_summary(
+        &connection,
+        "account-1",
+        &profile.id,
+        now_utc_ms,
+        offset_minutes,
+    )
+    .unwrap();
+
+    assert_eq!(report.weak_areas.len(), 3);
+    assert_eq!(report.weak_areas[0].lapse_rate, 2.0 / 3.0);
+    let reason = report
+        .weak_areas
+        .iter()
+        .find(|area| area.kind == "reason")
+        .expect("reason weakness");
+    assert_eq!(reason.label, "错因·计算失误");
+    assert_eq!(reason.reviewed_count, 3);
+    assert_eq!(reason.lapse_count, 2);
+    assert_eq!(reason.average_duration_ms, 2_000.0);
+    assert_eq!(report.due_forecast.len(), 7);
+    assert_eq!(report.due_forecast[0].local_date, "1970-01-02");
+    assert_eq!(report.due_forecast[0].due_count, 1);
+    assert_eq!(report.due_forecast[0].overdue_count, 1);
+    assert_eq!(report.due_forecast[1].local_date, "1970-01-03");
+    assert_eq!(report.due_forecast[1].due_count, 1);
+    assert!(
+        report.due_forecast[1..]
+            .iter()
+            .all(|day| day.overdue_count == 0)
+    );
 }

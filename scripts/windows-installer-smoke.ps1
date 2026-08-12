@@ -1,202 +1,57 @@
 [CmdletBinding()]
 param(
   [string]$InstallerDirectory,
-  [ValidateSet('x86_64', 'arm64')]
-  [string]$ExpectedArchitecture = 'x86_64'
+  [ValidateSet('x86_64', 'arm64')][string]$ExpectedArchitecture = 'x86_64'
 )
-
 $ErrorActionPreference = 'Stop'
-
 if ([string]::IsNullOrWhiteSpace($InstallerDirectory)) {
   $InstallerDirectory = Join-Path $PSScriptRoot '..\src-tauri\target\release\bundle\nsis'
 }
-
-function Assert-Smoke {
-  param([bool]$Condition, [string]$Message)
-  if (-not $Condition) {
-    throw "Windows installer smoke failed: $Message"
-  }
-}
-
-function Wait-ForProcessExit {
-  param(
-    [System.Diagnostics.Process]$Process,
-    [int]$TimeoutSeconds
-  )
-  $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
-  do {
-    $Process.Refresh()
-    if ($Process.HasExited) {
-      return $true
-    }
-    Start-Sleep -Milliseconds 250
-  } while ([DateTime]::UtcNow -lt $deadline)
-  $Process.Refresh()
-  return $Process.HasExited
-}
-
-function Wait-ForMainWindow {
-  param(
-    [System.Diagnostics.Process]$Process,
-    [int]$TimeoutSeconds
-  )
-  $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
-  do {
-    $Process.Refresh()
-    if ($Process.HasExited) {
-      return $false
-    }
-    if ($Process.MainWindowHandle -ne [IntPtr]::Zero) {
-      return $true
-    }
-    Start-Sleep -Milliseconds 250
-  } while ([DateTime]::UtcNow -lt $deadline)
-  return $false
-}
-
 $resolvedInstallerDirectory = (Resolve-Path -LiteralPath $InstallerDirectory).Path
 $tauriConfigurationPath = Join-Path $PSScriptRoot '..\src-tauri\tauri.conf.json'
 $tauriConfiguration = Get-Content -LiteralPath $tauriConfigurationPath -Raw | ConvertFrom-Json
 $installerArchitecture = if ($ExpectedArchitecture -eq 'arm64') { 'arm64' } else { 'x64' }
 $expectedInstallerName = "$($tauriConfiguration.productName)_$($tauriConfiguration.version)_$installerArchitecture-setup.exe"
 $installers = @(Get-ChildItem -LiteralPath $resolvedInstallerDirectory -File -Filter $expectedInstallerName)
-Assert-Smoke ($installers.Count -eq 1) "expected exactly one $expectedInstallerName in $resolvedInstallerDirectory; found $($installers.Count)."
+if ($installers.Count -ne 1) { throw "Expected exactly one $expectedInstallerName; found $($installers.Count)." }
+$runId = [guid]::NewGuid().ToString('N')
 
-$runnerTemp = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
-$smokeRoot = Join-Path $runnerTemp "mistake-trainer-installer-smoke-$([guid]::NewGuid().ToString('N'))"
-$installRoot = Join-Path $smokeRoot 'installed'
-$selfCheckPath = Join-Path $smokeRoot 'windows-self-check.json'
-$productCheckPath = Join-Path $smokeRoot 'windows-product-check.json'
-$productCheckScratch = Join-Path $smokeRoot 'product-check-scratch'
-$isolatedAppData = Join-Path $smokeRoot 'appdata'
-$isolatedLocalAppData = Join-Path $smokeRoot 'localappdata'
-$startupFailurePath = Join-Path $isolatedAppData 'com.mistaketrainer.next\startup-failure.json'
-New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
-New-Item -ItemType Directory -Path $productCheckScratch -Force | Out-Null
-New-Item -ItemType Directory -Path $isolatedAppData -Force | Out-Null
-New-Item -ItemType Directory -Path $isolatedLocalAppData -Force | Out-Null
-
-$installedExecutable = $null
-$uninstaller = $null
-$firstProcess = $null
-$secondProcess = $null
-$originalAppData = $env:APPDATA
-$originalLocalAppData = $env:LOCALAPPDATA
-try {
-  $installProcess = Start-Process `
-    -FilePath $installers[0].FullName `
-    -ArgumentList @('/S', "/D=$installRoot") `
-    -Wait `
-    -PassThru
-  Assert-Smoke ($installProcess.ExitCode -eq 0) "installer exited with code $($installProcess.ExitCode)."
-
-  $applicationCandidates = @(
-    Get-ChildItem -LiteralPath $installRoot -Recurse -File -Filter '*.exe' |
-      Where-Object { $_.Name -notmatch '^(unins|uninstall)' }
-  )
-  Assert-Smoke ($applicationCandidates.Count -eq 1) "expected exactly one installed application executable; found $($applicationCandidates.Count)."
-  $installedExecutable = $applicationCandidates[0]
-
-  $selfCheckProcess = Start-Process `
-    -FilePath $installedExecutable.FullName `
-    -ArgumentList @('--windows-self-check', $selfCheckPath) `
-    -Wait `
-    -PassThru
-  Assert-Smoke ($selfCheckProcess.ExitCode -eq 0) "installed self-check exited with code $($selfCheckProcess.ExitCode)."
-  Assert-Smoke (Test-Path -LiteralPath $selfCheckPath -PathType Leaf) 'self-check JSON was not created.'
-
-  $selfCheck = Get-Content -LiteralPath $selfCheckPath -Raw | ConvertFrom-Json
-  Assert-Smoke ($selfCheck.schemaVersion -eq 2) 'unexpected self-check schema version.'
-  Assert-Smoke ($selfCheck.ready -eq $true) 'installed runtime did not report ready.'
-  Assert-Smoke (@($selfCheck.failureCodes).Count -eq 0) "self-check reported failures: $($selfCheck.failureCodes -join ', ')."
-  Assert-Smoke ($selfCheck.windows.processArchitecture -eq $ExpectedArchitecture) "installed process architecture was $($selfCheck.windows.processArchitecture), expected $ExpectedArchitecture."
-  Assert-Smoke ($selfCheck.windows.buildNumber -ge 17763) "Windows build $($selfCheck.windows.buildNumber) is below 17763."
-  Assert-Smoke (@('supported', 'extended') -contains $selfCheck.windows.supportLevel) "support level was $($selfCheck.windows.supportLevel)."
-  Assert-Smoke (-not [string]::IsNullOrWhiteSpace($selfCheck.windows.webview2Version)) 'WebView2 runtime version was not detected.'
-
-  $productCheckProcess = Start-Process `
-    -FilePath $installedExecutable.FullName `
-    -ArgumentList @('--windows-product-check', $productCheckPath, $productCheckScratch) `
-    -Wait `
-    -PassThru
-  Assert-Smoke ($productCheckProcess.ExitCode -eq 0) "installed product check exited with code $($productCheckProcess.ExitCode)."
-  Assert-Smoke (Test-Path -LiteralPath $productCheckPath -PathType Leaf) 'product-check JSON was not created.'
-
-  $productCheck = Get-Content -LiteralPath $productCheckPath -Raw | ConvertFrom-Json
-  Assert-Smoke ($productCheck.schemaVersion -eq 1) 'unexpected product-check schema version.'
-  Assert-Smoke ($productCheck.ready -eq $true) 'installed product lifecycle did not report ready.'
-  Assert-Smoke (@($productCheck.failureCodes).Count -eq 0) "product check reported failures: $($productCheck.failureCodes -join ', ')."
-  Assert-Smoke ($productCheck.checks.encryptedLibrary -eq $true) 'encrypted library check did not pass.'
-  Assert-Smoke ($productCheck.checks.problemRoundTrip -eq $true) 'problem and encrypted image round trip did not pass.'
-  Assert-Smoke ($productCheck.checks.reviewRoundTrip -eq $true) 'review submission round trip did not pass.'
-  Assert-Smoke ($productCheck.checks.backupValidation -eq $true) 'encrypted backup validation did not pass.'
-  Assert-Smoke ($productCheck.checks.libraryReopen -eq $true) 'encrypted library reopen did not pass.'
-  Assert-Smoke (@(Get-ChildItem -LiteralPath $productCheckScratch -Force).Count -eq 0) 'product check left data in its scratch directory.'
-
-  $env:APPDATA = $isolatedAppData
-  $env:LOCALAPPDATA = $isolatedLocalAppData
-
-  $firstProcess = Start-Process -FilePath $installedExecutable.FullName -PassThru
-  Assert-Smoke (Wait-ForMainWindow -Process $firstProcess -TimeoutSeconds 20) 'installed GUI did not create a main window within 20 seconds.'
-  Start-Sleep -Seconds 10
-  $firstProcess.Refresh()
-  Assert-Smoke (-not $firstProcess.HasExited) 'installed GUI exited during the 10-second stability window.'
-
-  $secondProcess = Start-Process -FilePath $installedExecutable.FullName -PassThru
-  Assert-Smoke (Wait-ForProcessExit -Process $secondProcess -TimeoutSeconds 10) 'second launch did not hand off to the existing instance within 10 seconds.'
-  Assert-Smoke ($secondProcess.ExitCode -eq 0) "second launch exited with code $($secondProcess.ExitCode)."
-  $firstProcess.Refresh()
-  Assert-Smoke (-not $firstProcess.HasExited) 'first instance exited after the second-launch handoff.'
-
-  Assert-Smoke ($firstProcess.CloseMainWindow()) 'main window did not accept a normal close request.'
-  Assert-Smoke (Wait-ForProcessExit -Process $firstProcess -TimeoutSeconds 10) 'installed GUI did not exit after its main window closed.'
-  Assert-Smoke ($firstProcess.ExitCode -eq 0) "installed GUI exited with code $($firstProcess.ExitCode)."
-  Assert-Smoke (-not (Test-Path -LiteralPath $startupFailurePath -PathType Leaf)) 'healthy GUI launch created startup-failure.json.'
-
-  $uninstallers = @(
-    Get-ChildItem -LiteralPath $installRoot -Recurse -File -Filter '*.exe' |
-      Where-Object { $_.Name -match '^(unins|uninstall)' }
-  )
-  Assert-Smoke ($uninstallers.Count -eq 1) "expected exactly one uninstaller; found $($uninstallers.Count)."
-  $uninstaller = $uninstallers[0]
-  $uninstallProcess = Start-Process `
-    -FilePath $uninstaller.FullName `
-    -ArgumentList @('/S') `
-    -Wait `
-    -PassThru
-  Assert-Smoke ($uninstallProcess.ExitCode -eq 0) "uninstaller exited with code $($uninstallProcess.ExitCode)."
-
-  Start-Sleep -Milliseconds 500
-  Assert-Smoke (-not (Test-Path -LiteralPath $installedExecutable.FullName -PathType Leaf)) 'application executable remained after uninstall.'
-  Write-Output "Windows installer smoke passed: $($installers[0].Name)"
-}
-finally {
-  foreach ($process in @($secondProcess, $firstProcess)) {
-    if ($process) {
-      try {
-        $process.Refresh()
-        if (-not $process.HasExited) {
-          Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-        }
-      }
-      catch {
-        Write-Warning 'Smoke process cleanup did not complete.'
+if ($env:CI -eq 'true') {
+  if ($env:MISTAKE_TRAINER_EPHEMERAL_WINDOWS -ne '1') {
+    throw 'CI installer smoke requires MISTAKE_TRAINER_EPHEMERAL_WINDOWS=1.'
+  }
+  $runnerTemp = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }
+  $runnerTemp = (Resolve-Path -LiteralPath $runnerTemp).Path.TrimEnd('\')
+  $selectionRoot = Join-Path $runnerTemp "mistake-trainer-installer-selection-$runId"
+  $resultRoot = Join-Path $runnerTemp "mistake-trainer-installer-result-$ExpectedArchitecture"
+  if (Test-Path -LiteralPath $resultRoot) {
+    $oldResult = Get-Item -LiteralPath $resultRoot -Force
+    if (-not $oldResult.PSIsContainer -or ($oldResult.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or (Split-Path -Parent $oldResult.FullName) -cne $runnerTemp -or $oldResult.Name -cne "mistake-trainer-installer-result-$ExpectedArchitecture") {
+      throw 'Refusing to replace an unsafe installer smoke result root.'
+    }
+    Remove-Item -LiteralPath $oldResult.FullName -Recurse -Force
+  }
+  New-Item -ItemType Directory -Path $selectionRoot, $resultRoot | Out-Null
+  $succeeded = $false
+  try {
+    Copy-Item -LiteralPath $installers[0].FullName -Destination $selectionRoot
+    & (Join-Path $PSScriptRoot 'windows-installer-smoke-inner.ps1') -InstallerDirectory $selectionRoot -ExpectedArchitecture $ExpectedArchitecture -RunId $runId -ResultDirectory $resultRoot
+    if ($LASTEXITCODE -ne 0) { throw 'Ephemeral installer smoke failed.' }
+    $succeeded = $true
+  }
+  finally {
+    $selectionItem = Get-Item -LiteralPath $selectionRoot -Force -ErrorAction SilentlyContinue
+    if ($selectionItem -and $selectionItem.PSIsContainer -and ($selectionItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0 -and (Split-Path -Parent $selectionItem.FullName) -ceq $runnerTemp -and $selectionItem.Name -ceq "mistake-trainer-installer-selection-$runId") {
+      Remove-Item -LiteralPath $selectionItem.FullName -Recurse -Force
+    }
+    if ($succeeded) {
+      $resultItem = Get-Item -LiteralPath $resultRoot -Force -ErrorAction SilentlyContinue
+      if ($resultItem -and $resultItem.PSIsContainer -and ($resultItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0 -and (Split-Path -Parent $resultItem.FullName) -ceq $runnerTemp -and $resultItem.Name -ceq "mistake-trainer-installer-result-$ExpectedArchitecture") {
+        Remove-Item -LiteralPath $resultItem.FullName -Recurse -Force
       }
     }
   }
-  $env:APPDATA = $originalAppData
-  $env:LOCALAPPDATA = $originalLocalAppData
-  if ($uninstaller -and (Test-Path -LiteralPath $uninstaller.FullName -PathType Leaf)) {
-    try {
-      Start-Process -FilePath $uninstaller.FullName -ArgumentList @('/S') -Wait | Out-Null
-    }
-    catch {
-      Write-Warning 'Cleanup uninstaller did not complete.'
-    }
-  }
-  $resolvedSmokeRoot = [System.IO.Path]::GetFullPath($smokeRoot)
-  $resolvedRunnerTemp = [System.IO.Path]::GetFullPath($runnerTemp).TrimEnd('\') + '\'
-  if ($resolvedSmokeRoot.StartsWith($resolvedRunnerTemp, [System.StringComparison]::OrdinalIgnoreCase)) {
-    Remove-Item -LiteralPath $resolvedSmokeRoot -Recurse -Force -ErrorAction SilentlyContinue
-  }
+  exit 0
 }
+
+& (Join-Path $PSScriptRoot 'windows-installer-smoke-sandbox.ps1') -InstallerPath $installers[0].FullName -ExpectedArchitecture $ExpectedArchitecture -RunId $runId

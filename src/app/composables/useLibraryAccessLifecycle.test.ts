@@ -10,12 +10,14 @@ function deferred<T>() {
 }
 
 const unlocked: LibraryAccessStatus = {
-  locked: false,
+  state: 'unlocked',
   trustedWindowsAccount: true,
+  recoveryReason: null,
 }
 const locked: LibraryAccessStatus = {
-  locked: true,
+  state: 'locked',
   trustedWindowsAccount: true,
+  recoveryReason: null,
 }
 
 describe('useLibraryAccessLifecycle', () => {
@@ -26,6 +28,7 @@ describe('useLibraryAccessLifecycle', () => {
     const lifecycle = useLibraryAccessLifecycle({
       desktopRuntime: true,
       checkAccess,
+      retry: vi.fn(),
       unlock: vi.fn(),
       initializeWorkspace,
     })
@@ -48,6 +51,7 @@ describe('useLibraryAccessLifecycle', () => {
     const lifecycle = useLibraryAccessLifecycle({
       desktopRuntime: true,
       checkAccess: vi.fn().mockResolvedValue(success(locked)),
+      retry: vi.fn(),
       unlock: vi.fn(),
       initializeWorkspace,
     })
@@ -59,33 +63,32 @@ describe('useLibraryAccessLifecycle', () => {
     expect(lifecycle.workspaceInitialized.value).toBe(false)
   })
 
-  it('classifies a storage failure and permits a later successful retry', async () => {
-    const checkAccess = vi.fn()
-      .mockResolvedValueOnce(failure(
-        'LIBRARY_STORAGE_UNAVAILABLE',
-        '资料库磁盘尚未连接。',
-        true,
-        'diag-storage',
-      ))
-      .mockResolvedValueOnce(success(unlocked))
+  it('keeps recovery fail-closed and restarts for a fresh startup probe', async () => {
+    const checkAccess = vi.fn().mockResolvedValue(success({
+      state: 'recovery_required',
+      trustedWindowsAccount: true,
+      recoveryReason: 'storage_disconnected',
+    }))
+    const retry = vi.fn().mockResolvedValue(success(true))
     const initializeWorkspace = vi.fn().mockResolvedValue(undefined)
     const lifecycle = useLibraryAccessLifecycle({
       desktopRuntime: true,
       checkAccess,
+      retry,
       unlock: vi.fn(),
       initializeWorkspace,
     })
 
     await lifecycle.checkLibraryAccess()
-    expect(lifecycle.phase.value).toBe('error')
-    expect(lifecycle.errorReason.value).toBe('storage')
-    expect(lifecycle.errorMessage.value).toBe('资料库磁盘尚未连接。')
+    expect(lifecycle.phase.value).toBe('recovery')
+    expect(lifecycle.recoveryReason.value).toBe('storage_disconnected')
     expect(initializeWorkspace).not.toHaveBeenCalled()
 
-    await lifecycle.checkLibraryAccess()
-    expect(checkAccess).toHaveBeenCalledTimes(2)
-    expect(initializeWorkspace).toHaveBeenCalledOnce()
-    expect(lifecycle.phase.value).toBe('unlocked')
+    await lifecycle.retryLibraryAccess()
+    expect(checkAccess).toHaveBeenCalledOnce()
+    expect(retry).toHaveBeenCalledOnce()
+    expect(initializeWorkspace).not.toHaveBeenCalled()
+    expect(lifecycle.phase.value).toBe('restarting')
   })
 
   it('keeps unlock single-flight and stays restarting after native success', async () => {
@@ -95,6 +98,7 @@ describe('useLibraryAccessLifecycle', () => {
     const lifecycle = useLibraryAccessLifecycle({
       desktopRuntime: true,
       checkAccess: vi.fn().mockResolvedValue(success(locked)),
+      retry: vi.fn(),
       unlock,
       initializeWorkspace,
     })
@@ -113,31 +117,32 @@ describe('useLibraryAccessLifecycle', () => {
     expect(initializeWorkspace).not.toHaveBeenCalled()
   })
 
-  it('does not start unlock while an access retry is in flight', async () => {
-    const retryRequest = deferred<ReturnType<typeof success<LibraryAccessStatus>>>()
-    const checkAccess = vi.fn()
-      .mockResolvedValueOnce(failure(
+  it('does not start unlock while a restart retry is in flight', async () => {
+    const retryRequest = deferred<ReturnType<typeof success<boolean>>>()
+    const checkAccess = vi.fn().mockResolvedValue(failure(
         'LIBRARY_ACCESS_UNAVAILABLE',
         '暂时无法确认资料库状态。',
         true,
         'diag-access',
       ))
-      .mockReturnValueOnce(retryRequest.promise)
+    const retryAccess = vi.fn().mockReturnValue(retryRequest.promise)
     const unlock = vi.fn().mockResolvedValue(success(unlocked))
     const lifecycle = useLibraryAccessLifecycle({
       desktopRuntime: true,
       checkAccess,
+      retry: retryAccess,
       unlock,
       initializeWorkspace: vi.fn().mockResolvedValue(undefined),
     })
     await lifecycle.checkLibraryAccess()
 
-    const retry = lifecycle.checkLibraryAccess()
+    const retry = lifecycle.retryLibraryAccess()
     await expect(lifecycle.unlockLibrary()).resolves.toBe(false)
 
     expect(unlock).not.toHaveBeenCalled()
-    retryRequest.resolve(success(unlocked))
+    retryRequest.resolve(success(true))
     await expect(retry).resolves.toBe(true)
+    expect(lifecycle.phase.value).toBe('restarting')
   })
 
   it('initializes browser preview once without invoking native access commands', async () => {
@@ -147,6 +152,7 @@ describe('useLibraryAccessLifecycle', () => {
     const lifecycle = useLibraryAccessLifecycle({
       desktopRuntime: false,
       checkAccess,
+      retry: vi.fn(),
       unlock,
       initializeWorkspace,
     })

@@ -16,8 +16,9 @@ const overview: SettingsOverview = {
 }
 
 const accessStatus: LibraryAccessStatus = {
-  locked: false,
+  state: 'unlocked',
   trustedWindowsAccount: true,
+  recoveryReason: null,
 }
 
 const cloudAuth: CloudAuthState = {

@@ -5,7 +5,7 @@ import type { BackupRestoreCandidate } from '../shared/api/bindings'
 import { acquireDialogDocumentBoundary } from './dialog-document-boundary'
 import { trapDialogFocus } from './dialog-focus'
 
-const props = defineProps<{ candidate: BackupRestoreCandidate, busy: boolean }>()
+const props = defineProps<{ candidate: BackupRestoreCandidate, busy: boolean, bootstrap?: boolean }>()
 const emit = defineEmits<{ cancel: [], confirm: [] }>()
 
 const panel = ref<HTMLElement>()
@@ -78,13 +78,15 @@ function handleKeydown(event: KeyboardEvent) {
         安全恢复 · 最后确认
       </p>
       <h2 id="restore-dialog-title">
-        用这份备份替换当前资料库？
+        {{ bootstrap ? '从这份备份恢复缺失的资料库？' : '用这份备份替换当前资料库？' }}
       </h2>
       <p
         id="restore-dialog-description"
         class="description"
       >
-        应用会自动重启。当前资料库会先完整保留为回滚副本，只有恢复后的加密数据库成功打开，旧副本才会清理。
+        {{ bootstrap
+          ? '应用会自动重启，并把已验证的加密备份恢复到缺失的默认资料库位置；如果新库无法打开，候选副本会保留以便重试。'
+          : '应用会自动重启。当前资料库会先完整保留为回滚副本，只有恢复后的加密数据库成功打开，旧副本才会清理。' }}
       </p>
 
       <article class="candidate-card">
@@ -94,9 +96,21 @@ function handleKeydown(event: KeyboardEvent) {
       </article>
 
       <ol class="restore-steps">
-        <li><ShieldCheck :size="17" /><span><strong>保留旧资料库</strong><small>先创建同磁盘回滚副本</small></span></li>
+        <li>
+          <ShieldCheck :size="17" />
+          <span>
+            <strong>{{ bootstrap ? '保留恢复候选' : '保留旧资料库' }}</strong>
+            <small>{{ bootstrap ? '失败时移回安全暂存区' : '先创建同磁盘回滚副本' }}</small>
+          </span>
+        </li>
         <li><RefreshCw :size="17" /><span><strong>自动重启并验证</strong><small>重启前不会热替换数据库</small></span></li>
-        <li><TriangleAlert :size="17" /><span><strong>异常自动回退</strong><small>恢复库打不开时立即换回原资料</small></span></li>
+        <li>
+          <TriangleAlert :size="17" />
+          <span>
+            <strong>{{ bootstrap ? '失败保留候选' : '异常自动回退' }}</strong>
+            <small>{{ bootstrap ? '不会创建替代空库' : '恢复库打不开时立即换回原资料' }}</small>
+          </span>
+        </li>
       </ol>
 
       <label class="acknowledge">
@@ -105,7 +119,9 @@ function handleKeydown(event: KeyboardEvent) {
           type="checkbox"
           :disabled="busy"
         >
-        <span>我明白：确认后当前题库会由上述备份替换，未备份的本机改动将不再保留。</span>
+        <span>{{ bootstrap
+          ? '我明白：将使用这份已验证备份重建当前缺失的资料库。'
+          : '我明白：确认后当前题库会由上述备份替换，未备份的本机改动将不再保留。' }}</span>
       </label>
 
       <div class="dialog-actions">

@@ -13,7 +13,12 @@ import {
 
 const commandMocks = vi.hoisted(() => ({
   libraryAccessStatus: vi.fn(),
+  libraryAccessRetry: vi.fn(),
+  libraryRecoveryStartFresh: vi.fn(),
   libraryUnlock: vi.fn(),
+  storageReconnectSelect: vi.fn(),
+  backupRecoveryPrepare: vi.fn(),
+  backupRecoveryRestore: vi.fn(),
   systemStatus: vi.fn(),
   profileList: vi.fn(),
   profileCreate: vi.fn(),
@@ -77,11 +82,12 @@ describe('App profile orchestration', () => {
     window.localStorage.clear()
     commandMocks.libraryAccessStatus.mockResolvedValue({
       ok: true,
-      data: { locked: false, trustedWindowsAccount: true },
+      data: { state: 'unlocked', trustedWindowsAccount: true, recoveryReason: null },
     })
+    commandMocks.libraryAccessRetry.mockResolvedValue({ ok: true, data: true })
     commandMocks.libraryUnlock.mockResolvedValue({
       ok: true,
-      data: { locked: false, trustedWindowsAccount: true },
+      data: { state: 'unlocked', trustedWindowsAccount: true, recoveryReason: null },
     })
     commandMocks.systemStatus.mockResolvedValue({
       ok: true,
@@ -377,10 +383,9 @@ describe('App profile orchestration', () => {
     expect(commandMocks.syncNow).toHaveBeenCalledOnce()
   })
 
-  it('coalesces same-turn access retries into one workspace startup transaction', async () => {
-    const retryAccess = deferred<Awaited<ReturnType<typeof commandMocks.libraryAccessStatus>>>()
-    commandMocks.libraryAccessStatus
-      .mockResolvedValueOnce({
+  it('coalesces same-turn access retries into one native restart request', async () => {
+    const retryAccess = deferred<Awaited<ReturnType<typeof commandMocks.libraryAccessRetry>>>()
+    commandMocks.libraryAccessStatus.mockResolvedValue({
         ok: false,
         error: {
           code: 'LIBRARY_ACCESS_UNAVAILABLE',
@@ -388,40 +393,23 @@ describe('App profile orchestration', () => {
           retryable: true,
           diagnosticId: 'access-retry',
         },
-      })
-      .mockReturnValue(retryAccess.promise)
-    commandMocks.authRestore.mockResolvedValue({
-      status: 'ok',
-      data: {
-        ok: true,
-        data: {
-          configured: true,
-          status: { kind: 'connected', emailHint: 's***@example.test' },
-        },
-      },
     })
+    commandMocks.libraryAccessRetry.mockReturnValue(retryAccess.promise)
     const router = createAppRouter(createMemoryHistory())
     await router.push('/')
     await router.isReady()
     render(App, { global: { plugins: [router], stubs: { transition: false } } })
-    const retry = await screen.findByRole('button', { name: '重新检查' })
+    const retry = await screen.findByRole('button', { name: '重新启动并检查' })
 
     retry.click()
     retry.click()
 
-    expect(commandMocks.libraryAccessStatus).toHaveBeenCalledTimes(2)
-    retryAccess.resolve({
-      ok: true,
-      data: { locked: false, trustedWindowsAccount: true },
-    })
-    expect(await screen.findByRole('button', { name: '训练台' })).toBeVisible()
-    await waitFor(() => {
-      expect(commandMocks.systemStatus).toHaveBeenCalledOnce()
-      expect(commandMocks.profileList).toHaveBeenCalledTimes(2)
-      expect(commandMocks.backupRestoreStatus).toHaveBeenCalledOnce()
-      expect(commandMocks.authRestore).toHaveBeenCalledOnce()
-      expect(commandMocks.syncNow).toHaveBeenCalledOnce()
-    })
+    expect(commandMocks.libraryAccessStatus).toHaveBeenCalledOnce()
+    expect(commandMocks.libraryAccessRetry).toHaveBeenCalledOnce()
+    retryAccess.resolve({ ok: true, data: true })
+    expect(await screen.findByRole('heading', { name: '正在安全重启' })).toBeVisible()
+    expect(commandMocks.systemStatus).not.toHaveBeenCalled()
+    expect(commandMocks.profileList).not.toHaveBeenCalled()
   })
 
   it('keeps the local workspace usable when session restore reports offline', async () => {
@@ -534,7 +522,7 @@ describe('App profile orchestration', () => {
   it('keeps every workspace command behind the persistent library lock', async () => {
     commandMocks.libraryAccessStatus.mockResolvedValue({
       ok: true,
-      data: { locked: true, trustedWindowsAccount: true },
+      data: { state: 'locked', trustedWindowsAccount: true, recoveryReason: null },
     })
     const user = userEvent.setup()
     const router = createAppRouter(createMemoryHistory())
@@ -570,12 +558,11 @@ describe('App profile orchestration', () => {
 
   it('fails closed when the configured storage is disconnected and never offers credential unlock', async () => {
     commandMocks.libraryAccessStatus.mockResolvedValue({
-      ok: false,
-      error: {
-        code: 'LIBRARY_STORAGE_UNAVAILABLE',
-        userMessage: '配置的资料库位置当前不可用，未打开或创建任何资料，请重新连接磁盘后重试。',
-        retryable: true,
-        diagnosticId: 'storage-disconnected',
+      ok: true,
+      data: {
+        state: 'recovery_required',
+        trustedWindowsAccount: true,
+        recoveryReason: 'storage_disconnected',
       },
     })
     const router = createAppRouter(createMemoryHistory())
@@ -584,7 +571,7 @@ describe('App profile orchestration', () => {
     render(App, { global: { plugins: [router], stubs: { transition: false } } })
 
     expect(await screen.findByRole('heading', { name: '请重新连接资料库位置' })).toBeVisible()
-    expect(screen.getByRole('button', { name: '已连接，重新检查' })).toBeVisible()
+    expect(screen.getByRole('button', { name: '重新启动并检查' })).toBeVisible()
     expect(screen.queryByRole('button', { name: '重新解锁' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '训练台' })).not.toBeInTheDocument()
     expect(commandMocks.systemStatus).not.toHaveBeenCalled()

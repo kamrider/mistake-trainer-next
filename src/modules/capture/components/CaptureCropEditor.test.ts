@@ -63,6 +63,55 @@ describe('CaptureCropEditor', () => {
     expect(view.emitted('close')).toHaveLength(1)
   })
 
+  it('enters four-corner perspective mode and emits a keyboard-adjusted quad', async () => {
+    const user = userEvent.setup()
+    const view = render(CaptureCropEditor, {
+      props: {
+        dataUrl: 'data:image/png;base64,iVBORw0KGgo=',
+        itemName: '斜拍练习.png',
+        busy: false,
+      },
+    })
+
+    await user.click(screen.getByRole('button', { name: '透视矫正' }))
+    const handles = view.container.querySelectorAll<HTMLButtonElement>('.perspective-handle')
+    expect(handles).toHaveLength(4)
+    const topLeft = screen.getByRole('button', { name: '透视左上角' })
+    topLeft.focus()
+    await user.keyboard('{ArrowRight}{ArrowDown}')
+    await user.click(screen.getByRole('button', { name: '完成四角' }))
+    await user.click(screen.getByRole('button', { name: '生成 1 张裁剪图' }))
+
+    const recipes = (view.emitted('apply') as unknown[][])[0]![0] as CaptureCropRecipe[]
+    expect(recipes[0]!.perspectiveQuad).toEqual({
+      topLeft: { x: 0.005, y: 0.005 },
+      topRight: { x: 1, y: 0 },
+      bottomRight: { x: 1, y: 1 },
+      bottomLeft: { x: 0, y: 1 },
+    })
+  })
+
+  it('resets and can remove an enabled perspective correction', async () => {
+    const user = userEvent.setup()
+    const view = render(CaptureCropEditor, {
+      props: {
+        dataUrl: 'data:image/png;base64,iVBORw0KGgo=',
+        itemName: '斜拍练习.png',
+        busy: false,
+      },
+    })
+    await user.click(screen.getByRole('button', { name: '透视矫正' }))
+    screen.getByRole('button', { name: '透视左上角' }).focus()
+    await user.keyboard('{ArrowRight}{ArrowDown}')
+    await user.click(screen.getByRole('button', { name: '重置四角' }))
+    await user.click(screen.getByRole('button', { name: '完成四角' }))
+    await user.click(screen.getByRole('button', { name: '移除透视' }))
+    await user.click(screen.getByRole('button', { name: '生成 1 张裁剪图' }))
+
+    const recipes = (view.emitted('apply') as unknown[][])[0]![0] as CaptureCropRecipe[]
+    expect(recipes[0]!.perspectiveQuad).toBeNull()
+  })
+
   it('zooms the viewport without changing normalized crop output', async () => {
     const user = userEvent.setup()
     const view = render(CaptureCropEditor, {
@@ -183,6 +232,7 @@ describe('CaptureCropEditor', () => {
     const proposals = view.emitted('saveProposal') as unknown[][]
     expect(proposals[0]?.[0]).toEqual([{
       rect: { x: 0.1, y: 0.2, width: 0.7, height: 0.4 },
+      perspectiveQuad: null,
       rotationDegrees: 0,
       outputMediaType: 'image/png',
       maxEdge: 4096,

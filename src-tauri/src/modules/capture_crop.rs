@@ -47,8 +47,26 @@ pub struct NormalizedCropRect {
 
 #[derive(Clone, Debug, Deserialize, Serialize, Type, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct NormalizedPoint {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Type, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PerspectiveQuad {
+    pub top_left: NormalizedPoint,
+    pub top_right: NormalizedPoint,
+    pub bottom_right: NormalizedPoint,
+    pub bottom_left: NormalizedPoint,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Type, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct CaptureCropRecipe {
     pub rect: NormalizedCropRect,
+    #[serde(default)]
+    pub perspective_quad: Option<PerspectiveQuad>,
     pub rotation_degrees: u16,
     pub output_media_type: String,
     pub max_edge: u32,
@@ -221,7 +239,49 @@ fn validate_crop_recipe(recipe: &CaptureCropRecipe) -> Result<(), CaptureInboxEr
     {
         return Err(CaptureInboxError::InvalidCrop);
     }
+    if recipe
+        .perspective_quad
+        .as_ref()
+        .is_some_and(|quad| !valid_perspective_quad(quad))
+    {
+        return Err(CaptureInboxError::InvalidCrop);
+    }
     Ok(())
+}
+
+fn valid_perspective_quad(quad: &PerspectiveQuad) -> bool {
+    let points = [
+        &quad.top_left,
+        &quad.top_right,
+        &quad.bottom_right,
+        &quad.bottom_left,
+    ];
+    if !points.iter().all(|point| {
+        point.x.is_finite()
+            && point.y.is_finite()
+            && (0.0..=1.0).contains(&point.x)
+            && (0.0..=1.0).contains(&point.y)
+    }) {
+        return false;
+    }
+    if (0..4).any(|index| {
+        let a = points[index];
+        let b = points[(index + 1) % 4];
+        let c = points[(index + 2) % 4];
+        let cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+        cross <= 1e-6
+    }) {
+        return false;
+    }
+    let twice_area = (0..4)
+        .map(|index| {
+            let current = points[index];
+            let next = points[(index + 1) % 4];
+            current.x * next.y - next.x * current.y
+        })
+        .sum::<f64>()
+        .abs();
+    twice_area >= 0.04
 }
 
 pub(crate) fn encode_crop(
@@ -235,8 +295,12 @@ pub(crate) fn encode_crop(
         270 => source.rotate270(),
         _ => source.clone(),
     };
-    let image_width = rotated.width();
-    let image_height = rotated.height();
+    let transformed = recipe.perspective_quad.as_ref().map_or_else(
+        || Ok(rotated.clone()),
+        |quad| rectify_perspective(&rotated, quad),
+    )?;
+    let image_width = transformed.width();
+    let image_height = transformed.height();
     let left = (recipe.rect.x * f64::from(image_width)).floor() as u32;
     let top = (recipe.rect.y * f64::from(image_height)).floor() as u32;
     let right = ((recipe.rect.x + recipe.rect.width) * f64::from(image_width)).ceil() as u32;
@@ -246,7 +310,7 @@ pub(crate) fn encode_crop(
     if left >= right || top >= bottom {
         return Err(CaptureInboxError::InvalidCrop);
     }
-    let mut cropped = rotated.crop_imm(left, top, right - left, bottom - top);
+    let mut cropped = transformed.crop_imm(left, top, right - left, bottom - top);
     if cropped.width() > recipe.max_edge || cropped.height() > recipe.max_edge {
         cropped = cropped.thumbnail(recipe.max_edge, recipe.max_edge);
     }
@@ -273,6 +337,84 @@ pub(crate) fn encode_crop(
         media_type: recipe.output_media_type.clone(),
         bytes,
     })
+}
+
+fn rectify_perspective(
+    source: &image::DynamicImage,
+    quad: &PerspectiveQuad,
+) -> Result<image::DynamicImage, CaptureInboxError> {
+    if !valid_perspective_quad(quad) || source.width() < 2 || source.height() < 2 {
+        return Err(CaptureInboxError::InvalidCrop);
+    }
+    let source_width = f64::from(source.width() - 1);
+    let source_height = f64::from(source.height() - 1);
+    let point = |value: &NormalizedPoint| (value.x * source_width, value.y * source_height);
+    let top_left = point(&quad.top_left);
+    let top_right = point(&quad.top_right);
+    let bottom_right = point(&quad.bottom_right);
+    let bottom_left = point(&quad.bottom_left);
+    let distance = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).hypot(a.1 - b.1);
+    let output_width =
+        (((distance(top_left, top_right) + distance(bottom_left, bottom_right)) / 2.0).round()
+            + 1.0)
+            .clamp(1.0, f64::from(source.width())) as u32;
+    let output_height =
+        (((distance(top_left, bottom_left) + distance(top_right, bottom_right)) / 2.0).round()
+            + 1.0)
+            .clamp(1.0, f64::from(source.height())) as u32;
+    let rgba = source.to_rgba8();
+    let mut output = image::RgbaImage::new(output_width.max(1), output_height.max(1));
+    for y in 0..output.height() {
+        let v = if output.height() <= 1 {
+            0.0
+        } else {
+            f64::from(y) / f64::from(output.height() - 1)
+        };
+        for x in 0..output.width() {
+            let u = if output.width() <= 1 {
+                0.0
+            } else {
+                f64::from(x) / f64::from(output.width() - 1)
+            };
+            let source_x = (1.0 - u) * (1.0 - v) * top_left.0
+                + u * (1.0 - v) * top_right.0
+                + u * v * bottom_right.0
+                + (1.0 - u) * v * bottom_left.0;
+            let source_y = (1.0 - u) * (1.0 - v) * top_left.1
+                + u * (1.0 - v) * top_right.1
+                + u * v * bottom_right.1
+                + (1.0 - u) * v * bottom_left.1;
+            output.put_pixel(x, y, bilinear_sample(&rgba, source_x, source_y));
+        }
+    }
+    Ok(image::DynamicImage::ImageRgba8(output))
+}
+
+fn bilinear_sample(image: &image::RgbaImage, x: f64, y: f64) -> image::Rgba<u8> {
+    let x = x.clamp(0.0, f64::from(image.width() - 1));
+    let y = y.clamp(0.0, f64::from(image.height() - 1));
+    let x0 = x.floor() as u32;
+    let y0 = y.floor() as u32;
+    let x1 = x0.saturating_add(1).min(image.width() - 1);
+    let y1 = y0.saturating_add(1).min(image.height() - 1);
+    let dx = x - f64::from(x0);
+    let dy = y - f64::from(y0);
+    let pixels = [
+        (image.get_pixel(x0, y0), (1.0 - dx) * (1.0 - dy)),
+        (image.get_pixel(x1, y0), dx * (1.0 - dy)),
+        (image.get_pixel(x0, y1), (1.0 - dx) * dy),
+        (image.get_pixel(x1, y1), dx * dy),
+    ];
+    let mut channels = [0_u8; 4];
+    for channel in 0..4 {
+        channels[channel] = pixels
+            .iter()
+            .map(|(pixel, weight)| f64::from(pixel[channel]) * weight)
+            .sum::<f64>()
+            .round()
+            .clamp(0.0, 255.0) as u8;
+    }
+    image::Rgba(channels)
 }
 
 pub fn apply_capture_crop(
@@ -745,4 +887,117 @@ fn ensure_crop_revision(
         return Err(CaptureInboxError::RevisionConflict);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod perspective_tests {
+    use image::{DynamicImage, GenericImageView, Rgba, RgbaImage};
+
+    use super::{
+        CaptureCropRecipe, NormalizedCropRect, NormalizedPoint, PerspectiveQuad, encode_crop,
+    };
+
+    fn point(x: f64, y: f64) -> NormalizedPoint {
+        NormalizedPoint { x, y }
+    }
+
+    fn recipe(quad: PerspectiveQuad) -> CaptureCropRecipe {
+        CaptureCropRecipe {
+            rect: NormalizedCropRect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            perspective_quad: Some(quad),
+            rotation_degrees: 0,
+            output_media_type: "image/png".to_owned(),
+            max_edge: 4096,
+            jpeg_quality: 90,
+        }
+    }
+
+    fn coordinate_fixture(width: u32, height: u32) -> DynamicImage {
+        DynamicImage::ImageRgba8(RgbaImage::from_fn(width, height, |x, y| {
+            Rgba([x as u8, y as u8, 80, 255])
+        }))
+    }
+
+    #[test]
+    fn identity_quad_preserves_pixels_and_dimensions() {
+        let source = coordinate_fixture(64, 48);
+        let encoded = encode_crop(
+            &source,
+            &recipe(PerspectiveQuad {
+                top_left: point(0.0, 0.0),
+                top_right: point(1.0, 0.0),
+                bottom_right: point(1.0, 1.0),
+                bottom_left: point(0.0, 1.0),
+            }),
+        )
+        .expect("identity perspective");
+        let decoded = image::load_from_memory(&encoded.bytes).expect("decode output");
+
+        assert_eq!(decoded.dimensions(), source.dimensions());
+        assert_eq!(decoded.to_rgba8(), source.to_rgba8());
+    }
+
+    #[test]
+    fn trapezoid_is_rectified_with_bilinear_corner_sampling() {
+        let source = coordinate_fixture(100, 100);
+        let encoded = encode_crop(
+            &source,
+            &recipe(PerspectiveQuad {
+                top_left: point(0.20, 0.10),
+                top_right: point(0.80, 0.20),
+                bottom_right: point(0.90, 0.90),
+                bottom_left: point(0.10, 0.80),
+            }),
+        )
+        .expect("trapezoid perspective");
+        let decoded = image::load_from_memory(&encoded.bytes)
+            .expect("decode output")
+            .to_rgba8();
+
+        assert!((68..=73).contains(&decoded.width()));
+        assert!((68..=73).contains(&decoded.height()));
+        assert_eq!(&decoded.get_pixel(0, 0).0[..2], &[20, 10]);
+        assert_eq!(
+            &decoded
+                .get_pixel(decoded.width() - 1, decoded.height() - 1)
+                .0[..2],
+            &[89, 89]
+        );
+        let stored_recipe: serde_json::Value =
+            serde_json::from_str(&encoded.recipe_json).expect("stored recipe json");
+        assert!(stored_recipe.get("perspectiveQuad").is_some());
+    }
+
+    #[test]
+    fn crossed_or_tiny_quad_is_rejected_before_encoding() {
+        let source = coordinate_fixture(64, 48);
+        let out_of_range = recipe(PerspectiveQuad {
+            top_left: point(-0.01, 0.1),
+            top_right: point(0.9, 0.1),
+            bottom_right: point(0.9, 0.9),
+            bottom_left: point(0.1, 0.9),
+        });
+        assert!(encode_crop(&source, &out_of_range).is_err());
+
+        let crossed = recipe(PerspectiveQuad {
+            top_left: point(0.1, 0.1),
+            top_right: point(0.9, 0.9),
+            bottom_right: point(0.9, 0.1),
+            bottom_left: point(0.1, 0.9),
+        });
+        assert!(encode_crop(&source, &crossed).is_err());
+
+        let tiny = recipe(PerspectiveQuad {
+            top_left: point(0.1, 0.1),
+            top_right: point(0.15, 0.1),
+            bottom_right: point(0.15, 0.15),
+            bottom_left: point(0.1, 0.15),
+        });
+        assert!(encode_crop(&source, &tiny).is_err());
+    }
 }

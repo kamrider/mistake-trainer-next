@@ -84,6 +84,9 @@ pub fn run() -> tauri::Result<()> {
                     application::startup::LibraryStartup::Locked => {
                         commands::access::LibraryAccessGate::locked()
                     }
+                    application::startup::LibraryStartup::RecoveryRequired(reason) => {
+                        commands::access::LibraryAccessGate::recovery(reason)
+                    }
                     application::startup::LibraryStartup::AccessUnavailable(error) => {
                         eprintln!("library access gate failed closed [{}]", error.code());
                         match error {
@@ -91,10 +94,14 @@ pub fn run() -> tauri::Result<()> {
                                 commands::access::LibraryAccessGate::unavailable()
                             }
                             application::startup::StartupAccessUnavailable::Storage(_) => {
-                                commands::access::LibraryAccessGate::storage_unavailable()
+                                commands::access::LibraryAccessGate::recovery(
+                                    application::library_inventory::LibraryRecoveryReason::StorageDisconnected,
+                                )
                             }
                             application::startup::StartupAccessUnavailable::StorageMigration(_) => {
-                                commands::access::LibraryAccessGate::storage_unavailable()
+                                commands::access::LibraryAccessGate::recovery(
+                                    application::library_inventory::LibraryRecoveryReason::MigrationInterrupted,
+                                )
                             }
                         }
                     }

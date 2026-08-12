@@ -10,6 +10,7 @@ import type {
   CaptureBatchDetail, CaptureBatchSummary, CaptureDraftSummary, CaptureItemSummary,
   CaptureLanAddress, CaptureLanPreflight, CaptureLanSession, CaptureLayoutMode,
   CaptureRecognitionJob, CaptureRecognitionOperationSummary, OcrRecognitionFeatureStatus,
+  CaptureQualityReport,
 } from '../../../shared/api/bindings'
 import CaptureRecognitionEntry from '../../ocr/components/CaptureRecognitionEntry.vue'
 import CaptureRecognitionReview from '../../ocr/components/CaptureRecognitionReview.vue'
@@ -19,11 +20,16 @@ import CaptureLanDialog from './CaptureLanDialog.vue'
 import CaptureLayoutTemplatePanel from './CaptureLayoutTemplatePanel.vue'
 import CaptureThumbnail from './CaptureThumbnail.vue'
 import CaptureDraftCard from './CaptureDraftCard.vue'
+import CaptureQualityPanel from './CaptureQualityPanel.vue'
 import { useCapturePointerDrag, type CapturePointerDrop } from '../composables/useCapturePointerDrag'
 import { useCaptureFeedback, type CaptureFeedbackRole } from '../composables/useCaptureFeedback'
 import type { CaptureFileImportProgress } from '../composables/useCaptureFileImport'
 import { useCaptureDraftTextEditor } from '../composables/useCaptureDraftTextEditor'
 import { useCaptureBatchSubjectDraft } from '../composables/useCaptureBatchSubjectDraft'
+import {
+  MISTAKE_REASON_TAGS,
+  toggleMistakeReason,
+} from '../../library/domain/mistakeReasons'
 
 type MoveTarget = {
   itemId: string
@@ -32,7 +38,7 @@ type MoveTarget = {
   targetPosition: number
 }
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   batches: CaptureBatchSummary[]
   detail: CaptureBatchDetail | undefined
   previews: Record<string, string>
@@ -55,7 +61,16 @@ const props = defineProps<{
   recognitionNotice?: string | undefined
   recognitionBusy?: boolean | undefined
   recognitionOperationBusy?: boolean | undefined
-}>()
+  qualityReports?: Record<string, CaptureQualityReport>
+  qualityCheckingItemId?: string
+  qualityErrors?: Record<string, string>
+  qualityDismissedItemIds?: string[]
+}>(), {
+  qualityReports: () => ({}),
+  qualityCheckingItemId: '',
+  qualityErrors: () => ({}),
+  qualityDismissedItemIds: () => [],
+})
 
 const emit = defineEmits<{
   createBatch: [subject: string]
@@ -102,6 +117,8 @@ const emit = defineEmits<{
   recognitionEdit: [suggestionId: string]
   recognitionApply: [suggestionIds: string[]]
   recognitionRevert: [operationId: string]
+  qualityCheck: [itemId: string]
+  qualityDismiss: [itemId: string]
 }>()
 
 const newSubject = ref('')
@@ -178,6 +195,13 @@ const {
   markNoteDirty,
   prepareSave: prepareDraftTextSave,
 } = useCaptureDraftTextEditor(selectedDraft)
+const draftTagValues = computed(() => {
+  const seen = new Set<string>()
+  return draftTags.value
+    .split(/[，,]/)
+    .map(tag => tag.trim())
+    .filter(tag => tag && !seen.has(tag) && Boolean(seen.add(tag)))
+})
 const selectedMaterial = computed(() => unassignedItems.value.find(item => item.id === selectedMaterialId.value))
 const incompleteDraftSummaries = computed(() => props.detail?.drafts
   .map((draft, index) => {
@@ -394,6 +418,7 @@ function selectMaterial(item: CaptureItemSummary) {
   if (pointerDrag.consumeSuppressedClick() || props.busy) return
   selectedMaterialId.value = item.id
   emit('preview', item.id)
+  emit('qualityCheck', item.id)
 }
 
 function setSelectedMaterialRole(role: CaptureFeedbackRole) {
@@ -462,6 +487,14 @@ function saveSelectedDraft() {
     update.tags,
     update.note,
   )
+}
+
+function toggleDraftMistakeReason(tag: string) {
+  const active = draftTagValues.value.includes(tag)
+  if (!active && draftTagValues.value.length >= 20) return
+  draftTags.value = toggleMistakeReason(draftTagValues.value, tag).join('，')
+  markTagsDirty()
+  saveSelectedDraft()
 }
 
 function navigateDraft(direction: 'previous' | 'next') {
@@ -980,6 +1013,7 @@ function statusLabel(batch: CaptureBatchSummary) {
                   :removable="!item.cropDerivationId"
                   :disabled="busy"
                   :cropable="detail.batch.state === 'organizing'"
+                  :quality-issue="qualityReports[item.id]?.issues[0]"
                   @preview="emit('preview', $event)"
                   @crop="emit('crop', $event)"
                   @revert-crop="emit('revertCrop', $event)"
@@ -999,6 +1033,16 @@ function statusLabel(batch: CaptureBatchSummary) {
               aria-label="所选素材操作"
             >
               <p><strong>{{ selectedMaterial.sourceName }}</strong><span>当前标记：{{ selectedMaterial.stagedRole === 'answer' ? '答案' : '题面' }}</span></p>
+              <CaptureQualityPanel
+                v-if="!qualityDismissedItemIds.includes(selectedMaterial.id)"
+                :report="qualityReports[selectedMaterial.id]"
+                :busy="qualityCheckingItemId === selectedMaterial.id"
+                :error-message="qualityErrors[selectedMaterial.id]"
+                @dismiss="emit('qualityDismiss', selectedMaterial.id)"
+                @retry="emit('qualityCheck', selectedMaterial.id)"
+                @reselect="emit('importSelect')"
+                @crop="emit('crop', selectedMaterial.id)"
+              />
               <div class="material-role-actions">
                 <button
                   type="button"
@@ -1106,6 +1150,23 @@ function statusLabel(batch: CaptureBatchSummary) {
               aria-label="当前题卡信息"
             >
               <header><div><p>当前题卡</p><h3>补充标签与笔记</h3></div><span>科目已移到卡片顶部 · 修改后自动保存</span></header>
+              <div
+                class="draft-reason-picker"
+                role="group"
+                aria-label="常见错因（可多选）"
+              >
+                <button
+                  v-for="reason in MISTAKE_REASON_TAGS"
+                  :key="reason.tag"
+                  type="button"
+                  :aria-pressed="draftTagValues.includes(reason.tag)"
+                  :disabled="busy || (!draftTagValues.includes(reason.tag) && draftTagValues.length >= 20)"
+                  @click="toggleDraftMistakeReason(reason.tag)"
+                >
+                  <strong>{{ reason.label }}</strong>
+                  <span>{{ reason.description }}</span>
+                </button>
+              </div>
               <div class="inspector-fields">
                 <label><span>标签</span><input
                   v-model="draftTags"
@@ -1245,7 +1306,7 @@ input, textarea, select { box-sizing: border-box; padding: 10px 12px; color: var
 .material-role-actions button.active { color:var(--paper); border-color:var(--green-deep); background:var(--green-deep); opacity:1; }
 .material-primary-action { width:100%; color:var(--paper)!important; border-color:var(--green-deep)!important; background:var(--green-deep)!important; }
 .draft-stack { min-width:0; }.card-stack-heading { display:flex; justify-content:space-between; gap:18px; align-items:end; margin:0 2px 12px; }.card-stack-heading p,.card-stack-heading h2 { margin:0; }.card-stack-heading p { color:var(--cinnabar); font-size:12px; font-weight:800; letter-spacing:.12em; }.card-stack-heading h2 { margin-top:3px; font-size:20px; }.card-stack-heading>span { max-width:240px; color:var(--ink-muted); font-size:12px; text-align:right; }.draft-cards { display:grid; gap:18px; }
-.new-card-drop { display:grid; min-height:110px; margin-top:14px; padding:18px; place-content:center; justify-items:center; gap:5px; color:var(--green-deep); border:2px dashed rgba(33,51,45,.3); border-radius:16px; background:rgba(232,221,199,.17); text-align:center; transition:transform var(--motion-feedback),border-color var(--motion-feedback),background var(--motion-feedback); }.new-card-drop strong { font-size:13px; }.new-card-drop span { color:var(--ink-muted); font-size:12px; }.capture-pointer-dragging .new-card-drop { border-color:var(--cinnabar); background:rgba(185,88,63,.08); transform:scale(1.01); }.card-inspector { margin-top:16px; padding:17px; border:1px solid var(--line); border-radius:16px; background:rgba(255,253,247,.72); }.card-inspector header { display:flex; justify-content:space-between; gap:18px; align-items:end; }.card-inspector header p,.card-inspector header h3 { margin:0; }.card-inspector header p { color:var(--cinnabar); font-size:12px; font-weight:850; letter-spacing:.12em; }.card-inspector header h3 { margin-top:3px; font-size:16px; }.card-inspector header>span { color:var(--ink-muted); font-size:12px; }.inspector-fields { display:grid; grid-template-columns:.8fr 1.6fr; gap:9px; margin-top:12px; }.inspector-fields label { display:grid; gap:5px; color:var(--ink-muted); font-size:12px; font-weight:760; }.inspector-fields input,.inspector-fields textarea { width:100%; }.inspector-fields textarea { resize:vertical; }.capture-drag-ghost { position:fixed; z-index:200; top:0; left:0; display:grid; width:112px; height:88px; overflow:hidden; pointer-events:none; place-items:center; border:2px solid var(--cinnabar); border-radius:13px; color:var(--paper); background:var(--green-deep); box-shadow:0 18px 45px rgba(20,28,25,.3); will-change:transform; }.capture-drag-ghost img { width:100%; height:100%; object-fit:cover; opacity:.86; }.capture-drag-ghost span { position:absolute; right:6px; bottom:6px; padding:4px 7px; border-radius:999px; background:rgba(33,51,45,.86); font-size:12px; font-weight:800; }
+.new-card-drop { display:grid; min-height:110px; margin-top:14px; padding:18px; place-content:center; justify-items:center; gap:5px; color:var(--green-deep); border:2px dashed rgba(33,51,45,.3); border-radius:16px; background:rgba(232,221,199,.17); text-align:center; transition:transform var(--motion-feedback),border-color var(--motion-feedback),background var(--motion-feedback); }.new-card-drop strong { font-size:13px; }.new-card-drop span { color:var(--ink-muted); font-size:12px; }.capture-pointer-dragging .new-card-drop { border-color:var(--cinnabar); background:rgba(185,88,63,.08); transform:scale(1.01); }.card-inspector { margin-top:16px; padding:17px; border:1px solid var(--line); border-radius:16px; background:rgba(255,253,247,.72); }.card-inspector header { display:flex; justify-content:space-between; gap:18px; align-items:end; }.card-inspector header p,.card-inspector header h3 { margin:0; }.card-inspector header p { color:var(--cinnabar); font-size:12px; font-weight:850; letter-spacing:.12em; }.card-inspector header h3 { margin-top:3px; font-size:16px; }.card-inspector header>span { color:var(--ink-muted); font-size:12px; }.draft-reason-picker { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; margin-top:13px; }.draft-reason-picker button { display:grid; min-height:52px; padding:8px 10px; color:var(--ink-muted); border:1px solid rgba(33,51,45,.14); border-radius:10px; background:rgba(255,253,247,.7); text-align:left; cursor:pointer; transition:border-color var(--motion-feedback),background var(--motion-feedback),transform var(--motion-feedback); }.draft-reason-picker button:hover:not(:disabled) { border-color:rgba(185,88,63,.4); transform:translateY(-1px); }.draft-reason-picker button[aria-pressed="true"] { color:var(--green-deep); border-color:rgba(33,51,45,.45); background:var(--green-soft); box-shadow:inset 3px 0 0 var(--cinnabar); }.draft-reason-picker button:disabled { cursor:not-allowed; opacity:.48; }.draft-reason-picker strong { font-size:12px; }.draft-reason-picker span { margin-top:3px; font-size:12px; font-weight:500; line-height:1.35; }.inspector-fields { display:grid; grid-template-columns:.8fr 1.6fr; gap:9px; margin-top:12px; }.inspector-fields label { display:grid; gap:5px; color:var(--ink-muted); font-size:12px; font-weight:760; }.inspector-fields input,.inspector-fields textarea { width:100%; }.inspector-fields textarea { resize:vertical; }.capture-drag-ghost { position:fixed; z-index:200; top:0; left:0; display:grid; width:112px; height:88px; overflow:hidden; pointer-events:none; place-items:center; border:2px solid var(--cinnabar); border-radius:13px; color:var(--paper); background:var(--green-deep); box-shadow:0 18px 45px rgba(20,28,25,.3); will-change:transform; }.capture-drag-ghost img { width:100%; height:100%; object-fit:cover; opacity:.86; }.capture-drag-ghost span { position:absolute; right:6px; bottom:6px; padding:4px 7px; border-radius:999px; background:rgba(33,51,45,.86); font-size:12px; font-weight:800; }
 .capture-pointer-dragging .new-card-drop:not(.is-drop-question):not(.is-drop-answer){border-color:rgba(33,51,45,.36);background:rgba(232,221,199,.22);transform:none}.new-card-drop.is-drop-question{color:var(--green-deep);border-color:rgba(33,51,45,.72);background:rgba(225,235,229,.82);transform:scale(1.012)}.new-card-drop.is-drop-answer{color:var(--cinnabar);border-color:rgba(185,88,63,.72);background:rgba(247,225,216,.82);transform:scale(1.012)}.capture-drag-ghost{transition:opacity var(--motion-feedback) var(--ease-standard);animation:capture-card-lift var(--motion-feedback) var(--ease-standard)}.capture-drag-ghost.is-question{border-color:rgba(33,51,45,.78);background:var(--green-deep)}.capture-drag-ghost.is-answer{border-color:rgba(185,88,63,.9);background:var(--cinnabar)}.capture-drag-ghost.is-answer span{background:rgba(125,55,39,.9)}
 @keyframes capture-card-lift{from{opacity:0}}
 @keyframes capture-role-toggle{0%{transform:scale(.98);box-shadow:0 0 0 0 var(--role-ring)}45%{transform:scale(1.018);box-shadow:0 0 0 5px var(--role-ring)}100%{transform:scale(1);box-shadow:0 0 0 0 var(--role-ring)}}

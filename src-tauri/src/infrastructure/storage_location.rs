@@ -12,6 +12,8 @@ use uuid::Uuid;
 pub const STORAGE_POINTER_FILE: &str = "storage-location.json";
 pub const STORAGE_PENDING_FILE: &str = "storage-migration-pending.json";
 pub const STORAGE_RECEIPT_FILE: &str = "storage-migration-receipt.json";
+pub const RESET_PENDING_FILE: &str = "library-reset-pending.json";
+pub const RESTORE_PENDING_FILE: &str = "restore-pending.json";
 
 const STORAGE_POINTER_SCHEMA_VERSION: u32 = 1;
 const MAX_CONTROL_FILE_BYTES: u64 = 64 * 1024;
@@ -83,6 +85,43 @@ pub fn resolve_storage(control_root: &Path) -> Result<ResolvedStorage, StorageLo
     Ok(ResolvedStorage::Custom {
         library_root: pointer.library_root,
     })
+}
+
+pub fn storage_pointer_present(control_root: &Path) -> Result<bool, StorageLocationError> {
+    match fs::symlink_metadata(control_root.join(STORAGE_POINTER_FILE)) {
+        Ok(metadata) => {
+            if !metadata.is_file()
+                || metadata.file_type().is_symlink()
+                || is_windows_reparse_point(&metadata)
+            {
+                return Err(StorageLocationError::InvalidPointer);
+            }
+            Ok(true)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(StorageLocationError::File(error)),
+    }
+}
+
+pub fn control_file_present(
+    control_root: &Path,
+    file_name: &str,
+) -> Result<bool, StorageLocationError> {
+    validate_control_file_name(file_name)?;
+    validate_control_root(control_root)?;
+    match fs::symlink_metadata(control_root.join(file_name)) {
+        Ok(metadata) => {
+            if !metadata.is_file()
+                || metadata.file_type().is_symlink()
+                || is_windows_reparse_point(&metadata)
+            {
+                return Err(StorageLocationError::InvalidPointer);
+            }
+            Ok(true)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(StorageLocationError::File(error)),
+    }
 }
 
 pub fn write_storage_pointer(
@@ -229,7 +268,7 @@ fn validate_control_root(control_root: &Path) -> Result<(), StorageLocationError
     Ok(())
 }
 
-fn validate_custom_library_root(
+pub(crate) fn validate_custom_library_root(
     control_root: &Path,
     library_root: &Path,
 ) -> Result<(), StorageLocationError> {
@@ -318,7 +357,11 @@ fn has_product_owned_suffix(path: &Path) -> bool {
 fn validate_control_file_name(file_name: &str) -> Result<(), StorageLocationError> {
     if matches!(
         file_name,
-        STORAGE_POINTER_FILE | STORAGE_PENDING_FILE | STORAGE_RECEIPT_FILE
+        STORAGE_POINTER_FILE
+            | STORAGE_PENDING_FILE
+            | STORAGE_RECEIPT_FILE
+            | RESET_PENDING_FILE
+            | RESTORE_PENDING_FILE
     ) {
         Ok(())
     } else {

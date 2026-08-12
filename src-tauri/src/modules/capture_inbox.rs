@@ -33,12 +33,13 @@ pub(crate) use capture_asset_repository::{
 pub use capture_commit::{CaptureCommitReport, commit_ready_capture_drafts};
 pub use capture_crop::{
     ApplyCaptureCrop, CaptureCropApplyReport, CaptureCropRecipe, CaptureItemPreview,
-    NormalizedCropRect, RevertCaptureCrop, apply_capture_crop, get_capture_crop_source_preview,
-    get_capture_item_preview, revert_capture_crop,
+    NormalizedCropRect, NormalizedPoint, PerspectiveQuad, RevertCaptureCrop, apply_capture_crop,
+    get_capture_crop_source_preview, get_capture_item_preview, revert_capture_crop,
 };
 pub(crate) use capture_crop::{EncodedCrop, encode_crop};
+use capture_inbox_repository::get_capture_item;
+pub(crate) use capture_inbox_repository::query_batch;
 pub use capture_inbox_repository::{get_capture_batch_detail, list_capture_batches};
-use capture_inbox_repository::{get_capture_item, query_batch};
 pub use capture_organizer_transaction::{
     apply_capture_layout, apply_capture_pair_suggestions, delete_capture_draft,
     discard_capture_batch, merge_capture_card, move_capture_item, remove_capture_item,

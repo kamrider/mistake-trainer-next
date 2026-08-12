@@ -5,14 +5,19 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 /** Commands */
 export const commands = {
 	libraryAccessStatus: () => __TAURI_INVOKE<AppResult<LibraryAccessStatus>>("library_access_status"),
+	libraryAccessRetry: () => __TAURI_INVOKE<AppResult<boolean>>("library_access_retry"),
+	libraryRecoveryStartFresh: (confirmation: string) => __TAURI_INVOKE<AppResult<boolean>>("library_recovery_start_fresh", { confirmation }),
 	libraryLock: () => __TAURI_INVOKE<AppResult<LibraryAccessStatus>>("library_lock"),
 	libraryUnlock: () => __TAURI_INVOKE<AppResult<LibraryAccessStatus>>("library_unlock"),
 	backupCreate: () => typedError<AppResult<BackupSummary | null>, null>(__TAURI_INVOKE("backup_create")),
 	backupPrepareRestore: () => typedError<AppResult<BackupRestoreCandidate | null>, null>(__TAURI_INVOKE("backup_prepare_restore")),
+	backupRecoveryPrepare: () => typedError<AppResult<BackupRestoreCandidate | null>, null>(__TAURI_INVOKE("backup_recovery_prepare")),
+	backupRecoveryRestore: (candidateId: string) => typedError<AppResult<boolean>, null>(__TAURI_INVOKE("backup_recovery_restore", { candidateId })),
 	backupRestore: (candidateId: string) => typedError<AppResult<boolean>, null>(__TAURI_INVOKE("backup_restore", { candidateId })),
 	backupRestoreStatus: () => __TAURI_INVOKE<AppResult<BackupRestoreReceipt | null>>("backup_restore_status"),
 	storageStatus: () => typedError<AppResult<StorageLocationStatus>, null>(__TAURI_INVOKE("storage_status")),
 	storageMigrateSelect: () => typedError<AppResult<StorageMigrationReceipt | null>, null>(__TAURI_INVOKE("storage_migrate_select")),
+	storageReconnectSelect: () => typedError<AppResult<boolean>, null>(__TAURI_INVOKE("storage_reconnect_select")),
 	storageMigrationReceipt: () => __TAURI_INVOKE<AppResult<StorageMigrationReceipt | null>>("storage_migration_receipt"),
 	diagnosticsExport: () => typedError<AppResult<DiagnosticExportReceipt | null>, null>(__TAURI_INVOKE("diagnostics_export")),
 	ocrCapabilityStatus: () => typedError<AppResult<OcrCapabilityStatus>, null>(__TAURI_INVOKE("ocr_capability_status")),
@@ -29,8 +34,9 @@ export const commands = {
 	profileDelete: (input: ProfileDeleteInput) => __TAURI_INVOKE<AppResult<ProfileOverview>>("profile_delete", { input }),
 	libraryContext: () => __TAURI_INVOKE<AppResult<LibraryContext>>("library_context"),
 	problemDetail: (problemId: string) => __TAURI_INVOKE<AppResult<ProblemDetail>>("problem_detail", { problemId }),
+	problemBulkMetadata: (input: ProblemBulkMetadataInput) => __TAURI_INVOKE<AppResult<ProblemBulkMetadataReport>>("problem_bulk_metadata", { input }),
 	problemChangeStatus: (input: ProblemStatusInput) => __TAURI_INVOKE<AppResult<number>>("problem_change_status", { input }),
-	problemList: (status: ProblemStatusFilter, search: string | null) => __TAURI_INVOKE<AppResult<ProblemSummary[]>>("problem_list", { status, search }),
+	problemList: (input: ProblemListInput) => __TAURI_INVOKE<AppResult<ProblemSummary[]>>("problem_list", { input }),
 	problemUpdate: (input: ProblemUpdateInput) => __TAURI_INVOKE<AppResult<boolean>>("problem_update", { input }),
 	legacyScan: () => typedError<AppResult<LegacyImportCandidate | null>, null>(__TAURI_INVOKE("legacy_scan")),
 	legacyImport: (candidateId: string) => typedError<AppResult<LegacyImportReceipt>, null>(__TAURI_INVOKE("legacy_import", { candidateId })),
@@ -39,6 +45,7 @@ export const commands = {
 	reviewQueue: () => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_queue"),
 	reviewCurrentProblem: () => __TAURI_INVOKE<AppResult<ProblemDetail>>("review_current_problem"),
 	reviewManualStart: (input: ReviewManualStartInput) => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_manual_start", { input }),
+	reviewQuickStart: (input: ReviewQuickStartInput) => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_quick_start", { input }),
 	reviewExamStart: (input: ReviewExamStartInput) => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_exam_start", { input }),
 	reviewExamNavigate: (input: ReviewExamNavigateInput) => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_exam_navigate", { input }),
 	reviewExamBeginGrading: () => __TAURI_INVOKE<AppResult<ReviewQueueOverview>>("review_exam_begin_grading"),
@@ -48,7 +55,7 @@ export const commands = {
 	reviewHistoryList: (input: ReviewHistoryInput) => __TAURI_INVOKE<AppResult<ReviewHistoryPage>>("review_history_list", { input }),
 	reviewHistoryDetail: (eventId: string) => __TAURI_INVOKE<AppResult<ReviewHistoryDetail>>("review_history_detail", { eventId }),
 	dashboardOverview: (utcOffsetMinutes: number) => __TAURI_INVOKE<AppResult<DashboardOverview>>("dashboard_overview", { utcOffsetMinutes }),
-	reportSummary: () => __TAURI_INVOKE<AppResult<ReportSummary>>("report_summary"),
+	reportSummary: (utcOffsetMinutes: number) => __TAURI_INVOKE<AppResult<ReportSummary>>("report_summary", { utcOffsetMinutes }),
 	settingsOverview: () => __TAURI_INVOKE<AppResult<SettingsOverview>>("settings_overview"),
 	subjectPreferencesGet: () => __TAURI_INVOKE<AppResult<SubjectPreferences>>("subject_preferences_get"),
 	subjectPreferencesSave: (input: SubjectPreferencesInput) => __TAURI_INVOKE<AppResult<SubjectPreferences>>("subject_preferences_save", { input }),
@@ -70,6 +77,7 @@ export const commands = {
 	captureImportSelect: (batchId: string) => __TAURI_INVOKE<AppResult<CaptureImportReport>>("capture_import_select", { batchId }),
 	captureImportBytes: (input: CaptureImportBytesInput) => __TAURI_INVOKE<AppResult<CaptureItemSummary>>("capture_import_bytes", { input }),
 	captureItemPreview: (batchId: string, itemId: string) => __TAURI_INVOKE<AppResult<CaptureItemPreview>>("capture_item_preview", { batchId, itemId }),
+	captureQualityCheck: (batchId: string, itemId: string) => __TAURI_INVOKE<AppResult<CaptureQualityReport>>("capture_quality_check", { batchId, itemId }),
 	captureCropSourcePreview: (batchId: string, itemId: string) => __TAURI_INVOKE<AppResult<CaptureItemPreview>>("capture_crop_source_preview", { batchId, itemId }),
 	captureCropApply: (input: CaptureCropApplyInput) => __TAURI_INVOKE<AppResult<CaptureCropApplyReport>>("capture_crop_apply", { input }),
 	captureCropRevert: (input: CaptureCropRevertInput) => __TAURI_INVOKE<AppResult<CaptureBatchDetail>>("capture_crop_revert", { input }),
@@ -221,6 +229,7 @@ export type CaptureCropApplyReport = {
 
 export type CaptureCropRecipe = {
 	rect: NormalizedCropRect,
+	perspectiveQuad?: PerspectiveQuad | null,
 	rotationDegrees: number,
 	outputMediaType: string,
 	maxEdge: number,
@@ -359,6 +368,19 @@ export type CapturePairSuggestionsApplyInput = {
 	batchId: string,
 	expectedRevision: number,
 	pairIds: string[],
+};
+
+export type CaptureQualityIssueCode = "blurry" | "too_dark" | "too_bright" | "low_contrast" | "possible_edge_cut" | "skewed";
+
+export type CaptureQualityReport = {
+	itemId: string,
+	issues: CaptureQualityIssueCode[],
+	sharpnessScore: number | null,
+	darkFraction: number | null,
+	brightFraction: number | null,
+	contrastScore: number | null,
+	suggestedRotationDegrees: number | null,
+	suggestedCrop: NormalizedCropRect | null,
 };
 
 export type CaptureRecognitionApplyInput = {
@@ -517,6 +539,12 @@ export type DiagnosticExportReceipt = {
 	warningCount: number,
 };
 
+export type DueForecastDay = {
+	localDate: string,
+	dueCount: number,
+	overdueCount: number,
+};
+
 export type ExportCandidate = {
 	id: string,
 	subject: string,
@@ -611,9 +639,12 @@ export type LegacyScanReport = {
 	issues: LegacyIssue[],
 };
 
+export type LibraryAccessState = "unlocked" | "locked" | "recovery_required";
+
 export type LibraryAccessStatus = {
-	locked: boolean,
+	state: LibraryAccessState,
 	trustedWindowsAccount: boolean,
+	recoveryReason: LibraryRecoveryReason | null,
 };
 
 export type LibraryContext = {
@@ -622,11 +653,18 @@ export type LibraryContext = {
 	storage: string,
 };
 
+export type LibraryRecoveryReason = "local_data_missing" | "setup_interrupted" | "credentials_incomplete" | "reset_incomplete" | "storage_disconnected" | "migration_interrupted" | "restore_interrupted";
+
 export type NormalizedCropRect = {
 	x: number | null,
 	y: number | null,
 	width: number | null,
 	height: number | null,
+};
+
+export type NormalizedPoint = {
+	x: number | null,
+	y: number | null,
 };
 
 export type OcrCapabilityStatus = {
@@ -675,12 +713,32 @@ export type OcrRecognitionFeatureStatus = {
 	detail: string,
 };
 
+export type PerspectiveQuad = {
+	topLeft: NormalizedPoint,
+	topRight: NormalizedPoint,
+	bottomRight: NormalizedPoint,
+	bottomLeft: NormalizedPoint,
+};
+
+export type ProblemAnswerState = "any" | "has_answer" | "missing_answer";
+
 export type ProblemAssetPreview = {
 	id: string,
 	role: string,
 	position: number,
 	mediaType: string,
 	dataUrl: string,
+};
+
+export type ProblemBulkMetadataInput = {
+	problemIds: string[],
+	subject: string | null,
+	addTags: string[],
+	removeTags: string[],
+};
+
+export type ProblemBulkMetadataReport = {
+	updatedCount: number,
 };
 
 export type ProblemDetail = {
@@ -693,6 +751,17 @@ export type ProblemDetail = {
 	updatedAtUtcMs: number | null,
 	assets: ProblemAssetPreview[],
 };
+
+export type ProblemListInput = {
+	status: ProblemStatusFilter,
+	search: string | null,
+	subjects: string[],
+	tags: string[],
+	reviewState: ProblemReviewState,
+	answerState: ProblemAnswerState,
+};
+
+export type ProblemReviewState = "any" | "never_reviewed" | "due" | "recently_forgotten";
 
 export type ProblemStatusFilter = "active" | "archived" | "trashed";
 
@@ -748,6 +817,8 @@ export type ProfileSummary = {
 	revision: number,
 };
 
+export type QuickReviewPreset = "five_minutes" | "ten_problems" | "recently_forgotten";
+
 export type ReportSummary = {
 	activeProblemCount: number,
 	dueProblemCount: number,
@@ -757,6 +828,8 @@ export type ReportSummary = {
 	currentStreakDays: number,
 	dailyActivity: DailyActivity[],
 	subjectActivity: SubjectActivity[],
+	weakAreas: WeakAreaSummary[],
+	dueForecast: DueForecastDay[],
 };
 
 export type ResolveSyncConflictEntityInput = {
@@ -875,6 +948,12 @@ export type ReviewQueueOverview = {
 	items: ReviewQueueItem[],
 };
 
+export type ReviewQuickStartInput = {
+	preset: QuickReviewPreset,
+	subject: string | null,
+	tag: string | null,
+};
+
 export type ReviewSubmission = {
 	eventId: string,
 	problemId: string,
@@ -975,6 +1054,15 @@ export type SystemStatus = {
 	appVersion: string,
 	storage: string,
 	sync: string,
+};
+
+export type WeakAreaSummary = {
+	label: string,
+	kind: string,
+	reviewedCount: number,
+	lapseCount: number,
+	lapseRate: number | null,
+	averageDurationMs: number | null,
 };
 
 export type WindowsCompatibilityStatus = {

@@ -14,7 +14,7 @@ use super::{
         read_bounded, safe_relative_path, sha256_bytes, write_new_synced,
     },
     backup_restore_repository::{
-        PendingRestoreMarker, RESTORE_PENDING_FILE, RestoreCandidateMetadata,
+        PendingRestoreMarker, RESTORE_PENDING_FILE, RestoreCandidateMetadata, RestoreMode,
         ensure_owned_directory_if_present, read_pending_marker, read_restore_candidate_metadata,
         read_restore_receipt, remove_control_file, remove_exact_file, remove_restore_receipt,
         restore_directory_name, rollback_directory_name, write_control_file,
@@ -27,6 +27,7 @@ pub struct RestoreSwap {
     application_root: PathBuf,
     live_root: PathBuf,
     rollback_root: Option<PathBuf>,
+    bootstrap_stage_root: Option<PathBuf>,
     marker_path: PathBuf,
     label: String,
 }
@@ -165,6 +166,26 @@ pub fn schedule_backup_restore(
     account_id: &str,
     now_utc_ms: i64,
 ) -> Result<BackupSummary, BackupError> {
+    schedule_backup_restore_with_mode(
+        application_root,
+        candidate_id,
+        database_key,
+        asset_key,
+        account_id,
+        now_utc_ms,
+        RestoreMode::ReplaceExisting,
+    )
+}
+
+pub fn schedule_backup_restore_with_mode(
+    application_root: &Path,
+    candidate_id: &str,
+    database_key: &str,
+    asset_key: &[u8; 32],
+    account_id: &str,
+    now_utc_ms: i64,
+    mode: RestoreMode,
+) -> Result<BackupSummary, BackupError> {
     let application_root = application_root
         .canonicalize()
         .map_err(|_| BackupError::InvalidDestination)?;
@@ -180,11 +201,16 @@ pub fn schedule_backup_restore(
     if marker_path.exists() {
         return Err(BackupError::RestorePending);
     }
+    if mode == RestoreMode::BootstrapMissing && application_root.join("library").exists() {
+        return Err(BackupError::InvalidDestination);
+    }
     let marker = PendingRestoreMarker {
+        schema_version: 1,
         candidate_id: candidate_id.to_owned(),
         rollback_id: Uuid::now_v7().to_string(),
         label: summary.label.clone(),
         scheduled_at_utc_ms: now_utc_ms,
+        mode,
     };
     write_control_file(&application_root, RESTORE_PENDING_FILE, &marker, false)?;
     Ok(summary)
@@ -215,37 +241,78 @@ pub fn begin_pending_restore(
     let live_exists = live_root.is_dir();
     let stage_exists = stage_root.is_dir();
     let rollback_exists = rollback_root.is_dir();
-    let validated_label = match (live_exists, stage_exists, rollback_exists) {
-        (true, true, false) => {
-            let summary = validate_candidate_directory(
-                &stage_root,
-                &marker.candidate_id,
-                database_key,
-                asset_key,
-                account_id,
-                now_utc_ms,
-            )?;
-            if summary.label != marker.label {
-                return Err(BackupError::Integrity);
+    let validated_label = if marker.mode == RestoreMode::BootstrapMissing {
+        match (live_exists, stage_exists, rollback_exists) {
+            (false, true, false) => {
+                let summary = validate_candidate_directory(
+                    &stage_root,
+                    &marker.candidate_id,
+                    database_key,
+                    asset_key,
+                    account_id,
+                    now_utc_ms,
+                )?;
+                if summary.label != marker.label {
+                    return Err(BackupError::Integrity);
+                }
+                fs::rename(&stage_root, &live_root)?;
+                summary.label
             }
-            fs::rename(&live_root, &rollback_root)?;
-            if let Err(error) = fs::rename(&stage_root, &live_root) {
-                let _ = fs::rename(&rollback_root, &live_root);
-                return Err(BackupError::Io(error));
+            (true, false, false) => {
+                validate_candidate_directory(
+                    &live_root,
+                    &marker.candidate_id,
+                    database_key,
+                    asset_key,
+                    account_id,
+                    now_utc_ms,
+                )?
+                .label
             }
-            summary.label
+            _ => return Err(BackupError::Integrity),
         }
-        (false, true, true) => {
-            let summary = match validate_candidate_directory(
-                &stage_root,
-                &marker.candidate_id,
-                database_key,
-                asset_key,
-                account_id,
-                now_utc_ms,
-            ) {
-                Ok(summary) => summary,
-                Err(_) => {
+    } else {
+        match (live_exists, stage_exists, rollback_exists) {
+            (true, true, false) => {
+                let summary = validate_candidate_directory(
+                    &stage_root,
+                    &marker.candidate_id,
+                    database_key,
+                    asset_key,
+                    account_id,
+                    now_utc_ms,
+                )?;
+                if summary.label != marker.label {
+                    return Err(BackupError::Integrity);
+                }
+                fs::rename(&live_root, &rollback_root)?;
+                if let Err(error) = fs::rename(&stage_root, &live_root) {
+                    let _ = fs::rename(&rollback_root, &live_root);
+                    return Err(BackupError::Io(error));
+                }
+                summary.label
+            }
+            (false, true, true) => {
+                let summary = match validate_candidate_directory(
+                    &stage_root,
+                    &marker.candidate_id,
+                    database_key,
+                    asset_key,
+                    account_id,
+                    now_utc_ms,
+                ) {
+                    Ok(summary) => summary,
+                    Err(_) => {
+                        return rollback_interrupted_restore(
+                            &application_root,
+                            &live_root,
+                            &rollback_root,
+                            marker.label,
+                            now_utc_ms,
+                        );
+                    }
+                };
+                if summary.label != marker.label {
                     return rollback_interrupted_restore(
                         &application_root,
                         &live_root,
@@ -254,30 +321,30 @@ pub fn begin_pending_restore(
                         now_utc_ms,
                     );
                 }
-            };
-            if summary.label != marker.label {
-                return rollback_interrupted_restore(
-                    &application_root,
-                    &live_root,
-                    &rollback_root,
-                    marker.label,
-                    now_utc_ms,
-                );
+                fs::rename(&stage_root, &live_root)?;
+                summary.label
             }
-            fs::rename(&stage_root, &live_root)?;
-            summary.label
-        }
-        (true, false, true) => {
-            let summary = match validate_candidate_directory(
-                &live_root,
-                &marker.candidate_id,
-                database_key,
-                asset_key,
-                account_id,
-                now_utc_ms,
-            ) {
-                Ok(summary) => summary,
-                Err(_) => {
+            (true, false, true) => {
+                let summary = match validate_candidate_directory(
+                    &live_root,
+                    &marker.candidate_id,
+                    database_key,
+                    asset_key,
+                    account_id,
+                    now_utc_ms,
+                ) {
+                    Ok(summary) => summary,
+                    Err(_) => {
+                        return rollback_interrupted_restore(
+                            &application_root,
+                            &live_root,
+                            &rollback_root,
+                            marker.label,
+                            now_utc_ms,
+                        );
+                    }
+                };
+                if summary.label != marker.label {
                     return rollback_interrupted_restore(
                         &application_root,
                         &live_root,
@@ -286,51 +353,45 @@ pub fn begin_pending_restore(
                         now_utc_ms,
                     );
                 }
-            };
-            if summary.label != marker.label {
-                return rollback_interrupted_restore(
-                    &application_root,
-                    &live_root,
-                    &rollback_root,
-                    marker.label,
-                    now_utc_ms,
-                );
+                summary.label
             }
-            summary.label
+            (true, false, false) => {
+                validate_candidate_directory(
+                    &live_root,
+                    &marker.candidate_id,
+                    database_key,
+                    asset_key,
+                    account_id,
+                    now_utc_ms,
+                )?
+                .label
+            }
+            (false, false, true) => {
+                fs::rename(&rollback_root, &live_root)?;
+                let receipt = BackupRestoreReceipt {
+                    status: "rolled_back".to_owned(),
+                    label: marker.label,
+                    finished_at_utc_ms: now_utc_ms as f64,
+                };
+                write_restore_receipt(&application_root, &receipt)?;
+                remove_control_file(&application_root, RESTORE_PENDING_FILE)?;
+                return Ok(None);
+            }
+            _ => return Err(BackupError::Integrity),
         }
-        (true, false, false) => {
-            validate_candidate_directory(
-                &live_root,
-                &marker.candidate_id,
-                database_key,
-                asset_key,
-                account_id,
-                now_utc_ms,
-            )?
-            .label
-        }
-        (false, false, true) => {
-            fs::rename(&rollback_root, &live_root)?;
-            let receipt = BackupRestoreReceipt {
-                status: "rolled_back".to_owned(),
-                label: marker.label,
-                finished_at_utc_ms: now_utc_ms as f64,
-            };
-            write_restore_receipt(&application_root, &receipt)?;
-            remove_control_file(&application_root, RESTORE_PENDING_FILE)?;
-            return Ok(None);
-        }
-        _ => return Err(BackupError::Integrity),
     };
     if validated_label != marker.label {
         return Err(BackupError::Integrity);
     }
 
     let rollback_root = rollback_root.is_dir().then_some(rollback_root);
+    let bootstrap_stage_root = (marker.mode == RestoreMode::BootstrapMissing)
+        .then_some(application_root.join(restore_directory_name(&marker.candidate_id)?));
     Ok(Some(RestoreSwap {
         application_root,
         live_root,
         rollback_root,
+        bootstrap_stage_root,
         marker_path,
         label: marker.label,
     }))
@@ -364,6 +425,10 @@ impl RestoreSwap {
         &self.label
     }
 
+    pub const fn replaces_existing_library(&self) -> bool {
+        self.bootstrap_stage_root.is_none()
+    }
+
     pub fn commit(self, now_utc_ms: i64) -> Result<BackupRestoreReceipt, BackupError> {
         if let Some(rollback_root) = &self.rollback_root {
             ensure_owned_directory_if_present(&self.application_root, rollback_root)?;
@@ -382,6 +447,19 @@ impl RestoreSwap {
     }
 
     pub fn rollback(self, now_utc_ms: i64) -> Result<BackupRestoreReceipt, BackupError> {
+        if let Some(stage_root) = self.bootstrap_stage_root {
+            ensure_owned_directory_if_present(&self.application_root, &self.live_root)?;
+            ensure_owned_directory_if_present(&self.application_root, &stage_root)?;
+            if stage_root.exists() || !self.live_root.is_dir() {
+                return Err(BackupError::Integrity);
+            }
+            fs::rename(&self.live_root, &stage_root)?;
+            return Ok(BackupRestoreReceipt {
+                status: "rolled_back".to_owned(),
+                label: self.label,
+                finished_at_utc_ms: now_utc_ms as f64,
+            });
+        }
         let rollback_root = self.rollback_root.ok_or(BackupError::Integrity)?;
         ensure_owned_directory_if_present(&self.application_root, &self.live_root)?;
         ensure_owned_directory_if_present(&self.application_root, &rollback_root)?;

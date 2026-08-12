@@ -7,9 +7,10 @@ use std::{
 
 use mistake_trainer_next_lib::{
     application::startup::{
-        LibraryStartup, StartupAccessUnavailable,
+        LibraryRecoveryReason, LibraryStartup, StartupAccessUnavailable,
         initialize_configured_application_library_if_accessible,
     },
+    commands::storage::reconnect_existing_library,
     infrastructure::{
         runtime::{SecretStore, initialize_local_library},
         storage_location::{
@@ -37,6 +38,45 @@ impl SecretStore for MemorySecretStore {
     }
 }
 
+#[test]
+fn reconnect_validates_the_existing_encrypted_library_before_writing_the_pointer() {
+    let control = tempdir().unwrap();
+    let selected = tempdir().unwrap();
+    let secrets = MemorySecretStore::default();
+    let library_root = custom_library_root(selected.path());
+    fs::create_dir_all(library_root.parent().unwrap()).unwrap();
+    drop(initialize_local_library(&library_root, &secrets, 100).unwrap());
+
+    reconnect_existing_library(control.path(), library_root.parent().unwrap(), &secrets).unwrap();
+
+    assert_eq!(
+        resolve_storage(control.path()).unwrap().library_root(),
+        library_root
+    );
+}
+
+#[test]
+fn reconnect_with_the_wrong_credentials_leaves_the_pointer_unchanged() {
+    let control = tempdir().unwrap();
+    let selected = tempdir().unwrap();
+    let original_secrets = MemorySecretStore::default();
+    let library_root = custom_library_root(selected.path());
+    fs::create_dir_all(library_root.parent().unwrap()).unwrap();
+    drop(initialize_local_library(&library_root, &original_secrets, 100).unwrap());
+    let wrong_secrets = MemorySecretStore::default();
+    seed_complete_credentials(&wrong_secrets);
+
+    assert!(
+        reconnect_existing_library(
+            control.path(),
+            library_root.parent().unwrap(),
+            &wrong_secrets,
+        )
+        .is_err()
+    );
+    assert!(!control.path().join(STORAGE_POINTER_FILE).exists());
+}
+
 fn write_pointer(control_root: &Path, pointer: &serde_json::Value) {
     fs::write(
         control_root.join(STORAGE_POINTER_FILE),
@@ -47,6 +87,14 @@ fn write_pointer(control_root: &Path, pointer: &serde_json::Value) {
 
 fn custom_library_root(parent: &Path) -> PathBuf {
     parent.join("Mistake Trainer Next Data").join("library")
+}
+
+fn seed_complete_credentials(secrets: &MemorySecretStore) {
+    secrets.set("database-key", &"11".repeat(32)).unwrap();
+    secrets.set("asset-key", &"22".repeat(32)).unwrap();
+    secrets
+        .set("account-id", "33333333-3333-4333-8333-333333333333")
+        .unwrap();
 }
 
 #[test]
@@ -61,6 +109,90 @@ fn missing_pointer_uses_only_the_existing_default_root() {
     );
     assert!(matches!(resolved, ResolvedStorage::Default { .. }));
     assert!(!control.path().join("library").exists());
+}
+
+#[test]
+fn retained_credentials_and_missing_default_data_require_recovery_without_creating_an_empty_library()
+ {
+    let control = tempdir().unwrap();
+    let secrets = MemorySecretStore::default();
+    seed_complete_credentials(&secrets);
+
+    let startup =
+        initialize_configured_application_library_if_accessible(control.path(), &secrets, 100)
+            .expect("cleared data is a recoverable startup state");
+
+    assert!(matches!(
+        startup,
+        LibraryStartup::RecoveryRequired(LibraryRecoveryReason::LocalDataMissing)
+    ));
+    assert!(!control.path().join("library").exists());
+}
+
+#[test]
+fn genuinely_empty_install_still_creates_the_first_default_library() {
+    let control = tempdir().unwrap();
+    let secrets = MemorySecretStore::default();
+
+    let startup =
+        initialize_configured_application_library_if_accessible(control.path(), &secrets, 100)
+            .expect("first run initializes the default library");
+
+    assert!(matches!(startup, LibraryStartup::Ready(_)));
+    assert!(control.path().join("library/library.db").is_file());
+}
+
+#[test]
+fn invalid_restore_evidence_never_falls_open_into_first_run() {
+    let control = tempdir().unwrap();
+    let secrets = MemorySecretStore::default();
+    fs::create_dir(control.path().join("restore-pending.json")).unwrap();
+
+    let startup =
+        initialize_configured_application_library_if_accessible(control.path(), &secrets, 100)
+            .expect("invalid restore evidence is a structured recovery state");
+
+    assert!(matches!(
+        startup,
+        LibraryStartup::RecoveryRequired(LibraryRecoveryReason::RestoreInterrupted)
+    ));
+    assert!(!control.path().join("library/library.db").exists());
+}
+
+#[test]
+fn interrupted_first_run_is_recoverable_without_creating_a_library() {
+    let control = tempdir().unwrap();
+    let secrets = MemorySecretStore::default();
+    secrets.set("database-key", &"11".repeat(32)).unwrap();
+
+    let startup =
+        initialize_configured_application_library_if_accessible(control.path(), &secrets, 100)
+            .expect("partial first-run credentials are a structured recovery state");
+
+    assert!(matches!(
+        startup,
+        LibraryStartup::RecoveryRequired(LibraryRecoveryReason::SetupInterrupted)
+    ));
+    assert!(!control.path().join("library/library.db").exists());
+}
+
+#[test]
+fn locked_marker_never_hides_partial_credentials_beside_existing_data() {
+    let control = tempdir().unwrap();
+    let secrets = MemorySecretStore::default();
+    fs::create_dir_all(control.path().join("library")).unwrap();
+    fs::write(control.path().join("library/library.db"), b"existing").unwrap();
+    secrets.set("database-key", &"11".repeat(32)).unwrap();
+    secrets.set("library-lock-state", "locked").unwrap();
+
+    let startup =
+        initialize_configured_application_library_if_accessible(control.path(), &secrets, 100)
+            .expect("partial credentials must outrank a stale lock marker");
+
+    assert!(matches!(
+        startup,
+        LibraryStartup::RecoveryRequired(LibraryRecoveryReason::CredentialsIncomplete)
+    ));
 }
 
 #[test]

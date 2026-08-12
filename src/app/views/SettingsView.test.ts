@@ -161,11 +161,11 @@ describe('SettingsView', () => {
     } } })
     api.libraryAccessStatus.mockResolvedValue({
       ok: true,
-      data: { locked: false, trustedWindowsAccount: true },
+      data: { state: 'unlocked', trustedWindowsAccount: true, recoveryReason: null },
     })
     api.libraryLock.mockResolvedValue({
       ok: true,
-      data: { locked: true, trustedWindowsAccount: true },
+      data: { state: 'locked', trustedWindowsAccount: true, recoveryReason: null },
     })
     api.subjectPreferencesGet.mockResolvedValue({ ok: true, data: {
       enabledSubjects: ['语文', '数学', '英语'],

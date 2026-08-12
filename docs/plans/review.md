@@ -21,6 +21,13 @@ Implemented vertical slices:
   Schulte break after every ten completed cards. The policy is frozen per ordinary session;
   exams always opt out. Board progress survives restart, correct choices persist before
   fading, stale clients resynchronize, and every round can be skipped.
+- The dashboard starts persisted quick sessions through one secondary action: up to eight cards
+  for a five-minute preset, ten cards for the fixed-count preset, or twenty recently-forgotten
+  cards. Optional subject/tag filters remain profile-scoped and Rust selects due before new cards
+  deterministically.
+- The learning report presents at most five evidence-backed weak subjects/reason tags only after
+  two reviews and shows today plus six local-calendar due buckets with today's overdue work kept
+  distinct. Sparse histories receive an explanation instead of a synthetic ranking.
 - The report links to a lazy, date-grouped review-history workspace. It supports bounded
   range/rating/subject/note filters, opaque cursor pagination, archived-problem history, and
   a desktop panel/mobile sheet that audits immutable event versions separately from the

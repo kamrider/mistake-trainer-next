@@ -29,7 +29,9 @@ describe('runtime credentials repository boundary', () => {
     expect(repository).toContain('pub trait SecretStore')
     expect(repository).toContain('pub struct KeyringSecretStore')
     expect(repository).toContain('pub(crate) struct RestoreCredentials')
-    expect(repository.match(/pub\(super\) fn /g)).toHaveLength(4)
+    expect(repository.match(/pub\(super\) fn /g)).toHaveLength(6)
+    expect(repository).toContain('pub(super) fn inspect_local_credential_envelope')
+    expect(repository).toContain('pub(super) fn delete_local_credential_envelope')
   })
 
   it('isolates credential policy while retaining runtime orchestration', () => {

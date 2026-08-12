@@ -6,10 +6,16 @@ use uuid::Uuid;
 use crate::{
     application::result::AppResult,
     infrastructure::runtime::LibraryRuntime,
-    modules::problems::{
-        ChangeProblemStatus, ProblemDetail, ProblemDetailQuery, ProblemListQuery,
-        ProblemStatusFilter, ProblemSummary, UpdateProblem, change_problem_status,
-        get_problem_detail, list_problem_summaries_with_previews, update_problem,
+    modules::{
+        problem_bulk_metadata::{
+            ProblemBulkMetadata, ProblemBulkMetadataReport, update_problem_bulk_metadata,
+        },
+        problems::{
+            ChangeProblemStatus, ProblemDetail, ProblemDetailQuery, ProblemListInput,
+            ProblemListQuery, ProblemStatusFilter, ProblemSummary, UpdateProblem,
+            change_problem_status, get_problem_detail, list_problem_summaries_with_previews,
+            update_problem,
+        },
     },
 };
 
@@ -38,6 +44,15 @@ pub struct ProblemStatusInput {
     target_status: ProblemStatusFilter,
 }
 
+#[derive(Clone, Debug, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ProblemBulkMetadataInput {
+    pub problem_ids: Vec<String>,
+    pub subject: Option<String>,
+    pub add_tags: Vec<String>,
+    pub remove_tags: Vec<String>,
+}
+
 pub fn library_context_for(runtime: &LibraryRuntime) -> AppResult<LibraryContext> {
     let profile = runtime.active_profile();
     AppResult::success(LibraryContext {
@@ -49,8 +64,8 @@ pub fn library_context_for(runtime: &LibraryRuntime) -> AppResult<LibraryContext
 
 pub fn problem_list_for(
     runtime: &LibraryRuntime,
-    status: ProblemStatusFilter,
-    search: Option<String>,
+    input: ProblemListInput,
+    now_utc_ms: i64,
 ) -> AppResult<Vec<ProblemSummary>> {
     let profile = runtime.active_profile();
     let connection = match runtime.connection.lock() {
@@ -64,11 +79,17 @@ pub fn problem_list_for(
         ProblemListQuery {
             account_id: runtime.account_id().to_owned(),
             profile_id: profile.id,
-            status,
-            search,
+            now_utc_ms,
+            input,
         },
     ) {
         Ok(problems) => AppResult::success(problems),
+        Err(crate::modules::problems::ProblemUseCaseError::InvalidQuery) => AppResult::failure(
+            "problem_filter_invalid",
+            "筛选条件过多或过长，请精简后再试。",
+            false,
+            Uuid::now_v7().to_string(),
+        ),
         Err(_) => internal_library_error("problem_list_failed"),
     }
 }
@@ -164,6 +185,51 @@ pub fn problem_change_status_for(
     }
 }
 
+pub fn problem_bulk_metadata_for(
+    runtime: &LibraryRuntime,
+    input: ProblemBulkMetadataInput,
+    now_utc_ms: i64,
+) -> AppResult<ProblemBulkMetadataReport> {
+    let profile = runtime.active_profile();
+    let mut connection = match runtime.connection.lock() {
+        Ok(connection) => connection,
+        Err(_) => return internal_library_error("library_lock_poisoned"),
+    };
+    match update_problem_bulk_metadata(
+        &mut connection,
+        ProblemBulkMetadata {
+            account_id: runtime.account_id().to_owned(),
+            profile_id: profile.id,
+            problem_ids: input.problem_ids,
+            subject: input.subject,
+            add_tags: input.add_tags,
+            remove_tags: input.remove_tags,
+            now_utc_ms,
+        },
+    ) {
+        Ok(report) => AppResult::success(report),
+        Err(crate::modules::problems::ProblemUseCaseError::ConflictPending) => conflict_pending(),
+        Err(
+            crate::modules::problems::ProblemUseCaseError::InvalidSelection
+            | crate::modules::problems::ProblemUseCaseError::EmptyChange
+            | crate::modules::problems::ProblemUseCaseError::InvalidText
+            | crate::modules::problems::ProblemUseCaseError::InvalidTags,
+        ) => AppResult::failure(
+            "problem_bulk_metadata_invalid",
+            "请选择 1 到 100 道学习中的题，并至少填写一项有效修改。",
+            false,
+            Uuid::now_v7().to_string(),
+        ),
+        Err(crate::modules::problems::ProblemUseCaseError::ProblemNotFound) => AppResult::failure(
+            "problem_bulk_metadata_stale",
+            "部分题目已不在当前学习列表，请刷新后重新选择。",
+            false,
+            Uuid::now_v7().to_string(),
+        ),
+        Err(_) => internal_library_error("problem_bulk_metadata_failed"),
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn library_context(state: State<'_, LibraryRuntime>) -> AppResult<LibraryContext> {
@@ -174,10 +240,9 @@ pub fn library_context(state: State<'_, LibraryRuntime>) -> AppResult<LibraryCon
 #[specta::specta]
 pub fn problem_list(
     state: State<'_, LibraryRuntime>,
-    status: ProblemStatusFilter,
-    search: Option<String>,
+    input: ProblemListInput,
 ) -> AppResult<Vec<ProblemSummary>> {
-    problem_list_for(&state, status, search)
+    problem_list_for(&state, input, current_utc_millis())
 }
 
 #[tauri::command]
@@ -205,6 +270,15 @@ pub fn problem_change_status(
     input: ProblemStatusInput,
 ) -> AppResult<i32> {
     problem_change_status_for(&state, input, current_utc_millis())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn problem_bulk_metadata(
+    state: State<'_, LibraryRuntime>,
+    input: ProblemBulkMetadataInput,
+) -> AppResult<ProblemBulkMetadataReport> {
+    problem_bulk_metadata_for(&state, input, current_utc_millis())
 }
 
 fn current_utc_millis() -> i64 {

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/vue'
+import { render, screen, waitFor, within } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import type { NavigationAttempt } from '../../../app/composables/useUnsavedChangesGuard'
@@ -374,6 +374,33 @@ describe('ProblemDetailDrawer', () => {
 
     expect(view.emitted('update')).toEqual([[
       { problemId: 'problem-1', subject: '物理', note: '', tags: ['力学', '受力'], timeLimitSeconds: 180 },
+    ]])
+  })
+
+  it('adds a common mistake reason through the existing guarded save flow', async () => {
+    const user = userEvent.setup()
+    const view = render(ProblemDetailDrawer, {
+      props: {
+        loading: false,
+        detail: {
+          id: 'problem-1', subject: '数学', note: '', tags: ['函数'], status: 'active', timeLimitSeconds: null, updatedAtUtcMs: 1, assets: [],
+        },
+      },
+    })
+
+    await user.click(screen.getByRole('button', { name: '编辑题目' }))
+    const reasons = screen.getByRole('group', { name: '常见错因（可多选）' })
+    await user.click(within(reasons).getByRole('button', { name: /计算失误/ }))
+    await user.click(screen.getByRole('button', { name: '保存修改' }))
+
+    expect(view.emitted('update')).toEqual([[
+      {
+        problemId: 'problem-1',
+        subject: '数学',
+        note: '',
+        tags: ['函数', '错因·计算失误'],
+        timeLimitSeconds: null,
+      },
     ]])
   })
 

@@ -87,6 +87,12 @@ a separate product-owner decision.
    The smoke must report runtime readiness, create a real WebView2 window, keep it alive for
    10 seconds, prove a second launch hands off to the first instance, and close without producing
    `startup-failure.json`.
+   Local runs always execute inside Windows Sandbox. A production-identity installer smoke must
+   never run directly on a developer desktop; if Sandbox is unavailable, use the ephemeral CI
+   Windows runner. CI must set both `CI=true` and `MISTAKE_TRAINER_EPHEMERAL_WINDOWS=1`.
+   All guest installer, application, helper, and uninstaller processes are assigned before launch
+   to a kill-on-close Windows Job Object, so closing the terminal, Codex, or Sandbox cannot leave
+   an orphaned GUI. Cleanup is restricted to the current run's marked temporary directory.
 3. Merge only reviewed changes to `main` and wait for the CI `push` run on that exact commit to
    complete successfully.
 4. Create and push an annotated `vX.Y.Z` tag from that current `main` commit.

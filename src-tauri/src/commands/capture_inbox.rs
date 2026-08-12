@@ -22,6 +22,7 @@ use crate::{
             revert_capture_crop, stage_capture_item_role, update_capture_batch,
             update_capture_draft,
         },
+        capture_quality::{CaptureQualityReport, check_capture_quality},
     },
 };
 
@@ -444,6 +445,29 @@ pub fn capture_item_preview(
         Err(_) => return capture_error("library_lock_poisoned", None),
     };
     result_or_error(get_capture_item_preview(
+        &connection,
+        &state.blob_root,
+        &state.asset_key,
+        state.account_id(),
+        &profile.id,
+        &batch_id,
+        &item_id,
+    ))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn capture_quality_check(
+    state: State<'_, LibraryRuntime>,
+    batch_id: String,
+    item_id: String,
+) -> AppResult<CaptureQualityReport> {
+    let profile = state.active_profile();
+    let connection = match state.connection.lock() {
+        Ok(connection) => connection,
+        Err(_) => return capture_error("library_lock_poisoned", None),
+    };
+    result_or_error(check_capture_quality(
         &connection,
         &state.blob_root,
         &state.asset_key,

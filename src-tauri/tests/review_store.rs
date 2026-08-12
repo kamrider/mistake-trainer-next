@@ -9,9 +9,10 @@ use mistake_trainer_next_lib::{
         },
         profiles::{CreateProfile, create_profile},
         review::{
-            BeginExamGrading, NavigateExam, ReviewQueueQuery, ReviewUseCaseError, StartExamReview,
-            StartManualReview, SubmitReview, begin_exam_grading, list_review_queue, navigate_exam,
-            start_exam_review_queue, start_manual_review_queue, submit_review,
+            BeginExamGrading, NavigateExam, QuickReviewPreset, ReviewQueueQuery,
+            ReviewUseCaseError, StartExamReview, StartManualReview, StartQuickReview, SubmitReview,
+            begin_exam_grading, list_review_queue, navigate_exam, start_exam_review_queue,
+            start_manual_review_queue, start_quick_review_queue, submit_review,
         },
         review_focus::{
             FocusNumberSelection, ReviewFocusError, SkipReviewFocus, select_focus_number,
@@ -1286,4 +1287,121 @@ fn exam_sessions_explicitly_ignore_focus_preferences() {
         )
         .unwrap();
     assert_eq!(policy, "off");
+}
+
+#[test]
+fn quick_review_enforces_limits_due_order_filters_and_recent_again() {
+    let (directory, mut connection, profile_id, first_problem_id) = create_fixture();
+    let now = 1_700_000_000_000_i64;
+    let mut problem_ids = vec![first_problem_id];
+    for index in 0..12_i64 {
+        let problem = create_problem(
+            &mut connection,
+            &directory.path().join("assets"),
+            &[47_u8; 32],
+            CreateProblem {
+                account_id: "account-1".to_owned(),
+                profile_id: profile_id.clone(),
+                subject: if index == 11 { "物理" } else { "数学" }.to_owned(),
+                note: String::new(),
+                assets: vec![CaptureAsset {
+                    role: AssetRole::Question,
+                    media_type: "image/png".to_owned(),
+                    bytes: format!("quick-question-{index}").into_bytes(),
+                }],
+                now_utc_ms: 300 + index,
+            },
+        )
+        .unwrap();
+        problem_ids.push(problem.id);
+    }
+    for problem_id in problem_ids.iter().take(11) {
+        connection
+            .execute(
+                "UPDATE problems SET tags_json = '[\"函数\"]' WHERE id = ?1",
+                [problem_id],
+            )
+            .unwrap();
+    }
+    for (problem_id, due_at) in [
+        (&problem_ids[0], now + 10_000),
+        (&problem_ids[3], now - 10),
+        (&problem_ids[1], now - 30),
+        (&problem_ids[2], now - 20),
+    ] {
+        connection
+            .execute(
+                "INSERT INTO schedule_states(problem_id, due_at_utc_ms, stability, difficulty, last_reviewed_at_utc_ms, algorithm_version, parameter_version, rebuilt_at_utc_ms)
+                 VALUES(?1, ?2, 1, 5, NULL, 'fsrs-1', 'default', ?3)",
+                rusqlite::params![problem_id, due_at, now - 40],
+            )
+            .unwrap();
+    }
+
+    let ten = start_quick_review_queue(
+        &mut connection,
+        StartQuickReview {
+            account_id: "account-1".to_owned(),
+            profile_id: profile_id.clone(),
+            preset: QuickReviewPreset::TenProblems,
+            subject: Some("数学".to_owned()),
+            tag: Some("函数".to_owned()),
+            now_utc_ms: now,
+        },
+    )
+    .expect("ten-problem quick review");
+    assert_eq!(ten.total_count, 10);
+    assert_eq!(
+        ten.items
+            .iter()
+            .take(3)
+            .map(|item| item.problem_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            problem_ids[1].as_str(),
+            problem_ids[2].as_str(),
+            problem_ids[3].as_str(),
+        ]
+    );
+    assert!(
+        ten.items
+            .iter()
+            .all(|item| item.problem_id != problem_ids[0])
+    );
+
+    connection
+        .execute(
+            "INSERT INTO review_events(id, account_id, profile_id, problem_id, device_id, rating, duration_ms, occurred_at_utc_ms, algorithm_version, parameter_version)
+             VALUES('quick-again', 'account-1', ?1, ?2, 'device', 'again', 500, ?3, 'fsrs-1', 'default')",
+            rusqlite::params![profile_id, problem_ids[4], now - 1_000],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO schedule_states(problem_id, due_at_utc_ms, stability, difficulty, last_reviewed_at_utc_ms, algorithm_version, parameter_version, rebuilt_at_utc_ms)
+             VALUES(?1, ?2, 1, 5, ?3, 'fsrs-1', 'default', ?3)",
+            rusqlite::params![problem_ids[4], now + 20_000, now - 1_000],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO review_events(id, account_id, profile_id, problem_id, device_id, rating, duration_ms, occurred_at_utc_ms, algorithm_version, parameter_version)
+             VALUES('quick-old-again', 'account-1', ?1, ?2, 'device', 'again', 500, ?3, 'fsrs-1', 'default')",
+            rusqlite::params![profile_id, problem_ids[5], now - 31 * 86_400_000],
+        )
+        .unwrap();
+    let recent = start_quick_review_queue(
+        &mut connection,
+        StartQuickReview {
+            account_id: "account-1".to_owned(),
+            profile_id,
+            preset: QuickReviewPreset::RecentlyForgotten,
+            subject: None,
+            tag: None,
+            now_utc_ms: now,
+        },
+    )
+    .expect("recently forgotten quick review");
+    assert_eq!(recent.total_count, 1);
+    assert_eq!(recent.items[0].problem_id, problem_ids[4]);
 }

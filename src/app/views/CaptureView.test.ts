@@ -32,6 +32,7 @@ const api = vi.hoisted(() => ({
   captureCropApply: vi.fn(),
   captureCropRevert: vi.fn(),
   captureItemPreview: vi.fn(),
+  captureQualityCheck: vi.fn(),
   captureCommitReady: vi.fn(),
   captureRecognitionStatus: vi.fn(),
   captureRecognitionLastOperation: vi.fn(),
@@ -52,11 +53,13 @@ vi.mock('../../modules/capture/components/CaptureWorkspace.vue', () => ({
       'recognitionJob', 'recognitionOperation', 'recognitionNotice',
       'recognitionOperationBusy',
       'previews', 'importProgress', 'commitMessage', 'saveState', 'draftSaveRetryAvailable',
+      'qualityReports', 'qualityCheckingItemId', 'qualityErrors', 'qualityDismissedItemIds',
     ],
     emits: [
       'openBatch', 'back', 'mobileCapture', 'stopMobileCapture', 'mergeCard', 'deleteDraft', 'moveItem',
       'assignBatchSubject', 'updateDraft', 'importSelect', 'importFiles', 'removeItem', 'crop', 'revertCrop', 'commitReady',
       'recognitionEdit', 'recognitionApply', 'recognitionRevert', 'applyPairSuggestions', 'preview', 'retryDraftSave',
+      'qualityCheck', 'qualityDismiss',
     ],
     setup(_props: Record<string, unknown>, { emit }: { emit: (event: string, ...args: unknown[]) => void }) {
       const emitFiles = () => emit('importFiles', [
@@ -120,6 +123,8 @@ vi.mock('../../modules/capture/components/CaptureWorkspace.vue', () => ({
         <button @click="emitPreviewTwice">preview twice</button>
         <button @click="emitPreviewSeries">preview 41</button>
         <button @click="$emit('preview', 'item-1')">preview first</button>
+        <button @click="$emit('qualityCheck', 'item-1')">check quality</button>
+        <span data-testid="quality-count">{{ Object.keys(qualityReports ?? {}).length }}</span>
         <button
           v-if="recognitionJob?.suggestions.some(item => item.id === 'suggestion-1')"
           :key="[recognitionJob.suggestions.find(item => item.id === 'suggestion-1')?.state, errorMessage ? 'error' : 'ready'].join('-')"
@@ -306,6 +311,12 @@ beforeEach(() => {
   api.captureCropRevert.mockResolvedValue(success(detail))
   api.captureItemPreview.mockImplementation((_batchId: string, itemId: string) =>
     Promise.resolve(success({ itemId, dataUrl: `data:image/png;base64,${itemId}` })))
+  api.captureQualityCheck.mockResolvedValue(success({
+    itemId: 'item-1', issues: ['skewed'], sharpnessScore: 0.4,
+    darkFraction: 0.01, brightFraction: 0.5, contrastScore: 0.7,
+    suggestedRotationDegrees: -2.1,
+    suggestedCrop: { x: 0.12, y: 0.08, width: 0.76, height: 0.8 },
+  }))
   api.captureCommitReady.mockResolvedValue(success({
     committedProblemIds: ['problem-1'],
     committedCount: 1,
@@ -590,6 +601,30 @@ it('coalesces duplicate thumbnail requests while one preview is loading', async 
   await waitFor(() => expect(screen.getByTestId('preview-cache')).toHaveTextContent('1'))
   await fireEvent.click(screen.getByRole('button', { name: 'preview twice' }))
   expect(api.captureItemPreview).toHaveBeenCalledOnce()
+})
+
+it('checks quality only on request and caches the local report for the active batch', async () => {
+  api.captureBatchDetail.mockResolvedValue(success(organizingDetail))
+  render(CaptureView)
+  expect(api.captureQualityCheck).not.toHaveBeenCalled()
+  await fireEvent.click(screen.getByRole('button', { name: 'open batch' }))
+  await waitFor(() => expect(screen.getByTestId('active-batch')).toHaveTextContent('batch-1'))
+  expect(api.captureQualityCheck).not.toHaveBeenCalled()
+
+  await fireEvent.click(screen.getByRole('button', { name: 'check quality' }))
+  await waitFor(() => expect(api.captureQualityCheck).toHaveBeenCalledWith('batch-1', 'item-1'))
+  await waitFor(() => expect(screen.getByTestId('quality-count')).toHaveTextContent('1'))
+  await fireEvent.click(screen.getByRole('button', { name: 'check quality' }))
+  expect(api.captureQualityCheck).toHaveBeenCalledOnce()
+
+  await fireEvent.click(screen.getByRole('button', { name: 'crop item' }))
+  const region = await screen.findByRole('group', { name: '裁剪区域 1' })
+  expect(region).toHaveStyle({ left: '12%', top: '8%', width: '76%', height: '80%' })
+  expect(screen.getByText(/质量检测建议约旋转 -2.1°/)).toBeVisible()
+  await fireEvent.click(screen.getByRole('button', { name: '取消' }))
+
+  await fireEvent.click(screen.getByRole('button', { name: 'close batch' }))
+  expect(screen.getByTestId('quality-count')).toHaveTextContent('0')
 })
 
 it('does not cache a preview that returns after leaving the batch', async () => {

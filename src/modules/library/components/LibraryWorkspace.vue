@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { Archive, BookOpen, CheckCheck, ClipboardCheck, Image, ListChecks, LoaderCircle, Play, Plus, RotateCcw, Search, Trash2, X } from '@lucide/vue'
+import { Archive, BookOpen, CheckCheck, ClipboardCheck, FilePenLine, Image, ListChecks, LoaderCircle, Play, Plus, RotateCcw, Search, Trash2, X } from '@lucide/vue'
 import { computed, ref } from 'vue'
 import type { ProblemStatusFilter, ProblemSummary } from '../../../shared/api/bindings'
+import { EMPTY_LIBRARY_FILTERS, type LibraryAdvancedFilters } from '../domain/libraryFilters'
+import LibraryFilterPanel from './LibraryFilterPanel.vue'
 
 const props = defineProps<{
   profileName: string
@@ -13,6 +15,10 @@ const props = defineProps<{
   selectedProblemIds?: string[]
   startingExperience?: 'review' | 'exam' | null
   changingBatchStatus?: ProblemStatusFilter | null
+  bulkMetadataBusy?: boolean
+  advancedFilters?: LibraryAdvancedFilters
+  subjectOptions?: string[]
+  tagOptions?: string[]
 }>()
 
 const emit = defineEmits<{
@@ -26,6 +32,8 @@ const emit = defineEmits<{
   startExam: []
   selectAll: []
   clearSelection: []
+  filtersChange: [filters: LibraryAdvancedFilters]
+  bulkMetadata: []
 }>()
 
 const filters: Array<{ value: ProblemStatusFilter; label: string }> = [
@@ -36,7 +44,11 @@ const filters: Array<{ value: ProblemStatusFilter; label: string }> = [
 
 const selectionMode = ref(false)
 const isSelecting = computed(() => selectionMode.value || Boolean(props.selectedProblemIds?.length))
-const batchInteractionBusy = computed(() => Boolean(props.startingExperience || props.changingBatchStatus))
+const batchInteractionBusy = computed(() => Boolean(
+  props.startingExperience || props.changingBatchStatus || props.bulkMetadataBusy))
+const resolvedFilters = computed(() => props.advancedFilters ?? EMPTY_LIBRARY_FILTERS)
+const resolvedSubjectOptions = computed(() => props.subjectOptions ?? [])
+const resolvedTagOptions = computed(() => props.tagOptions ?? [])
 
 function toggleBatchManagement() {
   if (isSelecting.value) {
@@ -109,6 +121,13 @@ function toggleBatchManagement() {
           @input="$emit('searchChange', ($event.target as HTMLInputElement).value)"
         >
       </label>
+      <LibraryFilterPanel
+        :model-value="resolvedFilters"
+        :subject-options="resolvedSubjectOptions"
+        :tag-options="resolvedTagOptions"
+        :disabled="batchInteractionBusy"
+        @update:model-value="$emit('filtersChange', $event)"
+      />
       <div
         v-if="problems.length"
         class="selection-tools"
@@ -197,6 +216,25 @@ function toggleBatchManagement() {
               aria-hidden="true"
             />
             {{ startingExperience === 'exam' ? '正在准备模拟考试…' : `模拟考试 ${selectedProblemIds.length} 道题` }}
+          </button>
+          <button
+            v-if="status === 'active'"
+            type="button"
+            :disabled="batchInteractionBusy"
+            @click="$emit('bulkMetadata')"
+          >
+            <LoaderCircle
+              v-if="bulkMetadataBusy"
+              class="spin"
+              :size="15"
+              aria-hidden="true"
+            />
+            <FilePenLine
+              v-else
+              :size="15"
+              aria-hidden="true"
+            />
+            {{ bulkMetadataBusy ? '正在批量修改…' : '批量修改' }}
           </button>
           <button
             v-if="status === 'active'"

@@ -15,6 +15,7 @@ const api = vi.hoisted(() => ({
   problemList: vi.fn(),
   problemDetail: vi.fn(),
   problemChangeStatus: vi.fn(),
+  problemBulkMetadata: vi.fn(),
   problemUpdate: vi.fn(),
   reviewManualStart: vi.fn(),
   reviewExamStart: vi.fn(),
@@ -113,6 +114,7 @@ describe('LibraryView manual review deck', () => {
       },
     })
     api.problemChangeStatus.mockResolvedValue({ ok: true, data: problems })
+    api.problemBulkMetadata.mockResolvedValue({ ok: true, data: { updatedCount: 1 } })
     api.problemDetail.mockResolvedValue({ ok: true, data: problemDetail })
     api.problemUpdate.mockResolvedValue({ ok: true, data: true })
   })
@@ -428,5 +430,67 @@ describe('LibraryView manual review deck', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('详情刷新失败，请重试。')
     expect(screen.getByRole('heading', { name: '数学竞赛' })).toBeVisible()
     expect(screen.getByRole('button', { name: '编辑题目' })).toBeEnabled()
+  })
+
+  it('keeps advanced filters after closing detail and refetches with typed input', async () => {
+    const user = userEvent.setup()
+    await renderView()
+    await user.click(screen.getByRole('button', { name: '更多筛选' }))
+    await user.click(screen.getByRole('checkbox', { name: '数学' }))
+
+    await waitFor(() => expect(api.problemList).toHaveBeenLastCalledWith({
+      status: 'active',
+      search: null,
+      subjects: ['数学'],
+      tags: [],
+      reviewState: 'any',
+      answerState: 'any',
+    }))
+    await user.click(screen.getByRole('button', { name: '打开 数学 错题详情' }))
+    await user.click(await screen.findByRole('button', { name: '关闭题目详情' }))
+    expect(screen.getByRole('button', { name: '移除科目 数学' })).toBeVisible()
+  })
+
+  it('persists one normalized bulk metadata command before refresh and sync', async () => {
+    const user = userEvent.setup()
+    await renderView()
+    await user.click(screen.getByRole('checkbox', { name: '选择 数学 错题' }))
+    await user.click(screen.getByRole('button', { name: '批量修改' }))
+    expect(screen.getByRole('dialog', { name: '修改已选 1 道题' })).toBeVisible()
+    await user.type(screen.getByRole('textbox', { name: '添加标签' }), '重点，重点')
+    await user.click(screen.getByRole('button', { name: '确认批量修改' }))
+
+    await waitFor(() => expect(api.problemBulkMetadata).toHaveBeenCalledWith({
+      problemIds: ['problem-1'],
+      subject: null,
+      addTags: ['重点'],
+      removeTags: [],
+    }))
+    await waitFor(() => expect(api.problemList).toHaveBeenCalledTimes(2))
+    expect(syncController.scheduleMutation).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('dialog', { name: '修改已选 1 道题' })).not.toBeInTheDocument()
+  })
+
+  it('hydrates a serializable report deep-link into the typed library filter', async () => {
+    const router = createAppRouter(createMemoryHistory())
+    await router.push({ name: 'library', query: { tag: '错因·计算失误' } })
+    await router.isReady()
+    render(LibraryView, {
+      global: {
+        plugins: [router],
+        provide: { [syncControllerKey as symbol]: syncController },
+      },
+    })
+
+    await screen.findByText('先看定义域。')
+    expect(api.problemList).toHaveBeenCalledWith({
+      status: 'active',
+      search: null,
+      subjects: [],
+      tags: ['错因·计算失误'],
+      reviewState: 'any',
+      answerState: 'any',
+    })
+    expect(screen.getByRole('button', { name: '移除标签 错因·计算失误' })).toBeVisible()
   })
 })

@@ -11,7 +11,8 @@ use mistake_trainer_next_lib::{
         validate_library_unlock_credentials,
     },
     modules::problems::{
-        AssetRole, CaptureAsset, CreateProblem, ProblemStatusFilter, create_problem,
+        AssetRole, CaptureAsset, CreateProblem, ProblemAnswerState, ProblemListInput,
+        ProblemReviewState, ProblemStatusFilter, create_problem,
     },
 };
 use tempfile::tempdir;
@@ -160,7 +161,9 @@ fn lock_cycle_reopens_the_same_profile_problem_and_encrypted_assets() {
         .expect("initial startup")
     {
         LibraryStartup::Ready(runtime) => runtime,
-        LibraryStartup::Locked | LibraryStartup::AccessUnavailable(_) => {
+        LibraryStartup::Locked
+        | LibraryStartup::AccessUnavailable(_)
+        | LibraryStartup::RecoveryRequired(_) => {
             panic!("a new library must start unlocked")
         }
     };
@@ -207,7 +210,9 @@ fn lock_cycle_reopens_the_same_profile_problem_and_encrypted_assets() {
         .expect("unlocked restart")
     {
         LibraryStartup::Ready(runtime) => runtime,
-        LibraryStartup::Locked | LibraryStartup::AccessUnavailable(_) => {
+        LibraryStartup::Locked
+        | LibraryStartup::AccessUnavailable(_)
+        | LibraryStartup::RecoveryRequired(_) => {
             panic!("validated unlock must reopen the library")
         }
     };
@@ -216,8 +221,15 @@ fn lock_cycle_reopens_the_same_profile_problem_and_encrypted_assets() {
     assert_eq!(reopened.active_profile(), profile);
     let problems = problem_list_for(
         &reopened,
-        ProblemStatusFilter::Active,
-        Some("锁定生命周期验收".to_owned()),
+        ProblemListInput {
+            status: ProblemStatusFilter::Active,
+            search: Some("锁定生命周期验收".to_owned()),
+            subjects: vec![],
+            tags: vec![],
+            review_state: ProblemReviewState::Any,
+            answer_state: ProblemAnswerState::Any,
+        },
+        500,
     );
     let serialized = serde_json::to_value(problems).expect("serialize problem list");
     assert_eq!(serialized["ok"], true);

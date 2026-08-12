@@ -1,5 +1,22 @@
 # Windows review-history acceptance
 
+## Learning-loop entry points
+
+- From the dashboard, open **快速训练** and exercise five-minute, ten-problem, and
+  recently-forgotten presets with and without subject/tag filters. Confirm empty candidates keep the
+  user on the dashboard, success navigates only after persistence, the route contains no problem ID,
+  and reopening resumes the exact stored order.
+- With controlled fixtures, confirm five-minute sessions contain at most eight cards, ten-problem
+  sessions at most ten, recently-forgotten sessions at most twenty, and due cards precede new cards
+  with stable ordering across restarts.
+- In **学习报告**, confirm **本周最值得修正** requires at least two reviews per subject or canonical
+  reason tag, uses only recent lapse evidence, orders no more than five rows, and explains sparse data
+  without claiming a weakness. Activating a row opens the library with a serializable filter, never
+  raw problem IDs.
+- Confirm **未来七天任务** shows exactly today plus six dates using the Windows local UTC offset and
+  distinguishes today's overdue count without alarming copy. Check a fixture that crosses a UTC
+  calendar boundary.
+
 ## Entry and identity
 
 - Open **学习报告** and activate **查看完整复习历史**.
