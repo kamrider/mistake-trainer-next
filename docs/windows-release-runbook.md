@@ -90,9 +90,13 @@ a separate product-owner decision.
    Local runs always execute inside Windows Sandbox. A production-identity installer smoke must
    never run directly on a developer desktop; if Sandbox is unavailable, use the ephemeral CI
    Windows runner. CI must set both `CI=true` and `MISTAKE_TRAINER_EPHEMERAL_WINDOWS=1`.
-   All guest installer, application, helper, and uninstaller processes are assigned before launch
-   to a kill-on-close Windows Job Object, so closing the terminal, Codex, or Sandbox cannot leave
-   an orphaned GUI. Cleanup is restricted to the current run's marked temporary directory.
+   All guest installer, application, helper, and uninstaller entry processes are assigned before
+   launch to kill-on-close Windows Job Objects. The application and checks use a strict job. NSIS
+   install, reinstall, and uninstall use a separate job that permits only an explicit Windows
+   `CREATE_BREAKAWAY_FROM_JOB` request, because prerequisite installers may create their own nested
+   job; the outer ephemeral CI runner or Windows Sandbox remains the isolation boundary. Closing
+   the terminal, Codex, or Sandbox therefore cannot leave an orphaned production GUI. Cleanup is
+   restricted to the current run's marked temporary directory.
 3. Merge only reviewed changes to `main` and wait for the CI `push` run on that exact commit to
    complete successfully.
 4. Create and push an annotated `vX.Y.Z` tag from that current `main` commit.
