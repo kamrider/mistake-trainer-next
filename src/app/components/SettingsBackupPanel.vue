@@ -1,13 +1,22 @@
 <script setup lang="ts">
 import { ArchiveRestore, FolderCheck, ShieldCheck } from '@lucide/vue'
-import { ref } from 'vue'
-import type { BackupRestoreCandidate, BackupSummary } from '../../shared/api/bindings'
+import { ref, watch } from 'vue'
+import type {
+  AutomaticBackupStatus,
+  BackupRestoreCandidate,
+  BackupSummary,
+  PortableBackupReceipt,
+} from '../../shared/api/bindings'
 import { formatSettingsBytes, formatSettingsTime } from '../settings-formatters'
 
-defineProps<{
+const props = defineProps<{
   created: BackupSummary | undefined
   candidate: BackupRestoreCandidate | undefined
+  portableReceipt: PortableBackupReceipt | undefined
+  automaticStatus: AutomaticBackupStatus | undefined
+  automaticBusy: boolean
   creating: boolean
+  creatingPortable: boolean
   preparing: boolean
   restoring: boolean
   message: string
@@ -15,14 +24,34 @@ defineProps<{
 
 const emit = defineEmits<{
   create: []
+  createPortable: []
+  dismissPortable: []
+  preparePortable: [recoveryKey: string]
+  configureAutomatic: [intervalDays: number, retentionCount: number]
+  disableAutomatic: []
   prepare: []
   openRestore: []
 }>()
 
 const restoreAction = ref<HTMLButtonElement>()
+const recoveryKey = ref('')
+const intervalDays = ref(props.automaticStatus?.intervalDays ?? 7)
+const retentionCount = ref(props.automaticStatus?.retentionCount ?? 5)
+
+watch(() => props.automaticStatus, (status) => {
+  if (!status) return
+  intervalDays.value = status.intervalDays
+  retentionCount.value = status.retentionCount
+})
 
 function focusRestoreAction() {
   restoreAction.value?.focus()
+}
+
+function submitPortableRestore() {
+  const key = recoveryKey.value
+  recoveryKey.value = ''
+  emit('preparePortable', key)
 }
 
 defineExpose({ focusRestoreAction })
@@ -45,14 +74,21 @@ defineExpose({ focusRestoreAction })
       <div class="backup-actions">
         <button
           type="button"
-          :disabled="creating || preparing || restoring"
+          :disabled="creating || creatingPortable || preparing || restoring"
           @click="emit('create')"
         >
           <ArchiveRestore :size="16" />{{ creating ? '正在创建…' : '创建加密备份' }}
         </button>
         <button
           type="button"
-          :disabled="creating || preparing || restoring"
+          :disabled="creating || creatingPortable || preparing || restoring"
+          @click="emit('createPortable')"
+        >
+          <ShieldCheck :size="16" />{{ creatingPortable ? '正在封装备份…' : '创建便携加密备份' }}
+        </button>
+        <button
+          type="button"
+          :disabled="creating || creatingPortable || preparing || restoring"
           @click="emit('prepare')"
         >
           <FolderCheck :size="16" />{{ preparing ? '正在校验并暂存…' : '选择备份并准备恢复' }}
@@ -60,8 +96,90 @@ defineExpose({ focusRestoreAction })
       </div>
     </header>
     <p class="backup-boundary">
-      当前备份依赖这台可信 Windows 设备保存的加密凭据；跨设备恢复将在账户同步阶段使用正式密钥封装接入，不使用弱口令派生方案。
+      普通备份依赖这台可信 Windows 设备保存的加密凭据；便携备份额外使用一次性高熵恢复密钥封装凭据，不使用弱口令派生方案。
     </p>
+    <section
+      class="automatic-backup"
+      aria-labelledby="automatic-backup-title"
+    >
+      <div>
+        <strong id="automatic-backup-title">自动备份</strong>
+        <p v-if="automaticStatus?.enabled">
+          已启用 · {{ automaticStatus.destinationLabel }} · 每 {{ automaticStatus.intervalDays }} 天 · 保留 {{ automaticStatus.retentionCount }} 份
+        </p>
+        <p v-else>
+          应用启动时检查是否到期；自动备份保存在独立目录，不会清理手动或便携备份。
+        </p>
+      </div>
+      <label>
+        间隔天数
+        <input
+          v-model.number="intervalDays"
+          type="number"
+          min="1"
+          max="30"
+        >
+      </label>
+      <label>
+        保留份数
+        <input
+          v-model.number="retentionCount"
+          type="number"
+          min="1"
+          max="20"
+        >
+      </label>
+      <button
+        type="button"
+        :disabled="automaticBusy || creating || creatingPortable || preparing || restoring"
+        @click="emit('configureAutomatic', intervalDays, retentionCount)"
+      >
+        {{ automaticBusy ? '正在更新…' : automaticStatus?.enabled ? '更改自动备份目录/策略' : '选择目录并启用' }}
+      </button>
+      <button
+        v-if="automaticStatus?.enabled"
+        type="button"
+        :disabled="automaticBusy || creating || creatingPortable || preparing || restoring"
+        @click="emit('disableAutomatic')"
+      >
+        停用自动备份
+      </button>
+    </section>
+    <article
+      v-if="portableReceipt"
+      class="portable-recovery"
+      aria-labelledby="portable-recovery-title"
+    >
+      <strong id="portable-recovery-title">恢复密钥只显示这一次</strong>
+      <p>请离线保存。密钥与备份包必须分开保管；丢失后无法找回，也无法在其他设备解密该备份。</p>
+      <code>{{ portableReceipt.recoveryKey }}</code>
+      <button
+        type="button"
+        @click="emit('dismissPortable')"
+      >
+        我已安全保存，隐藏密钥
+      </button>
+    </article>
+    <form
+      class="portable-restore"
+      @submit.prevent="submitPortableRestore"
+    >
+      <label for="portable-recovery-key">跨设备恢复密钥</label>
+      <input
+        id="portable-recovery-key"
+        v-model.trim="recoveryKey"
+        type="password"
+        autocomplete="off"
+        spellcheck="false"
+        placeholder="粘贴创建便携备份时显示的密钥"
+      >
+      <button
+        type="submit"
+        :disabled="!recoveryKey || creating || creatingPortable || preparing || restoring"
+      >
+        {{ preparing ? '正在验证并转换…' : '选择便携备份并准备恢复' }}
+      </button>
+    </form>
     <p
       v-if="message"
       class="backup-message"
@@ -88,7 +206,7 @@ defineExpose({ focusRestoreAction })
         <button
           ref="restoreAction"
           type="button"
-          :disabled="creating || preparing || restoring"
+          :disabled="creating || creatingPortable || preparing || restoring"
           @click="emit('openRestore')"
         >
           查看风险并确认恢复
@@ -109,6 +227,19 @@ button:disabled { opacity: .5; }
 .backup-actions { display: flex; flex: 0 0 auto; gap: 8px; }
 .backup-boundary { margin: 0; padding: 13px 15px; color: var(--ink-muted); border-left: 3px solid var(--cinnabar); border-radius: 7px; background: rgba(232,221,199,.28); font-size: 12px; line-height: 1.7; }
 .backup-message { margin: 12px 0 0; padding: 11px 13px; color: #843d2c; border: 1px solid rgba(185,88,63,.25); border-radius: 11px; background: rgba(185,88,63,.08); font-size: 12px; line-height: 1.6; }
+.portable-recovery { display: grid; gap: 9px; margin-top: 14px; padding: 15px; border: 1px solid rgba(185,88,63,.3); border-radius: 12px; background: rgba(185,88,63,.08); }
+.portable-recovery p { margin: 0; color: var(--ink-muted); font-size: 12px; line-height: 1.6; }
+.portable-recovery code { padding: 10px; border-radius: 8px; background: var(--paper-raised); overflow-wrap: anywhere; user-select: all; }
+.portable-recovery button { width: fit-content; }
+.automatic-backup { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-top: 14px; padding: 15px; border: 1px solid var(--line); border-radius: 12px; background: rgba(33,51,45,.035); }
+.automatic-backup > div { flex: 1 1 260px; }
+.automatic-backup strong { color: var(--green-deep); }
+.automatic-backup p { margin: 5px 0 0; color: var(--ink-muted); font-size: 12px; line-height: 1.5; }
+.automatic-backup label { display: grid; gap: 5px; color: var(--ink-muted); font-size: 12px; }
+.automatic-backup input { width: 82px; min-height: 40px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper-raised); }
+.portable-restore { display: grid; grid-template-columns: minmax(180px,1fr) auto; gap: 8px; align-items: end; margin-top: 14px; }
+.portable-restore label { grid-column: 1 / -1; color: var(--green-deep); font-size: 12px; font-weight: 700; }
+.portable-restore input { min-height: 44px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; background: var(--paper-raised); }
 .backup-results { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; margin-top: 14px; }
 .backup-results article { display: grid; gap: 6px; padding: 15px; border-radius: 12px; background: rgba(33,51,45,.055); }
 .backup-results strong { display: flex; gap: 6px; align-items: center; color: #557263; font-size: 13px; }
@@ -122,6 +253,7 @@ button:disabled { opacity: .5; }
   .backup-actions { width: 100%; flex-direction: column; }
   .backup-actions button { justify-content: center; }
   .backup-results { grid-template-columns: 1fr; }
+  .portable-restore { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) {
   .restore-ready-card button { transition: none; }

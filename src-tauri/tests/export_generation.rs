@@ -24,16 +24,24 @@ fn png(color: [u8; 4]) -> Vec<u8> {
     bytes.into_inner()
 }
 
-fn document_xml(path: &std::path::Path) -> String {
+fn package_xml(path: &std::path::Path, member: &str) -> String {
     let file = File::open(path).unwrap();
     let mut archive = zip::ZipArchive::new(file).unwrap();
     let mut xml = String::new();
     archive
-        .by_name("word/document.xml")
+        .by_name(member)
         .unwrap()
         .read_to_string(&mut xml)
         .unwrap();
     xml
+}
+
+fn document_xml(path: &std::path::Path) -> String {
+    package_xml(path, "word/document.xml")
+}
+
+fn styles_xml(path: &std::path::Path) -> String {
+    package_xml(path, "word/styles.xml")
 }
 
 #[test]
@@ -141,6 +149,13 @@ fn generation_writes_original_images_and_word_documents_without_exposing_paths()
     assert!(folder_path.join("002-question-01.png").is_file());
     assert!(folder_path.join("002-answer-01.png").is_file());
 
+    connection
+        .execute(
+            "DELETE FROM problem_assets WHERE problem_id = ?1 AND role = 'answer'",
+            [&second_problem.id],
+        )
+        .unwrap();
+
     let docx_snapshot = create_export_snapshot(
         &mut connection,
         CreateExportSnapshot {
@@ -180,6 +195,17 @@ fn generation_writes_original_images_and_word_documents_without_exposing_paths()
         assert!(bytes.starts_with(b"PK"));
         assert!(bytes.len() > 1_000);
         let xml = document_xml(&path);
+        assert!(xml.contains("w:pStyle w:val=\"Title\""));
+        assert!(xml.contains("w:pStyle w:val=\"Heading2\""));
+        assert!(xml.contains("w:br w:type=\"page\""));
+        assert!(xml.contains("（缺少答案图片）"));
+        let styles = styles_xml(&path);
+        assert!(styles.contains("w:styleId=\"Title\""));
+        assert!(styles.contains("w:styleId=\"Heading1\""));
+        assert!(styles.contains("w:styleId=\"Heading2\""));
+        assert!(styles.contains("w:outlineLvl w:val=\"0\""));
+        assert!(styles.contains("w:outlineLvl w:val=\"1\""));
+        assert!(!xml.contains(directory.path().to_string_lossy().as_ref()));
         let first_question = xml.find("1. 题目 · 数学").unwrap();
         let first_answer = xml.find("答案").unwrap();
         let second_question = xml.find("2. 题目 · 物理").unwrap();
@@ -209,6 +235,11 @@ fn generation_writes_original_images_and_word_documents_without_exposing_paths()
     )
     .unwrap();
     let grouped_xml = document_xml(&destination.path().join(grouped.output_name));
+    assert!(grouped_xml.contains("w:pStyle w:val=\"Title\""));
+    assert!(grouped_xml.contains("w:pStyle w:val=\"Heading1\""));
+    assert!(grouped_xml.contains("w:pStyle w:val=\"Heading2\""));
+    assert!(grouped_xml.contains("w:br w:type=\"page\""));
+    assert!(grouped_xml.contains("（缺少答案图片）"));
     let first_question = grouped_xml.find("1. 题目 · 数学").unwrap();
     let second_question = grouped_xml.find("2. 题目 · 物理").unwrap();
     let first_answer = grouped_xml.find("1. 答案 · 数学").unwrap();

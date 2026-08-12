@@ -35,6 +35,7 @@ import {
   type CaptureBatchDetail,
   type CaptureBatchSummary,
   type CaptureDraftSummary,
+  type CaptureImportBytesInput,
   type CaptureCropRecipe,
   type CaptureQualityReport,
   type SubjectPreferences,
@@ -413,10 +414,14 @@ const fileImporter = useCaptureFileImport({
   isBlocked: () => busy.value,
   onBusyChange: (isBusy) => { busy.value = isBusy },
   importBytes: async input =>
-    normalizeAppResult(await commands.captureImportBytes(input)),
+    normalizeAppResult(await commands.captureImportBytes({
+      ...input,
+      // Tauri 2 serializes Uint8Array directly to Rust Vec<u8>. Specta emits
+      // number[] for Vec<u8>, so keep this compatibility cast at the IPC edge.
+      bytes: input.bytes as unknown as CaptureImportBytesInput['bytes'],
+    })),
   createUploadId: () => crypto.randomUUID(),
   maxBatchItems: 150,
-  concurrency: 2,
 })
 
 const importWorkflow = useCaptureImportWorkflow({
@@ -436,6 +441,7 @@ const {
   importFiles,
   importFromPaste,
   clearProgress: clearImportProgress,
+  cancelImport,
   dispose: disposeImportWorkflow,
 } = importWorkflow
 
@@ -899,6 +905,7 @@ onBeforeUnmount(() => {
     @discard-batch="discardBatch"
     @import-select="importSelect"
     @import-files="importFiles"
+    @cancel-import="cancelImport"
     @finish-collecting="finishCollecting"
     @apply-layout="applyLayout"
     @assign-batch-subject="assignBatchSubject"

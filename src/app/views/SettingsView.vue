@@ -3,7 +3,7 @@ import { isTauri } from '@tauri-apps/api/core'
 import { CheckCircle2, RotateCcw } from '@lucide/vue'
 import { computed, inject, nextTick, onMounted, ref } from 'vue'
 import { routeLocationKey, routerKey } from 'vue-router'
-import { commands, type DiagnosticExportReceipt, type LibraryAccessStatus, type ReviewFocusPolicy, type ReviewPreferences, type ReviewPreferencesInput, type SettingsOverview, type StorageLocationStatus, type StorageMigrationReceipt, type SubjectPreferences, type SubjectPreferencesInput, type WindowsCompatibilityStatus, type WindowsUpdateCheckReport, type WindowsUpdateStatus } from '../../shared/api/bindings'
+import { commands, type AutomaticBackupStatus, type DiagnosticExportReceipt, type LibraryAccessStatus, type ReviewFocusPolicy, type ReviewPreferences, type ReviewPreferencesInput, type SettingsOverview, type StorageLocationStatus, type StorageMigrationReceipt, type SubjectPreferences, type SubjectPreferencesInput, type WindowsCompatibilityStatus, type WindowsUpdateCheckReport, type WindowsUpdateStatus } from '../../shared/api/bindings'
 import { normalizeAppResult } from '../../shared/api/normalize-result'
 import { backendKindLabel, loadSyncBackendStatus, setSyncBackend } from '../../shared/api/sync-backend'
 import LegacyImportPanel from '../../modules/legacy/components/LegacyImportPanel.vue'
@@ -49,10 +49,14 @@ const {
   phase: backupPhase,
   busy: backupBusy,
   created: createdBackup,
+  portableReceipt,
   candidate: restoreCandidate,
   message: backupMessage,
   createBackup: runCreateBackup,
+  createPortableBackup: runCreatePortableBackup,
+  clearPortableReceipt,
   prepareRestore: runPrepareRestore,
+  preparePortableRestore: runPreparePortableRestore,
   restoreBackup: runRestoreBackup,
 } = useSettingsBackupOperations({
   create: async () => {
@@ -60,9 +64,19 @@ const {
     if (invocation.status === 'error') throw new Error('backup command rejected')
     return normalizeAppResult(invocation.data)
   },
+  createPortable: async () => {
+    const invocation = await commands.backupCreatePortable()
+    if (invocation.status === 'error') throw new Error('portable backup command rejected')
+    return normalizeAppResult(invocation.data)
+  },
   prepareRestore: async () => {
     const invocation = await commands.backupPrepareRestore()
     if (invocation.status === 'error') throw new Error('backup command rejected')
+    return normalizeAppResult(invocation.data)
+  },
+  preparePortableRestore: async (recoveryKey) => {
+    const invocation = await commands.backupPreparePortableRestore(recoveryKey)
+    if (invocation.status === 'error') throw new Error('portable restore command rejected')
     return normalizeAppResult(invocation.data)
   },
   restore: async (candidateId) => {
@@ -72,8 +86,11 @@ const {
   },
 })
 const creatingBackup = computed(() => backupPhase.value === 'creating')
+const creatingPortableBackup = computed(() => backupPhase.value === 'creating_portable')
 const preparingRestore = computed(() => backupPhase.value === 'preparing')
 const restoring = computed(() => backupPhase.value === 'restoring')
+const automaticBackupStatus = ref<AutomaticBackupStatus>()
+const automaticBackupBusy = ref(false)
 const deviceAccessStatus = ref<LibraryAccessStatus>()
 const deviceAccessError = ref('')
 const deviceOverviewPanel = ref<{ focusLockAction: () => void }>()
@@ -417,10 +434,66 @@ async function createBackup() {
   if (errorMessage.value === backupNavigationBusyMessage) errorMessage.value = ''
 }
 
+async function createPortableBackup() {
+  errorMessage.value = ''
+  await runCreatePortableBackup()
+  if (errorMessage.value === backupNavigationBusyMessage) errorMessage.value = ''
+}
+
 async function prepareRestore() {
   errorMessage.value = ''
   await runPrepareRestore()
   if (errorMessage.value === backupNavigationBusyMessage) errorMessage.value = ''
+}
+
+async function preparePortableRestore(recoveryKey: string) {
+  errorMessage.value = ''
+  await runPreparePortableRestore(recoveryKey)
+  if (errorMessage.value === backupNavigationBusyMessage) errorMessage.value = ''
+}
+
+async function loadAutomaticBackupStatus() {
+  try {
+    const result = normalizeAppResult(await commands.backupAutomaticStatus())
+    if (result.ok) automaticBackupStatus.value = result.data
+  }
+  catch {
+    // Automatic backup is optional; other settings remain available.
+  }
+}
+
+async function configureAutomaticBackup(intervalDays: number, retentionCount: number) {
+  if (automaticBackupBusy.value) return
+  automaticBackupBusy.value = true
+  try {
+    const invocation = await commands.backupAutomaticConfigure(intervalDays, retentionCount)
+    if (invocation.status === 'error') throw new Error('automatic backup command rejected')
+    const result = normalizeAppResult(invocation.data)
+    if (!result.ok) backupMessage.value = result.error.userMessage
+    else if (result.data) automaticBackupStatus.value = result.data
+  }
+  catch {
+    backupMessage.value = '自动备份设置没有更新；现有备份和资料库保持不变。'
+  }
+  finally {
+    automaticBackupBusy.value = false
+  }
+}
+
+async function disableAutomaticBackup() {
+  if (automaticBackupBusy.value) return
+  automaticBackupBusy.value = true
+  try {
+    const result = normalizeAppResult(await commands.backupAutomaticDisable())
+    if (!result.ok) backupMessage.value = result.error.userMessage
+    else automaticBackupStatus.value = result.data
+  }
+  catch {
+    backupMessage.value = '自动备份没有停用；请稍后重试。'
+  }
+  finally {
+    automaticBackupBusy.value = false
+  }
 }
 
 function openRestoreDialog() {
@@ -553,6 +626,7 @@ const { loading, load } = useSettingsPageLoad({
   supplementaryTasks: [
     { label: '存储状态', run: loadStorageStatus },
     { label: '迁移记录', run: loadStorageMigrationReceipt },
+    { label: '自动备份', run: loadAutomaticBackupStatus },
     { label: '设备状态', run: loadDeviceAccessStatus },
     { label: 'Windows 兼容性', run: loadWindowsCompatibility },
     { label: '应用更新', run: loadWindowsUpdateStatus },
@@ -845,11 +919,20 @@ onMounted(async () => {
       ref="backupPanel"
       :created="createdBackup"
       :candidate="restoreCandidate"
+      :portable-receipt="portableReceipt"
+      :automatic-status="automaticBackupStatus"
+      :automatic-busy="automaticBackupBusy"
       :creating="creatingBackup"
+      :creating-portable="creatingPortableBackup"
       :preparing="preparingRestore"
       :restoring="restoring"
       :message="backupMessage"
       @create="createBackup"
+      @create-portable="createPortableBackup"
+      @dismiss-portable="clearPortableReceipt"
+      @prepare-portable="preparePortableRestore"
+      @configure-automatic="configureAutomaticBackup"
+      @disable-automatic="disableAutomaticBackup"
       @prepare="prepareRestore"
       @open-restore="openRestoreDialog"
     />

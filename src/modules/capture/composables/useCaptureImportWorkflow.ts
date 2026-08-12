@@ -16,12 +16,36 @@ interface CaptureImportWorkflowOptions {
 
 function buildImportNotice(outcome: CaptureFileImportOutcome) {
   const notices: string[] = []
+  for (const document of outcome.documentReports ?? []) {
+    if (document.canceled) {
+      notices.push(`${document.sourceName} 已取消；已加密保存 ${document.importedCount} 页。`)
+    }
+    else if (document.errorCode === 'capacity_full') {
+      notices.push(`${document.sourceName} 未处理：本批 150 张容量已满。`)
+    }
+    else if (document.errorCode) {
+      const reason = document.errorCode === 'password_required'
+        ? 'PDF 受密码保护'
+        : document.errorCode === 'too_large'
+          ? 'PDF 超过 100 MiB'
+          : document.errorCode === 'too_many_pages'
+            ? 'PDF 超过 150 页'
+            : 'PDF 损坏或无法读取'
+      notices.push(document.importedCount > 0
+        ? `${document.sourceName} 已加密保存 ${document.importedCount} 页；后续页面处理失败：${reason}。`
+        : `${document.sourceName} 未能导入：${reason}。`)
+    }
+    else {
+      const skipped = document.skippedCount > 0 ? `；另有 ${document.skippedCount} 页因容量限制未导入` : ''
+      notices.push(`${document.sourceName} 已加密导入 ${document.importedCount} / ${document.pageCount} 页${skipped}。`)
+    }
+  }
   if (outcome.unsupportedNames.length) {
     const preview = outcome.unsupportedNames.slice(0, 3).join('、')
     const suffix = outcome.unsupportedNames.length > 3
       ? ` 等 ${outcome.unsupportedNames.length} 个文件`
       : ''
-    notices.push(`${preview}${suffix} 不是支持的图片格式；仅支持 PNG、JPEG 和 WebP。`)
+    notices.push(`${preview}${suffix} 不是支持的文件格式；仅支持 PDF、PNG、JPEG 和 WebP。`)
   }
   if (outcome.skippedCount) {
     notices.push(`本批最多保存 150 张，已跳过最后 ${outcome.skippedCount} 张图片。`)
@@ -116,6 +140,7 @@ export function useCaptureImportWorkflow(options: CaptureImportWorkflowOptions) 
     importFiles,
     importFromPaste,
     clearProgress: options.fileImporter.clearProgress,
+    cancelImport: options.fileImporter.cancelImport,
     dispose: options.fileImporter.dispose,
   }
 }

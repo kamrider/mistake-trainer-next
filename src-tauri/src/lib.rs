@@ -78,6 +78,23 @@ pub fn run() -> tauri::Result<()> {
                                 eprintln!("capture recognition recovery failed closed");
                             }
                         }
+                        let automatic_control_root = control_root.clone();
+                        let automatic_connection = std::sync::Arc::clone(&runtime.connection);
+                        let automatic_blob_root = runtime.blob_root.clone();
+                        let automatic_database_key = runtime.database_key().to_owned();
+                        let automatic_account_id = runtime.account_id().to_owned();
+                        tauri::async_runtime::spawn_blocking(move || {
+                            if let Err(error) = modules::automatic_backup::run_due_automatic_backup(
+                                &automatic_control_root,
+                                automatic_connection.as_ref(),
+                                &automatic_blob_root,
+                                &automatic_database_key,
+                                &automatic_account_id,
+                                current_utc_millis(),
+                            ) {
+                                eprintln!("automatic backup failed closed [{}]", error);
+                            }
+                        });
                         app.manage(runtime);
                         commands::access::LibraryAccessGate::unlocked()
                     }

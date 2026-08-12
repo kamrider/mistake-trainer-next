@@ -1277,8 +1277,8 @@ describe('CaptureView one-time Windows LAN permission', () => {
     await waitFor(() => expect(api.captureImportBytes).toHaveBeenCalledTimes(2))
     expect((api.captureImportBytes.mock.calls[0]![0] as { sourceName: string }).sourceName).toBe('bad.png')
     expect((api.captureImportBytes.mock.calls[1]![0] as { sourceName: string }).sourceName).toBe('good.png')
-    expect((api.captureImportBytes.mock.calls[0]![0] as { sourceSequence: number }).sourceSequence).toBe(0)
-    expect((api.captureImportBytes.mock.calls[1]![0] as { sourceSequence: number }).sourceSequence).toBe(1)
+    expect((api.captureImportBytes.mock.calls[0]![0] as { sourceSequence: number | null }).sourceSequence).toBeNull()
+    expect((api.captureImportBytes.mock.calls[1]![0] as { sourceSequence: number | null }).sourceSequence).toBeNull()
   })
 
   it('keeps the workspace busy until the post-import refresh finishes', async () => {
@@ -1309,13 +1309,14 @@ describe('CaptureView one-time Windows LAN permission', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'open batch' }))
     await waitFor(() => expect(screen.getByTestId('active-batch')).toHaveTextContent('batch-1'))
     await fireEvent.click(screen.getByRole('button', { name: 'import files' }))
-    await waitFor(() => expect(api.captureImportBytes).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(api.captureImportBytes).toHaveBeenCalledOnce())
     expect(screen.getByTestId('import-progress')).toHaveTextContent('0/2')
     await fireEvent.click(screen.getByRole('button', { name: 'close batch' }))
     expect(screen.getByTestId('active-batch')).toHaveTextContent('none')
     expect(screen.getByTestId('import-progress')).toHaveTextContent('none')
 
     resolveFirst(success({}))
+    await waitFor(() => expect(api.captureImportBytes).toHaveBeenCalledTimes(2))
     resolveSecond(success({}))
 
     await waitFor(() => expect(screen.getByTestId('busy-state')).toHaveTextContent('idle'))

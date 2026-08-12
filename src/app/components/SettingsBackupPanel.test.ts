@@ -25,7 +25,11 @@ const candidate = {
 const baseProps = {
   created: undefined,
   candidate: undefined,
+  portableReceipt: undefined,
+  automaticStatus: undefined,
+  automaticBusy: false,
   creating: false,
+  creatingPortable: false,
   preparing: false,
   restoring: false,
   message: '',
@@ -40,6 +44,42 @@ describe('SettingsBackupPanel', () => {
 
     expect(view.emitted().create).toHaveLength(1)
     expect(view.emitted().prepare).toHaveLength(1)
+  })
+
+  it('creates a portable backup and renders the recovery key only in the explicit receipt', async () => {
+    const view = render(SettingsBackupPanel, {
+      props: {
+        ...baseProps,
+        portableReceipt: {
+          summary: created,
+          recoveryKey: 'portable-recovery-key',
+        },
+      },
+    })
+
+    expect(screen.getByText('恢复密钥只显示这一次')).toBeVisible()
+    expect(screen.getByText('portable-recovery-key')).toBeVisible()
+    expect(screen.getByText(/丢失后无法找回/)).toBeVisible()
+    await userEvent.click(screen.getByRole('button', { name: '创建便携加密备份' }))
+    await userEvent.click(screen.getByRole('button', { name: '我已安全保存，隐藏密钥' }))
+
+    expect(view.emitted().createPortable).toHaveLength(1)
+    expect(view.emitted().dismissPortable).toHaveLength(1)
+  })
+
+  it('emits portable restore and automatic backup policy intentions', async () => {
+    const view = render(SettingsBackupPanel, { props: baseProps })
+
+    await userEvent.type(screen.getByLabelText('跨设备恢复密钥'), 'recovery-key')
+    await userEvent.click(screen.getByRole('button', { name: '选择便携备份并准备恢复' }))
+    await userEvent.clear(screen.getByLabelText('间隔天数'))
+    await userEvent.type(screen.getByLabelText('间隔天数'), '14')
+    await userEvent.clear(screen.getByLabelText('保留份数'))
+    await userEvent.type(screen.getByLabelText('保留份数'), '8')
+    await userEvent.click(screen.getByRole('button', { name: '选择目录并启用' }))
+
+    expect(view.emitted().preparePortable?.[0]).toEqual(['recovery-key'])
+    expect(view.emitted().configureAutomatic?.[0]).toEqual([14, 8])
   })
 
   it('renders encrypted summaries and keeps restore explicit and path-free', async () => {

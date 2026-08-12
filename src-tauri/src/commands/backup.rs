@@ -15,9 +15,14 @@ use crate::{
     },
     infrastructure::runtime::{KeyringSecretStore, LibraryRuntime, load_restore_credentials},
     modules::{
+        automatic_backup::{
+            AutomaticBackupStatus, automatic_backup_status, configure_automatic_backup,
+            disable_automatic_backup,
+        },
         backup::{
-            BackupError, BackupRestoreCandidate, BackupRestoreReceipt, BackupSummary, RestoreMode,
-            create_backup, prepare_backup_restore, schedule_backup_restore,
+            BackupError, BackupRestoreCandidate, BackupRestoreReceipt, BackupSummary,
+            PortableBackupReceipt, RestoreMode, create_backup, create_portable_backup,
+            prepare_backup_restore, prepare_portable_backup_restore, schedule_backup_restore,
             schedule_backup_restore_with_mode, take_restore_receipt,
         },
         capture_lan::CaptureLanManager,
@@ -25,6 +30,53 @@ use crate::{
 };
 
 const LOCAL_LIBRARY_SERVICE: &str = "com.mistaketrainer.next.local-library";
+
+#[tauri::command]
+#[specta::specta]
+pub fn backup_automatic_status(
+    control_root: State<'_, ApplicationControlRoot>,
+) -> AppResult<AutomaticBackupStatus> {
+    match automatic_backup_status(&control_root.0) {
+        Ok(status) => AppResult::success(status),
+        Err(error) => backup_failure("backup_automatic_status_failed", &error),
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn backup_automatic_configure(
+    control_root: State<'_, ApplicationControlRoot>,
+    interval_days: u32,
+    retention_count: u32,
+) -> Result<AppResult<Option<AutomaticBackupStatus>>, ()> {
+    let control_root = control_root.0.clone();
+    let worker = tauri::async_runtime::spawn_blocking(move || {
+        let Some(destination) = rfd::FileDialog::new()
+            .set_title("选择自动备份文件夹")
+            .pick_folder()
+        else {
+            return Ok(None);
+        };
+        configure_automatic_backup(&control_root, &destination, interval_days, retention_count)
+            .map(Some)
+    });
+    Ok(match worker.await {
+        Ok(Ok(status)) => AppResult::success(status),
+        Ok(Err(error)) => backup_failure("backup_automatic_configure_failed", &error),
+        Err(_) => backup_failure("backup_automatic_configure_failed", &BackupError::Lock),
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn backup_automatic_disable(
+    control_root: State<'_, ApplicationControlRoot>,
+) -> AppResult<AutomaticBackupStatus> {
+    match disable_automatic_backup(&control_root.0) {
+        Ok(status) => AppResult::success(status),
+        Err(error) => backup_failure("backup_automatic_disable_failed", &error),
+    }
+}
 
 #[tauri::command]
 #[specta::specta]
@@ -57,6 +109,37 @@ pub async fn backup_create(
 
 #[tauri::command]
 #[specta::specta]
+pub async fn backup_create_portable(
+    state: State<'_, LibraryRuntime>,
+) -> Result<AppResult<Option<PortableBackupReceipt>>, ()> {
+    let connection = Arc::clone(&state.connection);
+    let blob_root = state.blob_root.clone();
+    let database_key = state.database_key().to_owned();
+    let asset_key = state.asset_key;
+    let account_id = state.account_id().to_owned();
+    drop(state);
+    let worker = tauri::async_runtime::spawn_blocking(move || {
+        let destination = rfd::FileDialog::new()
+            .set_title("选择便携加密备份保存位置")
+            .pick_folder();
+        create_portable_for_selected_destination(
+            &connection,
+            &blob_root,
+            &database_key,
+            &asset_key,
+            &account_id,
+            destination,
+        )
+    });
+    Ok(match worker.await {
+        Ok(Ok(receipt)) => AppResult::success(receipt),
+        Ok(Err(error)) => backup_failure("backup_create_portable_failed", &error),
+        Err(_) => backup_failure("backup_create_portable_failed", &BackupError::Lock),
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn backup_prepare_restore(
     state: State<'_, LibraryRuntime>,
 ) -> Result<AppResult<Option<BackupRestoreCandidate>>, ()> {
@@ -81,6 +164,37 @@ pub async fn backup_prepare_restore(
         Ok(Ok(summary)) => AppResult::success(summary),
         Ok(Err(error)) => backup_failure("backup_prepare_restore_failed", &error),
         Err(_) => backup_failure("backup_prepare_restore_failed", &BackupError::Lock),
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn backup_prepare_portable_restore(
+    state: State<'_, LibraryRuntime>,
+    recovery_key: String,
+) -> Result<AppResult<Option<BackupRestoreCandidate>>, ()> {
+    let database_key = state.database_key().to_owned();
+    let asset_key = state.asset_key;
+    let account_id = state.account_id().to_owned();
+    let application_root = application_root(&state.blob_root);
+    drop(state);
+    let worker = tauri::async_runtime::spawn_blocking(move || {
+        let source = rfd::FileDialog::new()
+            .set_title("选择要跨设备恢复的 Mistake Trainer 便携备份目录")
+            .pick_folder();
+        prepare_selected_portable_package(
+            application_root?,
+            &recovery_key,
+            &database_key,
+            &asset_key,
+            &account_id,
+            source,
+        )
+    });
+    Ok(match worker.await {
+        Ok(Ok(candidate)) => AppResult::success(candidate),
+        Ok(Err(error)) => backup_failure("backup_prepare_portable_restore_failed", &error),
+        Err(_) => backup_failure("backup_prepare_portable_restore_failed", &BackupError::Lock),
     })
 }
 
@@ -267,6 +381,29 @@ fn create_for_selected_destination(
     .map(Some)
 }
 
+fn create_portable_for_selected_destination(
+    connection: &Mutex<Connection>,
+    blob_root: &std::path::Path,
+    database_key: &str,
+    asset_key: &[u8; 32],
+    account_id: &str,
+    destination: Option<PathBuf>,
+) -> Result<Option<PortableBackupReceipt>, BackupError> {
+    let Some(destination) = destination else {
+        return Ok(None);
+    };
+    create_portable_backup(
+        connection,
+        blob_root,
+        database_key,
+        asset_key,
+        account_id,
+        &destination,
+        current_utc_millis(),
+    )
+    .map(Some)
+}
+
 fn prepare_selected_package(
     application_root: PathBuf,
     database_key: &str,
@@ -280,6 +417,29 @@ fn prepare_selected_package(
     prepare_backup_restore(
         &source,
         &application_root,
+        database_key,
+        asset_key,
+        account_id,
+        current_utc_millis(),
+    )
+    .map(Some)
+}
+
+fn prepare_selected_portable_package(
+    application_root: PathBuf,
+    recovery_key: &str,
+    database_key: &str,
+    asset_key: &[u8; 32],
+    account_id: &str,
+    source: Option<PathBuf>,
+) -> Result<Option<BackupRestoreCandidate>, BackupError> {
+    let Some(source) = source else {
+        return Ok(None);
+    };
+    prepare_portable_backup_restore(
+        &source,
+        &application_root,
+        recovery_key.trim(),
         database_key,
         asset_key,
         account_id,
@@ -313,6 +473,18 @@ fn backup_failure<T>(code: &str, error: &BackupError) -> AppResult<T> {
         BackupError::InvalidPackage | BackupError::Integrity => {
             ("备份包不完整或校验失败，未对现有资料库做任何修改。", false)
         }
+        BackupError::InvalidRecoveryKey => (
+            "恢复密钥不正确，或便携备份已经被修改；现有资料库没有改变。",
+            false,
+        ),
+        BackupError::Crypto => (
+            "无法安全创建便携备份，请稍后重试；现有资料库没有改变。",
+            true,
+        ),
+        BackupError::InvalidPolicy => (
+            "自动备份设置无效；间隔应为 1–30 天，保留数量应为 1–20 份。",
+            false,
+        ),
         BackupError::ExpiredCandidate => {
             ("这个恢复包的安全暂存已过期，请重新选择并验证备份。", false)
         }
@@ -341,13 +513,30 @@ fn current_utc_millis() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{backup_failure, prepare_selected_package};
+    use super::{
+        backup_failure, create_portable_for_selected_destination, prepare_selected_package,
+    };
     use crate::modules::backup::BackupError;
 
     #[test]
     fn cancelling_package_selection_returns_no_summary() {
         let result = prepare_selected_package(
             std::path::PathBuf::from("unused"),
+            "unused",
+            &[0_u8; 32],
+            "unused",
+            None,
+        )
+        .expect("cancel succeeds");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn cancelling_portable_destination_selection_does_not_create_a_recovery_key() {
+        let connection = std::sync::Mutex::new(rusqlite::Connection::open_in_memory().unwrap());
+        let result = create_portable_for_selected_destination(
+            &connection,
+            std::path::Path::new("unused"),
             "unused",
             &[0_u8; 32],
             "unused",

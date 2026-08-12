@@ -10,7 +10,12 @@ export const commands = {
 	libraryLock: () => __TAURI_INVOKE<AppResult<LibraryAccessStatus>>("library_lock"),
 	libraryUnlock: () => __TAURI_INVOKE<AppResult<LibraryAccessStatus>>("library_unlock"),
 	backupCreate: () => typedError<AppResult<BackupSummary | null>, null>(__TAURI_INVOKE("backup_create")),
+	backupCreatePortable: () => typedError<AppResult<PortableBackupReceipt | null>, null>(__TAURI_INVOKE("backup_create_portable")),
+	backupAutomaticStatus: () => __TAURI_INVOKE<AppResult<AutomaticBackupStatus>>("backup_automatic_status"),
+	backupAutomaticConfigure: (intervalDays: number, retentionCount: number) => typedError<AppResult<AutomaticBackupStatus | null>, null>(__TAURI_INVOKE("backup_automatic_configure", { intervalDays, retentionCount })),
+	backupAutomaticDisable: () => __TAURI_INVOKE<AppResult<AutomaticBackupStatus>>("backup_automatic_disable"),
 	backupPrepareRestore: () => typedError<AppResult<BackupRestoreCandidate | null>, null>(__TAURI_INVOKE("backup_prepare_restore")),
+	backupPreparePortableRestore: (recoveryKey: string) => typedError<AppResult<BackupRestoreCandidate | null>, null>(__TAURI_INVOKE("backup_prepare_portable_restore", { recoveryKey })),
 	backupRecoveryPrepare: () => typedError<AppResult<BackupRestoreCandidate | null>, null>(__TAURI_INVOKE("backup_recovery_prepare")),
 	backupRecoveryRestore: (candidateId: string) => typedError<AppResult<boolean>, null>(__TAURI_INVOKE("backup_recovery_restore", { candidateId })),
 	backupRestore: (candidateId: string) => typedError<AppResult<boolean>, null>(__TAURI_INVOKE("backup_restore", { candidateId })),
@@ -61,6 +66,8 @@ export const commands = {
 	subjectPreferencesSave: (input: SubjectPreferencesInput) => __TAURI_INVOKE<AppResult<SubjectPreferences>>("subject_preferences_save", { input }),
 	reviewPreferencesGet: () => __TAURI_INVOKE<AppResult<ReviewPreferences>>("review_preferences_get"),
 	reviewPreferencesSave: (input: ReviewPreferencesInput) => __TAURI_INVOKE<AppResult<ReviewPreferences>>("review_preferences_save", { input }),
+	learningGoalGet: () => __TAURI_INVOKE<AppResult<LearningGoal>>("learning_goal_get"),
+	learningGoalSave: (input: LearningGoalInput) => __TAURI_INVOKE<AppResult<LearningGoal>>("learning_goal_save", { input }),
 	exportCandidates: (source: ExportCandidateSource) => __TAURI_INVOKE<AppResult<ExportCandidate[]>>("export_candidates", { source }),
 	exportList: () => __TAURI_INVOKE<AppResult<ExportSnapshotSummary[]>>("export_list"),
 	exportTrashList: () => __TAURI_INVOKE<AppResult<DeletedExportSnapshotSummary[]>>("export_trash_list"),
@@ -138,6 +145,14 @@ export type AuthStatus = {
 };
 
 export type AuthStatusKind = "unconfigured" | "signed_out" | "verification_required" | "connected" | "offline";
+
+export type AutomaticBackupStatus = {
+	enabled: boolean,
+	intervalDays: number,
+	retentionCount: number,
+	destinationLabel: string | null,
+	lastSuccessAtUtcMs: number | null,
+};
 
 export type BackupRestoreCandidate = {
 	id: string,
@@ -515,6 +530,16 @@ export type DailyActivity = {
 	durationMs: number | null,
 };
 
+export type DailyPlanOverview = {
+	reviewTarget: number,
+	minutesTarget: number,
+	completedReviews: number,
+	remainingReviews: number,
+	dueReviews: number,
+	suggestedReviews: number,
+	estimatedMinutes: number,
+};
+
 export type DashboardOverview = {
 	profileName: string,
 	activeProblemCount: number,
@@ -524,6 +549,7 @@ export type DashboardOverview = {
 	currentStreakDays: number,
 	pendingCaptureBatchCount: number,
 	pendingCaptureItemCount: number,
+	dailyPlan: DailyPlanOverview,
 };
 
 export type DeletedExportSnapshotSummary = {
@@ -583,6 +609,16 @@ export type GeneratedExportSummary = {
 };
 
 export type JsonValue = { kind: "null" } | { kind: "bool"; value: boolean } | { kind: "number"; value: string } | { kind: "string"; value: string } | { kind: "array"; value: JsonValue[] } | { kind: "object"; value: { [key in string]: JsonValue } };
+
+export type LearningGoal = {
+	dailyReviewTarget: number,
+	dailyMinutesTarget: number,
+};
+
+export type LearningGoalInput = {
+	dailyReviewTarget: number,
+	dailyMinutesTarget: number,
+};
 
 export type LegacyImportCandidate = {
 	candidateId: string,
@@ -718,6 +754,11 @@ export type PerspectiveQuad = {
 	topRight: NormalizedPoint,
 	bottomRight: NormalizedPoint,
 	bottomLeft: NormalizedPoint,
+};
+
+export type PortableBackupReceipt = {
+	summary: BackupSummary,
+	recoveryKey: string,
 };
 
 export type ProblemAnswerState = "any" | "has_answer" | "missing_answer";

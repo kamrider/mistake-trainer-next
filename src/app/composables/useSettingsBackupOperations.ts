@@ -1,12 +1,18 @@
 import { computed, ref } from 'vue'
-import type { BackupRestoreCandidate, BackupSummary } from '../../shared/api/bindings'
+import type {
+  BackupRestoreCandidate,
+  BackupSummary,
+  PortableBackupReceipt,
+} from '../../shared/api/bindings'
 import type { AppResult } from '../../shared/api/app-result'
 
-export type SettingsBackupPhase = 'idle' | 'creating' | 'preparing' | 'restoring'
+export type SettingsBackupPhase = 'idle' | 'creating' | 'creating_portable' | 'preparing' | 'restoring'
 
 interface SettingsBackupOperations {
   create: () => Promise<AppResult<BackupSummary | null>>
+  createPortable?: () => Promise<AppResult<PortableBackupReceipt | null>>
   prepareRestore: () => Promise<AppResult<BackupRestoreCandidate | null>>
+  preparePortableRestore?: (recoveryKey: string) => Promise<AppResult<BackupRestoreCandidate | null>>
   restore: (candidateId: string) => Promise<AppResult<boolean>>
 }
 
@@ -22,6 +28,7 @@ export function useSettingsBackupOperations(operations: SettingsBackupOperations
   const busy = computed(() => phase.value !== 'idle')
   const created = ref<BackupSummary>()
   const candidate = ref<BackupRestoreCandidate>()
+  const portableReceipt = ref<PortableBackupReceipt>()
   const message = ref('')
 
   async function createBackup(): Promise<boolean> {
@@ -72,6 +79,58 @@ export function useSettingsBackupOperations(operations: SettingsBackupOperations
     }
   }
 
+  async function preparePortableRestore(recoveryKey: string): Promise<boolean> {
+    if (phase.value !== 'idle' || !operations.preparePortableRestore || !recoveryKey.trim()) {
+      return false
+    }
+    phase.value = 'preparing'
+    message.value = ''
+    try {
+      const result = await operations.preparePortableRestore(recoveryKey.trim())
+      if (!result.ok) {
+        candidate.value = undefined
+        message.value = result.error.userMessage
+        return false
+      }
+      if (!result.data) return false
+      candidate.value = result.data
+      return true
+    }
+    catch {
+      candidate.value = undefined
+      message.value = prepareFailureMessage
+      return false
+    }
+    finally {
+      phase.value = 'idle'
+    }
+  }
+
+  async function createPortableBackup(): Promise<boolean> {
+    if (phase.value !== 'idle' || !operations.createPortable) return false
+    phase.value = 'creating_portable'
+    message.value = ''
+    portableReceipt.value = undefined
+    try {
+      const result = await operations.createPortable()
+      if (!result.ok) {
+        message.value = result.error.userMessage
+        return false
+      }
+      if (!result.data) return false
+      portableReceipt.value = result.data
+      created.value = result.data.summary
+      return true
+    }
+    catch {
+      message.value = createFailureMessage
+      return false
+    }
+    finally {
+      phase.value = 'idle'
+    }
+  }
+
   async function restoreBackup(): Promise<boolean> {
     const selectedCandidate = candidate.value
     if (phase.value !== 'idle' || !selectedCandidate) return false
@@ -103,9 +162,13 @@ export function useSettingsBackupOperations(operations: SettingsBackupOperations
     busy,
     created,
     candidate,
+    portableReceipt,
     message,
     createBackup,
+    createPortableBackup,
+    clearPortableReceipt: () => { portableReceipt.value = undefined },
     prepareRestore,
+    preparePortableRestore,
     restoreBackup,
   }
 }

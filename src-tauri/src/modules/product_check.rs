@@ -15,7 +15,11 @@ use crate::{
     domain::review::SimpleRating,
     infrastructure::runtime::{SecretStore, initialize_local_library},
     modules::{
-        backup::{create_backup, validate_backup},
+        backup::{
+            begin_pending_restore, create_backup, prepare_backup_restore, schedule_backup_restore,
+            validate_backup,
+        },
+        exports::{CreateExportSnapshot, ExportLayout, create_export_snapshot, generate_export},
         problems::{
             AssetRole, CaptureAsset, CreateProblem, ProblemAnswerState, ProblemDetailQuery,
             ProblemListInput, ProblemListQuery, ProblemReviewState, ProblemStatusFilter,
@@ -25,7 +29,7 @@ use crate::{
     },
 };
 
-const PRODUCT_CHECK_SCHEMA_VERSION: u32 = 1;
+const PRODUCT_CHECK_SCHEMA_VERSION: u32 = 2;
 const WORKSPACE_PREFIX: &str = ".mistake-trainer-product-check-";
 const SQLITE_PLAINTEXT_HEADER: &[u8; 16] = b"SQLite format 3\0";
 
@@ -46,6 +50,8 @@ enum WindowsProductCheckFailureCode {
     ProblemRoundTripFailed,
     ReviewRoundTripFailed,
     BackupValidationFailed,
+    BackupRestoreFailed,
+    DocxExportFailed,
     LibraryReopenFailed,
     CleanupFailed,
 }
@@ -57,6 +63,8 @@ struct WindowsProductChecks {
     problem_round_trip: bool,
     review_round_trip: bool,
     backup_validation: bool,
+    backup_restore: bool,
+    docx_export: bool,
     library_reopen: bool,
 }
 
@@ -342,8 +350,106 @@ fn run_product_checks(
     }
     checks.backup_validation = true;
 
+    let export_root = workspace.join("exports");
+    fs::create_dir(&export_root).map_err(|_| WindowsProductCheckFailureCode::DocxExportFailed)?;
+    let snapshot = {
+        let mut connection = runtime
+            .connection
+            .lock()
+            .map_err(|_| WindowsProductCheckFailureCode::DocxExportFailed)?;
+        create_export_snapshot(
+            &mut connection,
+            CreateExportSnapshot {
+                account_id: runtime.account_id().to_owned(),
+                profile_id: profile.id.clone(),
+                title: "installed-product-check".to_owned(),
+                problem_ids: vec![problem.id.clone()],
+                layout: ExportLayout::QuestionAnswerAlternating,
+                now_utc_ms: checked_at_utc_ms + 5,
+            },
+        )
+        .map_err(|_| WindowsProductCheckFailureCode::DocxExportFailed)?
+    };
+    let generated = {
+        let connection = runtime
+            .connection
+            .lock()
+            .map_err(|_| WindowsProductCheckFailureCode::DocxExportFailed)?;
+        generate_export(
+            &connection,
+            &runtime.blob_root,
+            &runtime.asset_key,
+            runtime.account_id(),
+            &profile.id,
+            &snapshot.id,
+            &export_root,
+        )
+        .map_err(|_| WindowsProductCheckFailureCode::DocxExportFailed)?
+    };
+    let docx = export_root.join(&generated.output_name);
+    let mut docx_header = [0_u8; 2];
+    fs::File::open(&docx)
+        .and_then(|mut file| file.read_exact(&mut docx_header))
+        .map_err(|_| WindowsProductCheckFailureCode::DocxExportFailed)?;
+    if generated.problem_count != 1
+        || !generated.output_name.ends_with(".docx")
+        || docx_header != *b"PK"
+    {
+        return Err(WindowsProductCheckFailureCode::DocxExportFailed);
+    }
+    checks.docx_export = true;
+
+    let package = backup_root.join(&backup.label);
+    let candidate = prepare_backup_restore(
+        &package,
+        workspace,
+        runtime.database_key(),
+        &runtime.asset_key,
+        runtime.account_id(),
+        checked_at_utc_ms + 6,
+    )
+    .map_err(|_| WindowsProductCheckFailureCode::BackupRestoreFailed)?;
+    {
+        let connection = runtime
+            .connection
+            .lock()
+            .map_err(|_| WindowsProductCheckFailureCode::BackupRestoreFailed)?;
+        connection
+            .execute(
+                "UPDATE problems SET note = 'mutated after backup' WHERE id = ?1",
+                [&problem.id],
+            )
+            .map_err(|_| WindowsProductCheckFailureCode::BackupRestoreFailed)?;
+    }
+    schedule_backup_restore(
+        workspace,
+        &candidate.id,
+        runtime.database_key(),
+        &runtime.asset_key,
+        runtime.account_id(),
+        checked_at_utc_ms + 7,
+    )
+    .map_err(|_| WindowsProductCheckFailureCode::BackupRestoreFailed)?;
+
+    let database_key = runtime.database_key().to_owned();
+    let asset_key = runtime.asset_key;
+    let account_id = runtime.account_id().to_owned();
     drop(runtime);
-    let reopened = initialize_local_library(&library_root, &secrets, checked_at_utc_ms + 5)
+    let restore = begin_pending_restore(
+        workspace,
+        &database_key,
+        &asset_key,
+        &account_id,
+        checked_at_utc_ms + 8,
+    )
+    .map_err(|_| WindowsProductCheckFailureCode::BackupRestoreFailed)?
+    .ok_or(WindowsProductCheckFailureCode::BackupRestoreFailed)?;
+    restore
+        .commit(checked_at_utc_ms + 9)
+        .map_err(|_| WindowsProductCheckFailureCode::BackupRestoreFailed)?;
+    checks.backup_restore = true;
+
+    let reopened = initialize_local_library(&library_root, &secrets, checked_at_utc_ms + 10)
         .map_err(|_| WindowsProductCheckFailureCode::LibraryReopenFailed)?;
     {
         let connection = reopened
@@ -370,7 +476,8 @@ fn run_product_checks(
             },
         )
         .map_err(|_| WindowsProductCheckFailureCode::LibraryReopenFailed)?;
-        if persisted != (1, 1) || detail.assets.len() != 2 {
+        if persisted != (1, 1) || detail.assets.len() != 2 || detail.note == "mutated after backup"
+        {
             return Err(WindowsProductCheckFailureCode::LibraryReopenFailed);
         }
     }

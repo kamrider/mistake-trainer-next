@@ -43,6 +43,18 @@ pub struct DueForecastDay {
 
 #[derive(Clone, Debug, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
+pub struct DailyPlanOverview {
+    pub review_target: i32,
+    pub minutes_target: i32,
+    pub completed_reviews: i32,
+    pub remaining_reviews: i32,
+    pub due_reviews: i32,
+    pub suggested_reviews: i32,
+    pub estimated_minutes: i32,
+}
+
+#[derive(Clone, Debug, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
 pub struct ReportSummary {
     pub active_problem_count: i32,
     pub due_problem_count: i32,
@@ -67,6 +79,7 @@ pub struct DashboardOverview {
     pub current_streak_days: i32,
     pub pending_capture_batch_count: i32,
     pub pending_capture_item_count: i32,
+    pub daily_plan: DailyPlanOverview,
 }
 
 #[derive(Clone, Debug, Serialize, Type)]

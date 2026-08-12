@@ -13,6 +13,15 @@ const overview = (changes: Partial<DashboardOverview> = {}): DashboardOverview =
   currentStreakDays: 7,
   pendingCaptureBatchCount: 2,
   pendingCaptureItemCount: 14,
+  dailyPlan: {
+    reviewTarget: 20,
+    minutesTarget: 20,
+    completedReviews: 3,
+    remainingReviews: 17,
+    dueReviews: 18,
+    suggestedReviews: 18,
+    estimatedMinutes: 18,
+  },
   ...changes,
 })
 

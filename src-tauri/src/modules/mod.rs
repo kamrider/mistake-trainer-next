@@ -1,4 +1,5 @@
 pub mod auth_sync;
+pub mod automatic_backup;
 pub mod backup;
 pub mod capture;
 pub(crate) mod capture_asset_repository;

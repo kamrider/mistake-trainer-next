@@ -1,4 +1,4 @@
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 use super::{BackupError, MAX_DATABASE_BYTES};
 
@@ -547,6 +547,50 @@ pub(super) fn ensure_single_account(
         {
             return Err(BackupError::Integrity);
         }
+        if schema_version >= 18
+            && (!column_definition_matches(
+                connection,
+                "profile_preferences",
+                "daily_review_target",
+                "INTEGER",
+                "20",
+            )? || !column_definition_matches(
+                connection,
+                "profile_preferences",
+                "daily_minutes_target",
+                "INTEGER",
+                "20",
+            )? || !table_sql_contains_compact(
+                connection,
+                "profile_preferences",
+                "check(daily_review_targetbetween1and200)",
+            )? || !table_sql_contains_compact(
+                connection,
+                "profile_preferences",
+                "check(daily_minutes_targetbetween5and240)",
+            )?)
+        {
+            return Err(BackupError::Integrity);
+        }
+        if schema_version >= 18 {
+            let has_invalid_learning_goal: i64 = connection.query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM profile_preferences
+                   WHERE daily_review_target IS NULL
+                      OR typeof(daily_review_target) <> 'integer'
+                      OR daily_review_target NOT BETWEEN 1 AND 200
+                      OR daily_minutes_target IS NULL
+                      OR typeof(daily_minutes_target) <> 'integer'
+                      OR daily_minutes_target NOT BETWEEN 5 AND 240
+                   LIMIT 1
+                 )",
+                [],
+                |row| row.get(0),
+            )?;
+            if has_invalid_learning_goal != 0 {
+                return Err(BackupError::Integrity);
+            }
+        }
         let has_foreign_preferences: i64 = connection.query_row(
             "SELECT EXISTS(
                SELECT 1 FROM profile_preferences WHERE account_id <> ?1 LIMIT 1
@@ -602,6 +646,51 @@ fn column_exists(connection: &Connection, table: &str, column: &str) -> Result<b
         .query_map([], |row| row.get::<_, String>(1))?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(columns.iter().any(|candidate| candidate == column))
+}
+
+fn column_definition_matches(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+    expected_type: &str,
+    expected_default: &str,
+) -> Result<bool, BackupError> {
+    let mut statement = connection.prepare(&format!("PRAGMA table_info('{table}')"))?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(1)?;
+        if name != column {
+            continue;
+        }
+        let column_type: String = row.get(2)?;
+        let not_null: i64 = row.get(3)?;
+        let default_value: Option<String> = row.get(4)?;
+        return Ok(column_type.eq_ignore_ascii_case(expected_type)
+            && not_null == 1
+            && default_value.as_deref() == Some(expected_default));
+    }
+    Ok(false)
+}
+
+fn table_sql_contains_compact(
+    connection: &Connection,
+    table: &str,
+    expected: &str,
+) -> Result<bool, BackupError> {
+    let sql: Option<String> = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [table],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let compact = sql
+        .unwrap_or_default()
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    Ok(compact.contains(&expected.to_ascii_lowercase()))
 }
 
 fn table_columns_match(

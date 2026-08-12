@@ -4,7 +4,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use docx_rs::{Docx, Paragraph, Pic, Run};
+use docx_rs::{AlignmentType, BreakType, Docx, Paragraph, Pic, Run, Style, StyleType};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Deserialize;
 use uuid::Uuid;
@@ -342,26 +342,54 @@ fn generate_docx(
         .open(&temporary_path)?;
     let result = (|| {
         let mut document = Docx::new()
-            .add_paragraph(Paragraph::new().add_run(Run::new().add_text(&snapshot.title)));
+            .add_style(
+                Style::new("Title", StyleType::Paragraph)
+                    .name("Title")
+                    .based_on("Normal")
+                    .next("Normal")
+                    .size(40)
+                    .bold()
+                    .align(AlignmentType::Center),
+            )
+            .add_style(
+                Style::new("Heading1", StyleType::Paragraph)
+                    .name("heading 1")
+                    .based_on("Normal")
+                    .next("Normal")
+                    .size(32)
+                    .bold()
+                    .outline_lvl(0),
+            )
+            .add_style(
+                Style::new("Heading2", StyleType::Paragraph)
+                    .name("heading 2")
+                    .based_on("Normal")
+                    .next("Normal")
+                    .size(26)
+                    .bold()
+                    .outline_lvl(1),
+            )
+            .add_paragraph(title_paragraph(&snapshot.title));
         match snapshot.layout {
             ExportLayout::QuestionAnswerAlternating => {
                 for (index, problem) in problems.iter().enumerate() {
                     document = add_problem_heading(document, index, problem, "题目");
                     document = add_assets(document, problem, "question", blob_root, asset_key)?;
-                    document = document
-                        .add_paragraph(Paragraph::new().add_run(Run::new().add_text("答案")));
+                    document = document.add_paragraph(section_heading("答案"));
                     document = add_assets(document, problem, "answer", blob_root, asset_key)?;
+                    if index + 1 < problems.len() {
+                        document = document.add_paragraph(page_break_paragraph());
+                    }
                 }
             }
             ExportLayout::QuestionsThenAnswers => {
-                document =
-                    document.add_paragraph(Paragraph::new().add_run(Run::new().add_text("题目")));
+                document = document.add_paragraph(section_heading("题目"));
                 for (index, problem) in problems.iter().enumerate() {
                     document = add_problem_heading(document, index, problem, "题目");
                     document = add_assets(document, problem, "question", blob_root, asset_key)?;
                 }
-                document =
-                    document.add_paragraph(Paragraph::new().add_run(Run::new().add_text("答案")));
+                document = document.add_paragraph(page_break_paragraph());
+                document = document.add_paragraph(section_heading("答案"));
                 for (index, problem) in problems.iter().enumerate() {
                     document = add_problem_heading(document, index, problem, "答案");
                     document = add_assets(document, problem, "answer", blob_root, asset_key)?;
@@ -389,6 +417,22 @@ fn generate_docx(
     Ok(output_name)
 }
 
+fn title_paragraph(title: &str) -> Paragraph {
+    Paragraph::new()
+        .style("Title")
+        .add_run(Run::new().add_text(title))
+}
+
+fn section_heading(label: &str) -> Paragraph {
+    Paragraph::new()
+        .style("Heading1")
+        .add_run(Run::new().add_text(label))
+}
+
+fn page_break_paragraph() -> Paragraph {
+    Paragraph::new().add_run(Run::new().add_break(BreakType::Page))
+}
+
 fn add_problem_heading(
     document: Docx,
     index: usize,
@@ -400,13 +444,17 @@ fn add_problem_heading(
     } else {
         format!(" · {}", problem.note.trim())
     };
-    document.add_paragraph(Paragraph::new().add_run(Run::new().add_text(format!(
-        "{}. {} · {}{}",
-        index + 1,
-        section,
-        problem.subject,
-        note
-    ))))
+    document.add_paragraph(
+        Paragraph::new()
+            .style("Heading2")
+            .add_run(Run::new().add_text(format!(
+                "{}. {} · {}{}",
+                index + 1,
+                section,
+                problem.subject,
+                note
+            ))),
+    )
 }
 
 fn add_assets(
@@ -416,7 +464,20 @@ fn add_assets(
     blob_root: &Path,
     asset_key: &[u8; 32],
 ) -> Result<Docx, ExportError> {
-    for asset in problem.assets.iter().filter(|asset| asset.role == role) {
+    let assets = problem
+        .assets
+        .iter()
+        .filter(|asset| asset.role == role)
+        .collect::<Vec<_>>();
+    if assets.is_empty() {
+        let label = if role == "question" {
+            "（缺少题目图片）"
+        } else {
+            "（缺少答案图片）"
+        };
+        return Ok(document.add_paragraph(Paragraph::new().add_run(Run::new().add_text(label))));
+    }
+    for asset in assets {
         let bytes = read_decrypted_export_asset(blob_root, asset_key, &asset.encrypted_path)?;
         if bytes.len() != asset.byte_length {
             return Err(ExportError::InvalidImage);

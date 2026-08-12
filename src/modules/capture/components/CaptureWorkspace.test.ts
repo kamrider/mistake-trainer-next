@@ -29,7 +29,16 @@ function renderWorkspace(
   preflight: CaptureLanPreflight | undefined = readyPreflight,
   preflightBusy = false,
   previews: Record<string, string> = {},
-  importProgress?: { completed: number, total: number, failed: number },
+  importProgress?: {
+    completed: number
+    total: number
+    failed: number
+    sourceName?: string
+    phase?: 'reading_pdf' | 'rendering_pdf' | 'encrypting_images'
+    currentPage?: number
+    pageCount?: number
+    cancelable?: boolean
+  },
 ) {
   return render(CaptureWorkspace, {
     props: {
@@ -180,20 +189,24 @@ describe('CaptureWorkspace Next', () => {
     expect(screen.queryByRole('menuitem', { name: '删除批次…' })).not.toBeInTheDocument()
   })
 
-  it('starts phone capture directly from the toolbar and keeps desktop actions', async () => {
+  it('starts phone capture directly and selects PDF or image files from the toolbar', async () => {
     const user = userEvent.setup()
     const view = renderWorkspace(collectingDetail())
+    const selected = new File(['pdf'], '试卷.pdf', { type: 'application/pdf' })
     await user.click(screen.getByRole('button', { name: /手机扫码/ }))
     await user.click(screen.getByRole('button', { name: /电脑批量选择/ }))
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]')!
+    expect(input.accept).toContain('application/pdf')
+    await fireEvent.change(input, { target: { files: [selected] } })
     await user.click(screen.getByRole('button', { name: /结束采集/ }))
     expect(view.emitted('mobileCapture')).toEqual([['192.168.1.2']])
-    expect(view.emitted('importSelect')).toHaveLength(1)
+    expect(view.emitted('importFiles')).toEqual([[[selected]]])
     expect(view.emitted('finishCollecting')).toEqual([['数学']])
   })
 
   it('forwards dropped files unchanged and disables the drop target while busy', async () => {
     const view = renderWorkspace(collectingDetail())
-    const dropZone = screen.getByText('拖入一组图片，按文件顺序进入当前批次')
+    const dropZone = screen.getByText('拖入整套 PDF 或一组图片，按文件顺序进入当前批次')
       .closest<HTMLElement>('.external-drop')!
     const image = new File(['image'], 'photo.PNG', { type: '' })
     const pdf = new File(['pdf'], 'notes.pdf', { type: 'application/pdf' })
@@ -301,6 +314,30 @@ describe('CaptureWorkspace Next', () => {
     await user.click(answerRole)
     expect(view.emitted('stageItemRole')).toEqual([['loose', 'answer']])
     expect(screen.queryByText(/双击/)).not.toBeInTheDocument()
+  })
+
+  it('exposes PDF cancellation while the current page is being saved', async () => {
+    const user = userEvent.setup()
+    const view = renderWorkspace(
+      collectingDetail(),
+      readyPreflight,
+      false,
+      {},
+      {
+        completed: 3,
+        total: 20,
+        failed: 0,
+        sourceName: '试卷-p004.png',
+        phase: 'encrypting_images',
+        currentPage: 4,
+        pageCount: 20,
+        cancelable: true,
+      },
+    )
+
+    await user.click(screen.getByRole('button', { name: '取消导入' }))
+
+    expect(view.emitted('cancelImport')).toHaveLength(1)
   })
 
   it('shows a non-blocking quality warning for the selected material', async () => {
