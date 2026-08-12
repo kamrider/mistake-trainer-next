@@ -90,12 +90,12 @@ a separate product-owner decision.
    Local runs always execute inside Windows Sandbox. A production-identity installer smoke must
    never run directly on a developer desktop; if Sandbox is unavailable, use the ephemeral CI
    Windows runner. CI must set both `CI=true` and `MISTAKE_TRAINER_EPHEMERAL_WINDOWS=1`.
-   Application and helper entry processes are assigned before launch to a strict kill-on-close
-   Windows Job Object. NSIS install, reinstall, and uninstall run outside that inner job because
-   installers may manage their own child/job topology; they still run only inside the outer
-   ephemeral CI runner or Windows Sandbox isolation boundary. Closing the terminal, Codex, or
-   Sandbox therefore cannot leave an orphaned production GUI. Cleanup is restricted to the current
-   run's marked temporary directory.
+   Every installer, application, helper, and uninstaller process runs only inside the outer
+   ephemeral CI runner or Windows Sandbox isolation boundary. Do not add an inner Job Object:
+   real NSIS and installed Tauri processes manage child/job topology that fails under that extra
+   boundary. The smoke records every entry-process PID, terminates any survivor, and restricts
+   recursive cleanup to the current run's marked temporary directory. Closing the runner or
+   Sandbox remains the final containment boundary.
 3. Merge only reviewed changes to `main` and wait for the CI `push` run on that exact commit to
    complete successfully.
 4. Create and push an annotated `vX.Y.Z` tag from that current `main` commit.

@@ -65,7 +65,7 @@ $resultRoot = Join-Path $hostRoot 'results'
 New-Item -ItemType Directory -Path $installerRoot, $resultRoot | Out-Null
 try {
   Copy-Item -LiteralPath $InstallerPath -Destination $installerRoot
-  foreach ($script in @('windows-job-object.ps1', 'windows-installer-smoke-cleanup.ps1', 'windows-installer-smoke-inner.ps1', 'windows-installer-smoke-guest.ps1')) {
+  foreach ($script in @('windows-installer-smoke-cleanup.ps1', 'windows-installer-smoke-inner.ps1', 'windows-installer-smoke-guest.ps1')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $script) -Destination $inputRoot
   }
   @{ runId = $RunId; architecture = $ExpectedArchitecture } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $inputRoot 'guest-config.json') -Encoding UTF8
