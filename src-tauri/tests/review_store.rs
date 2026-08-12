@@ -1324,6 +1324,7 @@ fn quick_review_enforces_limits_due_order_filters_and_recent_again() {
             .unwrap();
     }
     for (problem_id, due_at) in [
+        (&problem_ids[0], now + 10_000),
         (&problem_ids[3], now - 10),
         (&problem_ids[1], now - 30),
         (&problem_ids[2], now - 20),
@@ -1362,12 +1363,24 @@ fn quick_review_enforces_limits_due_order_filters_and_recent_again() {
             problem_ids[3].as_str(),
         ]
     );
+    assert!(
+        ten.items
+            .iter()
+            .all(|item| item.problem_id != problem_ids[0])
+    );
 
     connection
         .execute(
             "INSERT INTO review_events(id, account_id, profile_id, problem_id, device_id, rating, duration_ms, occurred_at_utc_ms, algorithm_version, parameter_version)
              VALUES('quick-again', 'account-1', ?1, ?2, 'device', 'again', 500, ?3, 'fsrs-1', 'default')",
             rusqlite::params![profile_id, problem_ids[4], now - 1_000],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO schedule_states(problem_id, due_at_utc_ms, stability, difficulty, last_reviewed_at_utc_ms, algorithm_version, parameter_version, rebuilt_at_utc_ms)
+             VALUES(?1, ?2, 1, 5, ?3, 'fsrs-1', 'default', ?3)",
+            rusqlite::params![problem_ids[4], now + 20_000, now - 1_000],
         )
         .unwrap();
     connection

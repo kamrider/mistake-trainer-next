@@ -416,6 +416,9 @@ pub fn start_quick_review_queue(
     };
     let recent_cutoff = input.now_utc_ms.saturating_sub(30 * 86_400_000);
     let problem_ids = {
+        // Recently-forgotten is an explicit mistake-focused view, so it may include a
+        // reviewed card whose next scheduled review is still in the future. Standard
+        // quick presets are limited to new cards and cards that are already due.
         let mut statement = connection.prepare(
             "SELECT p.id
              FROM problems p
@@ -426,6 +429,7 @@ pub fn start_quick_review_queue(
                     SELECT 1 FROM json_each(p.tags_json) selected_tag
                     WHERE CAST(selected_tag.value AS TEXT) = ?4
                ))
+               AND (?5 = 1 OR schedule.problem_id IS NULL OR schedule.due_at_utc_ms <= ?7)
                AND (?5 = 0 OR (
                     SELECT review.rating FROM review_events review
                     WHERE review.account_id = p.account_id
