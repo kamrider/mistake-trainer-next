@@ -106,8 +106,6 @@ try {
   foreach ($directory in @($installRoot, $isolatedAppData, $isolatedLocalAppData, $scratch)) {
     New-Item -ItemType Directory -Path $directory -Force | Out-Null
   }
-  $env:APPDATA = $isolatedAppData
-  $env:LOCALAPPDATA = $isolatedLocalAppData
   # Every process runs inside the outer ephemeral CI worker or Windows Sandbox.
   # NSIS and the installed Tauri binary both manage child/job topology that is
   # incompatible with forcing their entry process into an additional inner job.
@@ -155,6 +153,12 @@ try {
   $product = Get-Content -LiteralPath $productPath -Raw | ConvertFrom-Json
   $failureStage = 'product_check_ready'
   Assert-Smoke ($product.ready -eq $true -and @($product.failureCodes).Count -eq 0) 'product lifecycle check reported a failure.'
+
+  # Keep installer/runtime prerequisite discovery on the disposable runner's
+  # normal profile. Isolate only the actual GUI profile whose first-run data is
+  # asserted below; this matches the last known-good Windows runner sequence.
+  $env:APPDATA = $isolatedAppData
+  $env:LOCALAPPDATA = $isolatedLocalAppData
 
   $failureStage = 'gui_launch'
   $firstProcess = Start-SmokeProcess -FilePath $applicationPath

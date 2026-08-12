@@ -95,7 +95,9 @@ a separate product-owner decision.
    real NSIS and installed Tauri processes manage child/job topology that fails under that extra
    boundary. The smoke records every entry-process PID, terminates any survivor, and restricts
    recursive cleanup to the current run's marked temporary directory. Closing the runner or
-   Sandbox remains the final containment boundary.
+   Sandbox remains the final containment boundary. Installer prerequisite discovery and command-line
+   self-checks use the disposable runner profile; only the real GUI launch is switched to the isolated
+   APPDATA/LOCALAPPDATA profile whose first-run data is asserted and removed.
 3. Merge only reviewed changes to `main` and wait for the CI `push` run on that exact commit to
    complete successfully.
 4. Create and push an annotated `vX.Y.Z` tag from that current `main` commit.
