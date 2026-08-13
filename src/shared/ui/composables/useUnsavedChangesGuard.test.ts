@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
 import { defineComponent, h, nextTick } from 'vue'
 import { describe, expect, it, vi } from 'vitest'
-import ActionConfirmDialog from '../components/ActionConfirmDialog.vue'
+import ActionConfirmDialog from '@/shared/ui/components/ActionConfirmDialog.vue'
 import {
   type NavigationAttempt,
   useUnsavedChangesGuard,

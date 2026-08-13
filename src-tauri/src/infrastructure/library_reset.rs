@@ -3,7 +3,7 @@ use std::path::Path;
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::infrastructure::{
+use super::{
     runtime::{RuntimeError, SecretStore, delete_local_credential_envelope},
     storage_location::{
         RESET_PENDING_FILE, RESTORE_PENDING_FILE, STORAGE_PENDING_FILE, STORAGE_POINTER_FILE,

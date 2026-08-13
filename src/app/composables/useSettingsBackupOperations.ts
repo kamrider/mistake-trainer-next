@@ -1,19 +1,39 @@
-import { computed, ref } from 'vue'
+import { computed, readonly, ref } from 'vue'
+import type { AppResult } from '../../shared/api/app-result'
 import type {
+  AutomaticBackupStatus,
   BackupRestoreCandidate,
   BackupSummary,
   PortableBackupReceipt,
 } from '../../shared/api/bindings'
-import type { AppResult } from '../../shared/api/app-result'
 
-export type SettingsBackupPhase = 'idle' | 'creating' | 'creating_portable' | 'preparing' | 'restoring'
+export type SettingsBackupPhase =
+  | 'idle'
+  | 'creating'
+  | 'creating_portable'
+  | 'preparing'
+  | 'restoring'
+  | 'automatic'
 
-interface SettingsBackupOperations {
+export interface SettingsBackupOperations {
   create: () => Promise<AppResult<BackupSummary | null>>
   createPortable?: () => Promise<AppResult<PortableBackupReceipt | null>>
   prepareRestore: () => Promise<AppResult<BackupRestoreCandidate | null>>
   preparePortableRestore?: (recoveryKey: string) => Promise<AppResult<BackupRestoreCandidate | null>>
   restore: (candidateId: string) => Promise<AppResult<boolean>>
+}
+
+export interface SettingsAutomaticBackupOperations {
+  status: () => Promise<AppResult<AutomaticBackupStatus>>
+  configure: (intervalDays: number, retentionCount: number) => Promise<AppResult<AutomaticBackupStatus | null>>
+  disable: () => Promise<AppResult<AutomaticBackupStatus>>
+}
+
+export interface SettingsBackupControllerOptions {
+  operations: SettingsBackupOperations
+  automatic: SettingsAutomaticBackupOperations
+  restoreFocus: () => Promise<unknown> | unknown
+  onOperationStart: () => void
 }
 
 const createFailureMessage =
@@ -23,20 +43,30 @@ const prepareFailureMessage =
 const restoreFailureMessage =
   '恢复任务没有开始；当前资料库保持不变，请稍后重试。'
 
-export function useSettingsBackupOperations(operations: SettingsBackupOperations) {
+export function useSettingsBackupOperations(options: SettingsBackupControllerOptions) {
   const phase = ref<SettingsBackupPhase>('idle')
   const busy = computed(() => phase.value !== 'idle')
+  const automaticBusy = computed(() => phase.value === 'automatic')
+  const navigationBusy = busy
   const created = ref<BackupSummary>()
   const candidate = ref<BackupRestoreCandidate>()
   const portableReceipt = ref<PortableBackupReceipt>()
+  const automaticStatus = ref<AutomaticBackupStatus>()
+  const restoreDialogOpen = ref(false)
   const message = ref('')
 
-  async function createBackup(): Promise<boolean> {
+  function begin(nextPhase: Exclude<SettingsBackupPhase, 'idle'>): boolean {
     if (phase.value !== 'idle') return false
-    phase.value = 'creating'
+    phase.value = nextPhase
     message.value = ''
+    options.onOperationStart()
+    return true
+  }
+
+  async function createBackup(): Promise<boolean> {
+    if (!begin('creating')) return false
     try {
-      const result = await operations.create()
+      const result = await options.operations.create()
       if (!result.ok) {
         message.value = result.error.userMessage
         return false
@@ -55,11 +85,9 @@ export function useSettingsBackupOperations(operations: SettingsBackupOperations
   }
 
   async function prepareRestore(): Promise<boolean> {
-    if (phase.value !== 'idle') return false
-    phase.value = 'preparing'
-    message.value = ''
+    if (!begin('preparing')) return false
     try {
-      const result = await operations.prepareRestore()
+      const result = await options.operations.prepareRestore()
       if (!result.ok) {
         candidate.value = undefined
         message.value = result.error.userMessage
@@ -80,13 +108,11 @@ export function useSettingsBackupOperations(operations: SettingsBackupOperations
   }
 
   async function preparePortableRestore(recoveryKey: string): Promise<boolean> {
-    if (phase.value !== 'idle' || !operations.preparePortableRestore || !recoveryKey.trim()) {
+    if (!recoveryKey.trim() || !options.operations.preparePortableRestore || !begin('preparing')) {
       return false
     }
-    phase.value = 'preparing'
-    message.value = ''
     try {
-      const result = await operations.preparePortableRestore(recoveryKey.trim())
+      const result = await options.operations.preparePortableRestore(recoveryKey.trim())
       if (!result.ok) {
         candidate.value = undefined
         message.value = result.error.userMessage
@@ -107,12 +133,10 @@ export function useSettingsBackupOperations(operations: SettingsBackupOperations
   }
 
   async function createPortableBackup(): Promise<boolean> {
-    if (phase.value !== 'idle' || !operations.createPortable) return false
-    phase.value = 'creating_portable'
-    message.value = ''
+    if (!options.operations.createPortable || !begin('creating_portable')) return false
     portableReceipt.value = undefined
     try {
-      const result = await operations.createPortable()
+      const result = await options.operations.createPortable()
       if (!result.ok) {
         message.value = result.error.userMessage
         return false
@@ -133,11 +157,9 @@ export function useSettingsBackupOperations(operations: SettingsBackupOperations
 
   async function restoreBackup(): Promise<boolean> {
     const selectedCandidate = candidate.value
-    if (phase.value !== 'idle' || !selectedCandidate) return false
-    phase.value = 'restoring'
-    message.value = ''
+    if (!selectedCandidate || !begin('restoring')) return false
     try {
-      const result = await operations.restore(selectedCandidate.id)
+      const result = await options.operations.restore(selectedCandidate.id)
       if (!result.ok) {
         message.value = result.error.userMessage
         phase.value = 'idle'
@@ -157,18 +179,102 @@ export function useSettingsBackupOperations(operations: SettingsBackupOperations
     }
   }
 
+  async function loadAutomaticStatus(): Promise<boolean> {
+    try {
+      const result = await options.automatic.status()
+      if (!result.ok) return false
+      if (result.data) automaticStatus.value = result.data
+      return true
+    }
+    catch {
+      return false
+    }
+  }
+
+  async function configureAutomaticBackup(
+    intervalDays: number,
+    retentionCount: number,
+  ): Promise<boolean> {
+    if (!begin('automatic')) return false
+    try {
+      const result = await options.automatic.configure(intervalDays, retentionCount)
+      if (!result.ok) {
+        message.value = result.error.userMessage
+        return false
+      }
+      if (result.data) automaticStatus.value = result.data
+      return true
+    }
+    catch {
+      message.value = '自动备份设置没有更新；现有备份和资料库保持不变。'
+      return false
+    }
+    finally {
+      phase.value = 'idle'
+    }
+  }
+
+  async function disableAutomaticBackup(): Promise<boolean> {
+    if (!begin('automatic')) return false
+    try {
+      const result = await options.automatic.disable()
+      if (!result.ok) {
+        message.value = result.error.userMessage
+        return false
+      }
+      automaticStatus.value = result.data
+      return true
+    }
+    catch {
+      message.value = '自动备份没有停用；请稍后重试。'
+      return false
+    }
+    finally {
+      phase.value = 'idle'
+    }
+  }
+
+  function openRestoreDialog() {
+    if (busy.value || !candidate.value) return
+    restoreDialogOpen.value = true
+  }
+
+  async function closeRestoreDialog(): Promise<boolean> {
+    if (busy.value) return false
+    restoreDialogOpen.value = false
+    await options.restoreFocus()
+    return true
+  }
+
+  async function confirmRestore(): Promise<boolean> {
+    const started = await restoreBackup()
+    if (!started) await closeRestoreDialog()
+    return started
+  }
+
   return {
-    phase,
+    phase: readonly(phase),
     busy,
-    created,
-    candidate,
-    portableReceipt,
-    message,
+    automaticBusy,
+    navigationBusy,
+    created: readonly(created),
+    candidate: readonly(candidate),
+    portableReceipt: readonly(portableReceipt),
+    automaticStatus: readonly(automaticStatus),
+    restoreDialogOpen: readonly(restoreDialogOpen),
+    message: readonly(message),
+    clearMessage: () => { message.value = '' },
     createBackup,
     createPortableBackup,
     clearPortableReceipt: () => { portableReceipt.value = undefined },
     prepareRestore,
     preparePortableRestore,
     restoreBackup,
+    loadAutomaticStatus,
+    configureAutomaticBackup,
+    disableAutomaticBackup,
+    openRestoreDialog,
+    closeRestoreDialog,
+    confirmRestore,
   }
 }

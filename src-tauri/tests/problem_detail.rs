@@ -1,5 +1,8 @@
 use mistake_trainer_next_lib::{
-    infrastructure::database::{open_encrypted_database, run_migrations},
+    infrastructure::{
+        assets::KeyedAssetDecryptor,
+        database::{open_encrypted_database, run_migrations},
+    },
     modules::{
         problems::{
             AssetRole, CaptureAsset, CreateProblem, ProblemDetailQuery, ProblemUseCaseError,
@@ -17,6 +20,7 @@ fn detail_returns_ordered_safe_image_previews_for_the_selected_profile() {
     let directory = tempdir().expect("tempdir");
     let blob_root = directory.path().join("assets");
     let key = [73_u8; 32];
+    let asset_decryptor = KeyedAssetDecryptor::new(&key);
     let mut connection =
         open_encrypted_database(&directory.path().join("library.db"), "problem-detail-key")
             .expect("open database");
@@ -65,7 +69,7 @@ fn detail_returns_ordered_safe_image_previews_for_the_selected_profile() {
     let detail = get_problem_detail(
         &connection,
         &blob_root,
-        &key,
+        &asset_decryptor,
         ProblemDetailQuery {
             account_id: "account-1".to_owned(),
             profile_id: profile.id.clone(),
@@ -90,7 +94,7 @@ fn detail_returns_ordered_safe_image_previews_for_the_selected_profile() {
     let error = get_problem_detail(
         &connection,
         &blob_root,
-        &key,
+        &asset_decryptor,
         ProblemDetailQuery {
             account_id: "other-account".to_owned(),
             profile_id: profile.id,
@@ -106,6 +110,7 @@ fn detail_rejects_a_tampered_asset_path_before_reading_it() {
     let directory = tempdir().expect("tempdir");
     let blob_root = directory.path().join("assets");
     let key = [79_u8; 32];
+    let asset_decryptor = KeyedAssetDecryptor::new(&key);
     let mut connection =
         open_encrypted_database(&directory.path().join("library.db"), "problem-path-key")
             .expect("open database");
@@ -147,7 +152,7 @@ fn detail_rejects_a_tampered_asset_path_before_reading_it() {
     let error = get_problem_detail(
         &connection,
         &blob_root,
-        &key,
+        &asset_decryptor,
         ProblemDetailQuery {
             account_id: "account-1".to_owned(),
             profile_id: profile.id,

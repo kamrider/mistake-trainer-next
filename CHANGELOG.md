@@ -2,6 +2,31 @@
 
 All notable product changes are recorded in this file. Versions follow Semantic Versioning.
 
+## 0.1.3 — 2026-08-13
+
+Strengthens application boundaries and release reliability without changing the encrypted library
+format or updater trust model.
+
+### Changed
+
+- Added executable dependency-direction contracts and public feature APIs so application views,
+  shared UI mechanics, domain policy, and infrastructure adapters have explicit ownership.
+- Split application lifecycle, profile and library recovery, settings operations, synchronization,
+  and capture workflows into focused controllers with independently tested interfaces.
+- Moved asset hashing into the domain and routed encryption, decryption, and blob removal through
+  application ports across capture, import, export, problem lookup, and cloud synchronization.
+- Relocated library inventory and reset mechanics to infrastructure boundaries while preserving
+  fail-closed startup and recovery behavior.
+
+### Fixed
+
+- Serialized automatic-backup policy operations across foreground settings commands and the
+  background due-backup worker so stale work cannot overwrite a new configuration or disable.
+- Hardened Windows installer smoke cleanup ownership and process isolation for ephemeral release
+  workers without broadening deletion scope.
+- Updated source contracts to enforce the new asset-port boundaries and prevent new Rust dependency
+  exceptions beyond the explicitly audited migration list.
+
 ## 0.1.2 — 2026-08-12
 
 ### Fixed

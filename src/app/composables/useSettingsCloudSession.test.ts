@@ -42,15 +42,18 @@ function harness() {
     signUp: vi.fn().mockResolvedValue(success(verificationRequired)),
     disconnect: vi.fn().mockResolvedValue(success(signedOut)),
     lockLibrary: vi.fn().mockResolvedValue(success(locked)),
+    loadDeviceAccess: vi.fn().mockResolvedValue(success(locked)),
   }
   const onConnected = vi.fn()
   const onRestarting = vi.fn()
+  const restoreLockFocus = vi.fn(async () => undefined)
   const controller = useSettingsCloudSession({
     operations,
     onConnected,
     onRestarting,
+    restoreLockFocus,
   })
-  return { controller, operations, onConnected, onRestarting }
+  return { controller, operations, onConnected, onRestarting, restoreLockFocus }
 }
 
 describe('useSettingsCloudSession', () => {
@@ -152,5 +155,35 @@ describe('useSettingsCloudSession', () => {
     expect(h.operations.status).toHaveBeenCalledOnce()
     expect(h.controller.auth.value).toEqual(connected)
     expect(h.controller.authMessage.value).toBe('')
+  })
+
+  it('loads device access status and clears stale state on safe failures', async () => {
+    const h = harness()
+    await expect(h.controller.loadDeviceAccessStatus()).resolves.toBe(true)
+    expect(h.controller.deviceAccessStatus.value).toEqual(locked)
+
+    h.operations.loadDeviceAccess.mockResolvedValueOnce(failure(
+      'device_status_failed',
+      '无法读取 Windows 资料库凭据，已保持锁定。',
+      true,
+      'private-device',
+    ))
+    await expect(h.controller.loadDeviceAccessStatus()).resolves.toBe(false)
+    expect(h.controller.deviceAccessStatus.value).toBeUndefined()
+    expect(h.controller.deviceAccessError.value).toBe('无法读取 Windows 资料库凭据，已保持锁定。')
+
+    h.operations.loadDeviceAccess.mockRejectedValueOnce(new Error('credential service'))
+    await expect(h.controller.loadDeviceAccessStatus()).resolves.toBe(false)
+    expect(h.controller.deviceAccessError.value).toBe(
+      '当前设备的离线解锁状态暂时无法读取；资料库仍保持本机加密。',
+    )
+  })
+
+  it.each(['lock', 'sign-out'] as const)('restores %s trigger focus when closing', async (mode) => {
+    const h = harness()
+    h.controller.openLibraryLock(mode)
+    await expect(h.controller.closeLibraryLock()).resolves.toBe(true)
+    expect(h.restoreLockFocus).toHaveBeenCalledWith(mode)
+    expect(h.controller.lockDialogOpen.value).toBe(false)
   })
 })

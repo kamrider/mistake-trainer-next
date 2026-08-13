@@ -3,10 +3,13 @@ import { isTauri } from '@tauri-apps/api/core'
 import { ArrowLeft, BookOpenCheck, RotateCcw } from '@lucide/vue'
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import ReviewHistoryDetail from '@/modules/review-history/components/ReviewHistoryDetail.vue'
-import ReviewHistoryFilters, { type HistoryFiltersValue } from '@/modules/review-history/components/ReviewHistoryFilters.vue'
-import ReviewHistoryTimeline from '@/modules/review-history/components/ReviewHistoryTimeline.vue'
-import { useReviewHistoryList } from '@/modules/review-history/composables/useReviewHistoryList'
+import {
+  ReviewHistoryDetail,
+  ReviewHistoryFilters,
+  ReviewHistoryTimeline,
+  useReviewHistoryList,
+  type HistoryFiltersValue,
+} from '@/modules/review-history'
 import { commands, type ReviewHistoryDetail as HistoryDetail, type ReviewHistoryItem, type ReviewHistoryPage } from '@/shared/api/bindings'
 import { normalizeAppResult } from '@/shared/api/normalize-result'
 

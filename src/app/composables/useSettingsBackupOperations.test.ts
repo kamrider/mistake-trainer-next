@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { BackupRestoreCandidate, BackupSummary } from '../../shared/api/bindings'
+import type { AutomaticBackupStatus, BackupRestoreCandidate, BackupSummary } from '../../shared/api/bindings'
 import { failure, success, type AppResult } from '../../shared/api/app-result'
 import { useSettingsBackupOperations } from './useSettingsBackupOperations'
 
@@ -18,6 +18,14 @@ const restoreCandidate: BackupRestoreCandidate = {
   summary: { ...createdBackup, readyForRestore: true },
 }
 
+const automaticStatus: AutomaticBackupStatus = {
+  enabled: true,
+  intervalDays: 7,
+  retentionCount: 4,
+  destinationLabel: '自动备份位置',
+  lastSuccessAtUtcMs: null,
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void
   let reject!: (reason?: unknown) => void
@@ -34,9 +42,24 @@ function harness() {
     prepareRestore: vi.fn(async () => success<BackupRestoreCandidate | null>(restoreCandidate)),
     restore: vi.fn(async () => success(true)),
   }
+  const automatic = {
+    status: vi.fn(async () => success(automaticStatus)),
+    configure: vi.fn(async () => success(automaticStatus)),
+    disable: vi.fn(async () => success({ ...automaticStatus, enabled: false })),
+  }
+  const restoreFocus = vi.fn(async () => undefined)
+  const onOperationStart = vi.fn()
   return {
     operations,
-    controller: useSettingsBackupOperations(operations),
+    automatic,
+    restoreFocus,
+    onOperationStart,
+    controller: useSettingsBackupOperations({
+      operations,
+      automatic,
+      restoreFocus,
+      onOperationStart,
+    }),
   }
 }
 
@@ -168,7 +191,7 @@ describe('useSettingsBackupOperations', () => {
     )
 
     const restore = harness()
-    restore.controller.candidate.value = restoreCandidate
+    await restore.controller.prepareRestore()
     restore.operations.restore.mockRejectedValue(new Error('offline'))
     await restore.controller.restoreBackup()
     expect(restore.controller.message.value).toBe(
@@ -179,7 +202,7 @@ describe('useSettingsBackupOperations', () => {
 
   it('does not stay busy when a restore command reports false success data', async () => {
     const current = harness()
-    current.controller.candidate.value = restoreCandidate
+    await current.controller.prepareRestore()
     current.operations.restore.mockResolvedValue(success(false))
 
     await expect(current.controller.restoreBackup()).resolves.toBe(false)
@@ -188,5 +211,70 @@ describe('useSettingsBackupOperations', () => {
     expect(current.controller.message.value).toBe(
       '恢复任务没有开始；当前资料库保持不变，请稍后重试。',
     )
+  })
+
+  it('loads and updates automatic backup state through the shared admission boundary', async () => {
+    const current = harness()
+
+    await expect(current.controller.loadAutomaticStatus()).resolves.toBe(true)
+    expect(current.controller.automaticStatus.value).toEqual(automaticStatus)
+
+    await expect(current.controller.configureAutomaticBackup(3, 6)).resolves.toBe(true)
+    expect(current.automatic.configure).toHaveBeenCalledWith(3, 6)
+    expect(current.controller.automaticStatus.value).toEqual(automaticStatus)
+    expect(current.onOperationStart).toHaveBeenCalledOnce()
+
+    await expect(current.controller.disableAutomaticBackup()).resolves.toBe(true)
+    expect(current.controller.automaticStatus.value?.enabled).toBe(false)
+    expect(current.onOperationStart).toHaveBeenCalledTimes(2)
+  })
+
+  it('mutually excludes automatic and manual backup work', async () => {
+    const gate = deferred<AppResult<AutomaticBackupStatus>>()
+    const current = harness()
+    current.automatic.configure.mockReturnValueOnce(gate.promise)
+
+    const configuring = current.controller.configureAutomaticBackup(7, 4)
+    expect(current.controller.automaticBusy.value).toBe(true)
+    expect(current.controller.navigationBusy.value).toBe(true)
+    await expect(current.controller.createBackup()).resolves.toBe(false)
+    await expect(current.controller.prepareRestore()).resolves.toBe(false)
+    expect(current.operations.create).not.toHaveBeenCalled()
+
+    gate.resolve(success(automaticStatus))
+    await expect(configuring).resolves.toBe(true)
+    expect(current.controller.navigationBusy.value).toBe(false)
+  })
+
+  it('reports automatic backup failures without replacing the last durable status', async () => {
+    const current = harness()
+    await current.controller.loadAutomaticStatus()
+    current.automatic.configure.mockResolvedValueOnce(failure(
+      'automatic_backup_failed', '自动备份目录不可用。', true, 'automatic-configure',
+    ))
+
+    await expect(current.controller.configureAutomaticBackup(7, 4)).resolves.toBe(false)
+    expect(current.controller.message.value).toBe('自动备份目录不可用。')
+    expect(current.controller.automaticStatus.value).toEqual(automaticStatus)
+
+    current.automatic.disable.mockRejectedValueOnce(new Error('native unavailable'))
+    await expect(current.controller.disableAutomaticBackup()).resolves.toBe(false)
+    expect(current.controller.message.value).toBe('自动备份没有停用；请稍后重试。')
+  })
+
+  it('owns restore dialog focus and retains a validated candidate after startup failure', async () => {
+    const current = harness()
+    await current.controller.prepareRestore()
+    current.controller.openRestoreDialog()
+    expect(current.controller.restoreDialogOpen.value).toBe(true)
+
+    current.operations.restore.mockResolvedValueOnce(failure(
+      'backup_restore_failed', '恢复任务没有开始。', true, 'restore-failed',
+    ))
+    await expect(current.controller.confirmRestore()).resolves.toBe(false)
+
+    expect(current.controller.restoreDialogOpen.value).toBe(false)
+    expect(current.controller.candidate.value).toEqual(restoreCandidate)
+    expect(current.restoreFocus).toHaveBeenCalledOnce()
   })
 })

@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ArchiveRestore, ShieldCheck, TriangleAlert, X } from '@lucide/vue'
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { acquireDialogDocumentBoundary } from '../../../app/dialog-document-boundary'
-import { trapDialogFocus } from '../../../app/dialog-focus'
+import { acquireDialogDocumentBoundary } from '@/shared/ui/dialog-document-boundary'
+import { trapDialogFocus } from '@/shared/ui/dialog-focus'
 
 const props = defineProps<{
   mode: 'import' | 'rollback'

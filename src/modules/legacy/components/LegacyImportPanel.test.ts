@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { syncControllerKey } from '../../../app/sync-controller'
+import { syncControllerKey } from '@/shared/contracts/sync-controller'
 import LegacyImportPanel from './LegacyImportPanel.vue'
 
 const api = vi.hoisted(() => ({

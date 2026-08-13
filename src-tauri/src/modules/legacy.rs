@@ -10,8 +10,6 @@ use specta::Type;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::infrastructure::assets::AssetCryptoError;
-
 #[path = "legacy_import_transaction.rs"]
 mod legacy_import_transaction;
 #[path = "legacy_rollback_transaction.rs"]
@@ -277,7 +275,7 @@ pub enum LegacyImportError {
     #[error("legacy import serialization failed")]
     Serialization(#[from] serde_json::Error),
     #[error("legacy import encryption failed")]
-    Crypto(#[from] AssetCryptoError),
+    Crypto,
     #[error("legacy import scan failed")]
     Scan(#[from] LegacyScanError),
 }

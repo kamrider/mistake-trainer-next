@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { readonly, ref } from 'vue'
 import type { AppResult } from '../../shared/api/app-result'
 import type {
   AuthCredentials,
@@ -6,19 +6,21 @@ import type {
   LibraryAccessStatus,
 } from '../../shared/api/bindings'
 
-interface SettingsCloudSessionOperations {
+export interface SettingsCloudSessionOperations {
   restore?: () => Promise<AppResult<CloudAuthState>>
   status?: () => Promise<AppResult<CloudAuthState>>
   signIn: (credentials: AuthCredentials) => Promise<AppResult<CloudAuthState>>
   signUp: (credentials: AuthCredentials) => Promise<AppResult<CloudAuthState>>
   disconnect: () => Promise<AppResult<CloudAuthState>>
   lockLibrary: () => Promise<AppResult<LibraryAccessStatus>>
+  loadDeviceAccess: () => Promise<AppResult<LibraryAccessStatus>>
 }
 
-interface SettingsCloudSessionOptions {
+export interface SettingsCloudSessionOptions {
   operations: SettingsCloudSessionOperations
   onConnected: () => unknown
   onRestarting: () => void
+  restoreLockFocus: (mode: 'lock' | 'sign-out') => Promise<unknown> | unknown
 }
 
 export function useSettingsCloudSession(options: SettingsCloudSessionOptions) {
@@ -32,6 +34,8 @@ export function useSettingsCloudSession(options: SettingsCloudSessionOptions) {
   const lockDialogMode = ref<'lock' | 'sign-out'>('lock')
   const lockingLibrary = ref(false)
   const lockErrorMessage = ref('')
+  const deviceAccessStatus = ref<LibraryAccessStatus>()
+  const deviceAccessError = ref('')
 
   let authRevision = 0
   let loadRevision = 0
@@ -149,11 +153,31 @@ export function useSettingsCloudSession(options: SettingsCloudSessionOptions) {
     lockDialogOpen.value = true
   }
 
-  function closeLibraryLock(): 'lock' | 'sign-out' | undefined {
-    if (lockingLibrary.value || !lockDialogOpen.value) return undefined
+  async function closeLibraryLock(): Promise<boolean> {
+    if (lockingLibrary.value || !lockDialogOpen.value) return false
     const closedMode = lockDialogMode.value
     lockDialogOpen.value = false
-    return closedMode
+    await options.restoreLockFocus(closedMode)
+    return true
+  }
+
+  async function loadDeviceAccessStatus(): Promise<boolean> {
+    deviceAccessError.value = ''
+    try {
+      const result = await options.operations.loadDeviceAccess()
+      if (!result.ok) {
+        deviceAccessStatus.value = undefined
+        deviceAccessError.value = result.error.userMessage
+        return false
+      }
+      deviceAccessStatus.value = result.data
+      return true
+    }
+    catch {
+      deviceAccessStatus.value = undefined
+      deviceAccessError.value = '当前设备的离线解锁状态暂时无法读取；资料库仍保持本机加密。'
+      return false
+    }
   }
 
   async function confirmLibraryLock(): Promise<boolean> {
@@ -198,11 +222,14 @@ export function useSettingsCloudSession(options: SettingsCloudSessionOptions) {
     lockDialogMode,
     lockingLibrary,
     lockErrorMessage,
+    deviceAccessStatus: readonly(deviceAccessStatus),
+    deviceAccessError: readonly(deviceAccessError),
     restoreSession,
     submit,
     disconnectCloud,
     openLibraryLock,
     closeLibraryLock,
     confirmLibraryLock,
+    loadDeviceAccessStatus,
   }
 }

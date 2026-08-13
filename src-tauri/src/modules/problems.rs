@@ -9,7 +9,10 @@ use specta::Type;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::infrastructure::assets::{AssetCryptoError, encrypt_asset, plaintext_sha256};
+use crate::{
+    application::ports::assets::{AssetDecryptor, AssetEncryptor},
+    domain::assets::plaintext_sha256,
+};
 
 #[path = "problem_query_repository.rs"]
 mod query_repository;
@@ -276,7 +279,7 @@ pub enum ProblemUseCaseError {
     #[error("at least one metadata change must be provided")]
     EmptyChange,
     #[error("asset encryption failed")]
-    Crypto(#[from] AssetCryptoError),
+    Crypto,
     #[error("asset file operation failed")]
     File(#[from] std::io::Error),
     #[error("problem outbox serialization failed")]
@@ -295,19 +298,24 @@ pub fn list_problem_summaries(
 pub fn list_problem_summaries_with_previews(
     connection: &Connection,
     blob_root: &Path,
-    key: &[u8; 32],
+    asset_decryptor: &dyn AssetDecryptor,
     query: ProblemListQuery,
 ) -> Result<Vec<ProblemSummary>, ProblemUseCaseError> {
-    query_repository::list_problem_summaries_with_previews(connection, blob_root, key, query)
+    query_repository::list_problem_summaries_with_previews(
+        connection,
+        blob_root,
+        asset_decryptor,
+        query,
+    )
 }
 
 pub fn get_problem_detail(
     connection: &Connection,
     blob_root: &Path,
-    key: &[u8; 32],
+    asset_decryptor: &dyn AssetDecryptor,
     query: ProblemDetailQuery,
 ) -> Result<ProblemDetail, ProblemUseCaseError> {
-    query_repository::get_problem_detail(connection, blob_root, key, query)
+    query_repository::get_problem_detail(connection, blob_root, asset_decryptor, query)
 }
 
 pub fn update_problem(
@@ -527,7 +535,7 @@ struct AssetLink {
 pub fn create_problem(
     connection: &mut Connection,
     blob_root: &Path,
-    key: &[u8; 32],
+    asset_encryptor: &dyn AssetEncryptor,
     input: CreateProblem,
 ) -> Result<Problem, ProblemUseCaseError> {
     let profile_exists: bool = connection.query_row(
@@ -570,7 +578,12 @@ pub fn create_problem(
             let staged_path = staging_root.join(format!("{id}.tmp"));
             let final_path = blob_root.join(&relative);
             std::fs::create_dir_all(&staging_root)?;
-            std::fs::write(&staged_path, encrypt_asset(&capture.bytes, key)?)?;
+            std::fs::write(
+                &staged_path,
+                asset_encryptor
+                    .encrypt(&capture.bytes)
+                    .map_err(|_| ProblemUseCaseError::Crypto)?,
+            )?;
             new_assets.push(NewAsset {
                 metadata: AssetMetadata {
                     id: id.clone(),

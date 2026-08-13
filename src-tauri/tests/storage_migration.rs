@@ -506,6 +506,51 @@ fn restart_commits_pointer_only_after_destination_opens() {
 }
 
 #[test]
+fn staged_migration_seals_the_old_connection_before_releasing_snapshot_lock() {
+    let fixture = fixture();
+    let destination = tempdir().unwrap();
+    stage_storage_migration(
+        &fixture.runtime,
+        &fixture.control_root,
+        destination.path(),
+        200,
+    )
+    .unwrap();
+
+    let connection = fixture.runtime.connection.lock().unwrap();
+    let query_only: i64 = connection
+        .pragma_query_value(None, "query_only", |row| row.get(0))
+        .unwrap();
+    assert_eq!(query_only, 1);
+    assert!(
+        connection
+            .execute(
+                "UPDATE problems SET note = 'late write' WHERE id = ?1",
+                [PROBLEM_ID],
+            )
+            .is_err(),
+        "a writer released after the snapshot must fail closed on the old connection"
+    );
+    drop(connection);
+    drop(fixture.runtime);
+
+    let moved = apply_pending_storage_migration(&fixture.control_root, &FixedSecrets, 201)
+        .unwrap()
+        .expect("pending migration should open the staged destination");
+    let note: String = moved
+        .connection
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT note FROM problems WHERE id = ?1",
+            [PROBLEM_ID],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(note, "");
+}
+
+#[test]
 fn tampered_destination_rolls_back_to_source_and_records_receipt() {
     let fixture = fixture();
     let destination = tempdir().unwrap();

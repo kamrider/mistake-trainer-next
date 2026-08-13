@@ -29,4 +29,17 @@ describe('LibraryFreshStartDialog', () => {
 
     expect(view.emitted('cancel')).toHaveLength(1)
   })
+
+  it('shows a backend rejection inside the active dialog', () => {
+    render(LibraryFreshStartDialog, {
+      props: {
+        busy: false,
+        message: '资料库状态已经变化；没有删除任何凭据。',
+      },
+    })
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      '资料库状态已经变化；没有删除任何凭据。',
+    )
+  })
 })

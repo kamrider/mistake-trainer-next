@@ -4,21 +4,22 @@ import { CheckCircle2, ShieldAlert, X } from '@lucide/vue'
 import { computed, nextTick, onErrorCaptured, onMounted, onUnmounted, provide, ref, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import { failure, type AppResult } from '../shared/api/app-result'
-import { commands, type BackupRestoreCandidate, type BackupRestoreReceipt, type ProfileSummary, type SyncNowReport, type SystemStatus, type WindowsCompatibilityStatus } from '../shared/api/bindings'
+import { commands, type BackupRestoreReceipt, type SystemStatus, type WindowsCompatibilityStatus } from '../shared/api/bindings'
 import { normalizeAppResult } from '../shared/api/normalize-result'
 import { loadSystemStatus } from '../shared/api/system-status'
 import AppShell, { type AppPage } from './AppShell.vue'
 import BackupRestoreDialog from './BackupRestoreDialog.vue'
 import StartupUpdateDialog from './components/StartupUpdateDialog.vue'
 import { useLibraryAccessLifecycle } from './composables/useLibraryAccessLifecycle'
+import { useApplicationSyncLifecycle } from './composables/useApplicationSyncLifecycle'
+import { useLibraryRecoveryController } from './composables/useLibraryRecoveryController'
 import { useProfileManagement } from './composables/useProfileManagement'
 import { useStartupUpdate } from './composables/useStartupUpdate'
 import LibraryAccessScreen from './LibraryAccessScreen.vue'
 import LibraryFreshStartDialog from './LibraryFreshStartDialog.vue'
 import { libraryAccessControllerKey } from './library-access-controller'
 import { formatSettingsTime } from './settings-formatters'
-import { createSyncController, syncControllerKey, syncStatusCopy, type SyncPhase, type SyncTrigger } from './sync-controller'
-import { createRecoverySingleFlight } from './recovery-single-flight'
+import { syncControllerKey, syncStatusCopy } from './sync-controller'
 import { createWorkspaceTransitionGuard, workspaceTransitionGuardKey } from './workspace-transition-guard'
 
 const route = useRoute()
@@ -76,93 +77,40 @@ const {
 provide(libraryAccessControllerKey, {
   enterRestarting,
 })
-const libraryRecoveryBusy = ref(false)
-const libraryRecoveryMessage = ref('')
-const recoveryCandidate = ref<BackupRestoreCandidate>()
-const recoveryRestoreDialogOpen = ref(false)
-const freshStartDialogOpen = ref(false)
-const runSingleLibraryRecovery = createRecoverySingleFlight()
-
-function runLibraryRecovery(operation: () => Promise<boolean>): Promise<boolean> {
-  return runSingleLibraryRecovery(async () => {
-    libraryRecoveryBusy.value = true
-    libraryRecoveryMessage.value = ''
-    try {
-      return await operation()
-    }
-    catch {
-      libraryRecoveryMessage.value = '恢复操作没有完成，原资料库状态没有被覆盖，请稍后重试。'
-      return false
-    }
-    finally {
-      libraryRecoveryBusy.value = false
-    }
-  })
-}
-
-function reconnectLibrary() {
-  return runLibraryRecovery(async () => {
+const {
+  busy: libraryRecoveryBusy,
+  message: libraryRecoveryMessage,
+  candidate: recoveryCandidate,
+  restoreDialogOpen: recoveryRestoreDialogOpen,
+  freshStartDialogOpen,
+  openFreshStartDialog,
+  closeFreshStartDialog,
+  closeRestoreDialog,
+  reconnectLibrary,
+  prepareRecoveryBackup,
+  confirmRecoveryBackup,
+  confirmFreshStart,
+} = useLibraryRecoveryController({
+  reconnect: async () => {
     const invocation = await commands.storageReconnectSelect()
     if (invocation.status === 'error') throw new Error('reconnect command rejected')
-    const result = normalizeAppResult(invocation.data)
-    if (!result.ok) {
-      libraryRecoveryMessage.value = result.error.userMessage
-      return false
-    }
-    if (result.data) enterRestarting()
-    return result.data
-  })
-}
-
-function prepareRecoveryBackup() {
-  return runLibraryRecovery(async () => {
+    return normalizeAppResult(invocation.data)
+  },
+  prepareRestore: async () => {
     const invocation = await commands.backupRecoveryPrepare()
     if (invocation.status === 'error') throw new Error('backup recovery command rejected')
-    const result = normalizeAppResult(invocation.data)
-    if (!result.ok) {
-      libraryRecoveryMessage.value = result.error.userMessage
-      return false
-    }
-    if (!result.data) return false
-    recoveryCandidate.value = result.data
-    recoveryRestoreDialogOpen.value = true
-    return true
-  })
-}
-
-function confirmRecoveryBackup() {
-  const candidate = recoveryCandidate.value
-  if (!candidate) return Promise.resolve(false)
-  return runLibraryRecovery(async () => {
-    const invocation = await commands.backupRecoveryRestore(candidate.id)
+    return normalizeAppResult(invocation.data)
+  },
+  restore: async (candidateId) => {
+    const invocation = await commands.backupRecoveryRestore(candidateId)
     if (invocation.status === 'error') throw new Error('backup recovery restore rejected')
-    const result = normalizeAppResult(invocation.data)
-    if (!result.ok) {
-      libraryRecoveryMessage.value = result.error.userMessage
-      return false
-    }
-    if (result.data) {
-      recoveryRestoreDialogOpen.value = false
-      enterRestarting()
-    }
-    return result.data
-  })
-}
-
-function confirmFreshStart(confirmation: string) {
-  return runLibraryRecovery(async () => {
-    const result = normalizeAppResult(await commands.libraryRecoveryStartFresh(confirmation))
-    if (!result.ok) {
-      libraryRecoveryMessage.value = result.error.userMessage
-      return false
-    }
-    if (result.data) {
-      freshStartDialogOpen.value = false
-      enterRestarting()
-    }
-    return result.data
-  })
-}
+    return normalizeAppResult(invocation.data)
+  },
+  startFresh: async confirmation => normalizeAppResult(
+    await commands.libraryRecoveryStartFresh(confirmation),
+  ),
+  enterRestarting,
+})
 const activePage = computed(() => (route.meta.shellPage ?? route.name ?? 'dashboard') as AppPage)
 type PageDirection = 'forward' | 'backward'
 const pageOrder: Record<AppPage, number> = {
@@ -176,10 +124,50 @@ const pageOrder: Record<AppPage, number> = {
 const pageDirection = ref<PageDirection>('forward')
 const pageTransitionName = computed(() => `page-${pageDirection.value}`)
 const systemStatus = ref<AppResult<SystemStatus>>()
-const syncPhase = ref<SyncPhase>('local_only')
-const automaticSyncCooldownMs = 15_000
-let lastSuccessfulSyncAtUtcMs = 0
-let cloudRestoreTask: Promise<void> | undefined
+const profileEpoch = ref(0)
+let refreshProfilesAfterSync: () => Promise<void> = async () => undefined
+const syncLifecycle = useApplicationSyncLifecycle({
+  desktopRuntime,
+  libraryAccessPhase,
+  workspaceInitialized,
+  activePage,
+  restoreSession: async () => {
+    const invocation = await commands.authRestore()
+    if (invocation.status === 'error') {
+      return failure(
+        'AUTH_COMMAND_UNAVAILABLE',
+        '云端会话暂时无法恢复，本地资料仍可使用。',
+        true,
+        'auth-command-unavailable',
+      )
+    }
+    return normalizeAppResult(invocation.data)
+  },
+  syncNow: async () => {
+    const invocation = await commands.syncNow()
+    if (invocation.status === 'error') {
+      return failure(
+        'SYNC_COMMAND_UNAVAILABLE',
+        '同步请求没有启动，本地内容已经保存。',
+        true,
+        'sync-command-unavailable',
+      )
+    }
+    return normalizeAppResult(invocation.data)
+  },
+  onSyncSuccess: async (report, reason) => {
+    await refreshProfilesAfterSync()
+    if (
+      report.pulledChangeCount > 0
+      && reason !== 'mutation'
+      && activePage.value !== 'review'
+    ) {
+      profileEpoch.value += 1
+    }
+  },
+})
+const { phase: syncPhase, controller: syncController } = syncLifecycle
+provide(syncControllerKey, syncController)
 const shellSyncStatus = computed(() => {
   if (systemStatus.value === undefined) {
     return { label: '正在检查资料库', tone: 'neutral' as const }
@@ -192,7 +180,6 @@ const shellSyncStatus = computed(() => {
   }
   return syncStatusCopy(syncPhase.value)
 })
-const profileEpoch = ref(0)
 const restoreNotice = ref<BackupRestoreReceipt>()
 const windowsCompatibility = ref<WindowsCompatibilityStatus>()
 const compatibilityNoticeDismissed = ref(false)
@@ -203,47 +190,39 @@ const routePage = ref<HTMLElement>()
 const routePageKey = computed(() => `${route.fullPath}:${profileEpoch.value}:${routeRenderEpoch.value}`)
 type RouteFocusRequest = { routePageKey: string; previousActive: Element | null }
 const pendingRouteFocus = ref<RouteFocusRequest>()
-const mutationSyncPhases = new Set<SyncPhase>([
-  'idle',
-  'syncing',
-  'synced',
-  'deferred_capture',
-  'retry_waiting',
-])
-const syncController = createSyncController(performSync, {
-  canScheduleMutation: () => mutationSyncPhases.has(syncPhase.value),
-})
-provide(syncControllerKey, syncController)
-const profileManagement = useProfileManagement({
+const {
+  shellProfiles,
+  shellActiveProfileId,
+  busy: profileBusy,
+  errorMessage: profileError,
+  loadProfiles,
+  createProfile,
+  renameProfile,
+  deleteProfile,
+  selectProfile,
+} = useProfileManagement({
   enabled: desktopRuntime,
-  listProfiles: async () => normalizeAppResult(await commands.profileList()),
+  operations: {
+    list: async () => normalizeAppResult(await commands.profileList()),
+    create: async name => normalizeAppResult(await commands.profileCreate({ name })),
+    rename: async (profileId, name) => normalizeAppResult(
+      await commands.profileRename({ profileId, name }),
+    ),
+    remove: async (profileId, confirmationName) => normalizeAppResult(
+      await commands.profileDelete({ profileId, confirmationName }),
+    ),
+    select: async profileId => normalizeAppResult(await commands.profileSelect(profileId)),
+  },
+  attemptWorkspaceTransition: workspaceTransitionGuard.attempt,
   scheduleSync: () => syncController.scheduleMutation(),
   refreshWorkspace: async () => {
     profileEpoch.value += 1
     await router.push({ name: 'dashboard' })
   },
 })
-const {
-  profiles,
-  activeProfileId,
-  busy: profileBusy,
-  errorMessage: profileError,
-  loadProfiles,
-  mutateProfile,
-} = profileManagement
-const previewProfile: ProfileSummary = {
-  id: 'preview-profile',
-  name: '本机学习档案',
-  createdAtUtcMs: 0,
-  updatedAtUtcMs: 0,
-  revision: 1,
+refreshProfilesAfterSync = async () => {
+  await loadProfiles()
 }
-const shellProfiles = computed(() =>
-  profiles.value.length || desktopRuntime ? [...profiles.value] : [previewProfile],
-)
-const shellActiveProfileId = computed(() =>
-  activeProfileId.value || (desktopRuntime ? '' : previewProfile.id),
-)
 
 watch(() => route.fullPath, () => {
   routeError.value = ''
@@ -318,18 +297,15 @@ onErrorCaptured((error) => {
 })
 
 onMounted(() => {
-  window.addEventListener('online', handleOnline)
-  document.addEventListener('visibilitychange', handleVisibilityChange)
+  syncLifecycle.start()
   startupUpdate.start()
   void loadWindowsCompatibility()
   void loadLibraryAccess()
 })
 
 onUnmounted(() => {
-  window.removeEventListener('online', handleOnline)
-  document.removeEventListener('visibilitychange', handleVisibilityChange)
   startupUpdate.dispose()
-  syncController.dispose()
+  syncLifecycle.dispose()
 })
 
 async function initializeWorkspace() {
@@ -344,142 +320,7 @@ async function initializeWorkspace() {
     )
   }
   await Promise.all([loadProfiles(), loadRestoreReceipt()])
-  void restoreCloudAndSync('startup')
-}
-
-function handleOnline() {
-  if (libraryAccessPhase.value !== 'unlocked' || !workspaceInitialized.value) return
-  void restoreCloudAndSync('online')
-}
-
-function handleVisibilityChange() {
-  if (
-    document.visibilityState !== 'visible'
-    || libraryAccessPhase.value !== 'unlocked'
-    || !workspaceInitialized.value
-  ) return
-  void restoreCloudAndSync('visible')
-}
-
-function isNetworkFailure(code: string): boolean {
-  return [
-    'AUTH_NETWORK',
-    'AUTH_TIMEOUT',
-    'cloud_network',
-    'cloud_timeout',
-    'cloud_unavailable',
-  ].includes(code)
-}
-
-function restoreCloudAndSync(reason: SyncTrigger): Promise<void> {
-  if (cloudRestoreTask) return cloudRestoreTask
-  if (!desktopRuntime) {
-    syncPhase.value = 'local_only'
-    return Promise.resolve()
-  }
-  if (
-    reason === 'visible'
-    && lastSuccessfulSyncAtUtcMs > 0
-    && Date.now() - lastSuccessfulSyncAtUtcMs < automaticSyncCooldownMs
-  ) {
-    return Promise.resolve()
-  }
-  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-    syncPhase.value = 'offline'
-    return Promise.resolve()
-  }
-
-  const job = runCloudRestoreAndSync(reason)
-  const tracked = job.finally(() => {
-    if (cloudRestoreTask === tracked) cloudRestoreTask = undefined
-  })
-  cloudRestoreTask = tracked
-  return tracked
-}
-
-async function runCloudRestoreAndSync(reason: SyncTrigger) {
-  try {
-    const invocation = await commands.authRestore()
-    if (invocation.status === 'error') {
-      syncPhase.value = 'retry_waiting'
-      return
-    }
-    const result = normalizeAppResult(invocation.data)
-    if (!result.ok) {
-      syncPhase.value = isNetworkFailure(result.error.code) ? 'offline' : 'retry_waiting'
-      return
-    }
-    switch (result.data.status.kind) {
-      case 'connected':
-        syncPhase.value = 'idle'
-        await syncController.run(reason)
-        return
-      case 'offline':
-        syncPhase.value = 'offline'
-        return
-      case 'unconfigured':
-        syncPhase.value = 'local_only'
-        return
-      case 'signed_out':
-      case 'verification_required':
-        syncPhase.value = 'signed_out'
-        return
-    }
-  }
-  catch {
-    syncPhase.value = 'offline'
-  }
-}
-
-async function performSync(reason: SyncTrigger): Promise<AppResult<SyncNowReport>> {
-  syncPhase.value = 'syncing'
-  try {
-    const invocation = await commands.syncNow()
-    if (invocation.status === 'error') {
-      const result = failure(
-        'SYNC_COMMAND_UNAVAILABLE',
-        '同步请求没有启动，本地内容已经保存。',
-        true,
-        'sync-command-unavailable',
-      )
-      syncPhase.value = 'retry_waiting'
-      return result
-    }
-    const result = normalizeAppResult(invocation.data)
-    if (!result.ok) {
-      if (result.error.code === 'SYNC_CAPTURE_ACTIVE') {
-        syncPhase.value = 'deferred_capture'
-      }
-      else if (result.error.code === 'SYNC_ALREADY_RUNNING') {
-        syncPhase.value = 'syncing'
-      }
-      else {
-        syncPhase.value = isNetworkFailure(result.error.code) ? 'offline' : 'retry_waiting'
-      }
-      return result
-    }
-
-    syncPhase.value = 'synced'
-    lastSuccessfulSyncAtUtcMs = Date.now()
-    await loadProfiles()
-    if (
-      result.data.pulledChangeCount > 0
-      && reason !== 'mutation'
-      && activePage.value !== 'review'
-    ) {
-      profileEpoch.value += 1
-    }
-    return result
-  }
-  catch {
-    syncPhase.value = 'offline'
-    return failure(
-      'SYNC_REQUEST_FAILED',
-      '暂时无法连接云端，本地内容已经保存并会等待重试。',
-      true,
-      'sync-request-failed',
-    )
-  }
+  void syncLifecycle.restoreCloudAndSync('startup')
 }
 
 const restoreNoticeCopy = computed(() => {
@@ -533,38 +374,6 @@ async function loadRestoreReceipt() {
   }
 }
 
-async function createProfile(name: string): Promise<boolean> {
-  if (!await workspaceTransitionGuard.attempt()) return false
-  return mutateProfile(
-    async () => normalizeAppResult(await commands.profileCreate({ name })),
-    { refreshWorkspace: true, scheduleSync: true },
-  )
-}
-
-function renameProfile(profileId: string, name: string) {
-  return mutateProfile(
-    async () => normalizeAppResult(await commands.profileRename({ profileId, name })),
-    { refreshWorkspace: false, scheduleSync: true },
-  )
-}
-
-async function deleteProfile(profileId: string, confirmationName: string): Promise<boolean> {
-  const deletesActiveProfile = profileId === activeProfileId.value
-  if (deletesActiveProfile && !await workspaceTransitionGuard.attempt()) return false
-  return mutateProfile(
-    async () => normalizeAppResult(await commands.profileDelete({ profileId, confirmationName })),
-    { refreshWorkspace: deletesActiveProfile, scheduleSync: true },
-  )
-}
-
-async function selectProfile(profileId: string): Promise<boolean> {
-  if (profileId === activeProfileId.value) return false
-  if (!await workspaceTransitionGuard.attempt()) return false
-  return mutateProfile(
-    async () => normalizeAppResult(await commands.profileSelect(profileId)),
-    { refreshWorkspace: true, scheduleSync: false },
-  )
-}
 </script>
 
 <template>
@@ -578,20 +387,21 @@ async function selectProfile(profileId: string): Promise<boolean> {
     @retry="retryLibraryAccess"
     @reconnect="reconnectLibrary"
     @restore="prepareRecoveryBackup"
-    @start-fresh="freshStartDialogOpen = true"
+    @start-fresh="openFreshStartDialog"
   />
   <BackupRestoreDialog
     v-if="recoveryRestoreDialogOpen && recoveryCandidate"
     :candidate="recoveryCandidate"
     :busy="libraryRecoveryBusy"
     bootstrap
-    @cancel="recoveryRestoreDialogOpen = false"
+    @cancel="closeRestoreDialog"
     @confirm="confirmRecoveryBackup"
   />
   <LibraryFreshStartDialog
     v-if="freshStartDialogOpen"
     :busy="libraryRecoveryBusy"
-    @cancel="freshStartDialogOpen = false"
+    :message="libraryRecoveryMessage"
+    @cancel="closeFreshStartDialog"
     @confirm="confirmFreshStart"
   />
   <AppShell

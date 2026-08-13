@@ -143,7 +143,7 @@ pub fn review_current_problem_for(runtime: &LibraryRuntime) -> AppResult<Problem
     match get_problem_detail(
         &connection,
         &runtime.blob_root,
-        &runtime.asset_key,
+        &crate::infrastructure::assets::KeyedAssetDecryptor::new(&runtime.asset_key),
         ProblemDetailQuery {
             account_id: runtime.account_id().to_owned(),
             profile_id: profile.id,

@@ -60,10 +60,11 @@ pub async fn legacy_import(
         let mut database = connection
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let asset_encryptor = crate::infrastructure::assets::KeyedAssetEncryptor::new(&key);
         let result = import_legacy_plan(
             &mut database,
             &blob_root,
-            &key,
+            &asset_encryptor,
             &account_id,
             &candidate_id,
             plan,

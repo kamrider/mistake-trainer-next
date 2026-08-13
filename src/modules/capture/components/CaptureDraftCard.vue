@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ArrowRightLeft, Check, Crop, GripVertical, Image as ImageIcon, Maximize2, Plus, RotateCcw, RotateCw, X } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
-import { acquireDialogDocumentBoundary } from '../../../app/dialog-document-boundary'
-import { trapDialogFocus } from '../../../app/dialog-focus'
+import { acquireDialogDocumentBoundary } from '@/shared/ui/dialog-document-boundary'
+import { trapDialogFocus } from '@/shared/ui/dialog-focus'
 import type { CaptureDraftSummary, CaptureItemSummary } from '../../../shared/api/bindings'
 import CaptureThumbnail from './CaptureThumbnail.vue'
 

@@ -7,7 +7,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 use uuid::Uuid;
 
 use crate::{
-    infrastructure::assets::{decrypt_asset, encrypt_asset, plaintext_sha256},
+    application::ports::assets::{AssetDecryptor, AssetEncryptor},
+    domain::assets::plaintext_sha256,
     modules::capture_inbox::{
         CaptureCropRecipe, CaptureInboxError, EncodedCrop, MAX_CAPTURE_BATCH_BYTES,
         MAX_CAPTURE_BATCH_ITEMS, encode_crop, get_capture_batch_detail,
@@ -199,11 +200,13 @@ pub fn apply_capture_recognition(
 
     let mut prepared = Vec::new();
     for suggestion in &selected {
-        let plaintext = decrypt_asset(
-            &read_encrypted_blob(&input.blob_root, &suggestion.source.encrypted_path)?,
-            &input.asset_key,
-        )
-        .map_err(|_| CaptureRecognitionError::Crypto)?;
+        let plaintext = input
+            .asset_key
+            .decrypt(&read_encrypted_blob(
+                &input.blob_root,
+                &suggestion.source.encrypted_path,
+            )?)
+            .map_err(|_| CaptureRecognitionError::Crypto)?;
         let source_image = image::load_from_memory_with_format(
             &plaintext,
             image_format_for_media_type(&suggestion.source.media_type)?,
@@ -293,7 +296,9 @@ pub fn apply_capture_recognition(
                 .join(format!("{asset_id}.mtb"));
             let staged_path = staging_root.join(format!("{asset_id}.recognition.tmp"));
             let final_path = input.blob_root.join(&relative_path);
-            let encrypted = encrypt_asset(&region.encoded.bytes, &input.asset_key)
+            let encrypted = input
+                .asset_key
+                .encrypt(&region.encoded.bytes)
                 .map_err(|_| CaptureRecognitionError::Crypto)?;
             if let Err(error) = std::fs::write(&staged_path, encrypted) {
                 let _ = std::fs::remove_file(&staged_path);

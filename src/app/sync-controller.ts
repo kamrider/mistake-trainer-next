@@ -1,8 +1,10 @@
-import type { InjectionKey } from 'vue'
 import type { AppResult } from '../shared/api/app-result'
 import type { SyncNowReport } from '../shared/api/bindings'
+import type { SyncController, SyncTrigger } from '../shared/contracts/sync-controller'
 
-export type SyncTrigger = 'startup' | 'online' | 'visible' | 'manual' | 'mutation'
+export { syncControllerKey } from '../shared/contracts/sync-controller'
+export type { SyncController, SyncTrigger } from '../shared/contracts/sync-controller'
+
 export type SyncPhase =
   | 'local_only'
   | 'signed_out'
@@ -18,12 +20,6 @@ export type SyncStatusTone = 'neutral' | 'active' | 'success' | 'waiting' | 'war
 export interface SyncStatusCopy {
   label: string
   tone: SyncStatusTone
-}
-
-export interface SyncController {
-  run: (reason: SyncTrigger) => Promise<AppResult<SyncNowReport>>
-  scheduleMutation: () => void
-  dispose: () => void
 }
 
 type PerformSync = (reason: SyncTrigger) => Promise<AppResult<SyncNowReport>>
@@ -143,5 +139,3 @@ export function createSyncController(
     },
   }
 }
-
-export const syncControllerKey: InjectionKey<SyncController> = Symbol('sync-controller')

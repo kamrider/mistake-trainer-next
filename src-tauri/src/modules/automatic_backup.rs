@@ -1,7 +1,7 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 
 use rusqlite::Connection;
@@ -38,7 +38,7 @@ pub struct AutomaticBackupStatus {
     pub last_success_at_utc_ms: Option<f64>,
 }
 
-pub fn configure_automatic_backup(
+fn configure_automatic_backup(
     control_root: &Path,
     destination: &Path,
     interval_days: u32,
@@ -78,7 +78,7 @@ pub fn configure_automatic_backup(
     Ok(status_for(&policy))
 }
 
-pub fn disable_automatic_backup(control_root: &Path) -> Result<AutomaticBackupStatus, BackupError> {
+fn disable_automatic_backup(control_root: &Path) -> Result<AutomaticBackupStatus, BackupError> {
     let control_root = canonical_directory(control_root)?;
     let Some(mut policy) = load_policy(&control_root)? else {
         return Ok(disabled_status());
@@ -88,7 +88,7 @@ pub fn disable_automatic_backup(control_root: &Path) -> Result<AutomaticBackupSt
     Ok(status_for(&policy))
 }
 
-pub fn automatic_backup_status(control_root: &Path) -> Result<AutomaticBackupStatus, BackupError> {
+fn automatic_backup_status(control_root: &Path) -> Result<AutomaticBackupStatus, BackupError> {
     let control_root = canonical_directory(control_root)?;
     Ok(load_policy(&control_root)?
         .as_ref()
@@ -96,7 +96,7 @@ pub fn automatic_backup_status(control_root: &Path) -> Result<AutomaticBackupSta
         .unwrap_or_else(disabled_status))
 }
 
-pub fn run_due_automatic_backup(
+fn run_due_automatic_backup(
     control_root: &Path,
     connection: &Mutex<Connection>,
     blob_root: &Path,
@@ -195,15 +195,118 @@ fn write_policy(
             if !metadata.is_file() || metadata.file_type().is_symlink() {
                 return Err(BackupError::InvalidPackage);
             }
-            fs::remove_file(&target)?;
         }
-        fs::rename(&temporary, &target)?;
+        replace_file_atomically(&temporary, &target)?;
+        sync_parent_directory(control_root)?;
         Ok(())
     })();
     if result.is_err() && temporary.parent() == Some(control_root) {
         let _ = fs::remove_file(temporary);
     }
     result
+}
+
+#[derive(Clone, Default)]
+pub struct AutomaticBackupPolicyCoordinator {
+    operation: Arc<Mutex<()>>,
+}
+
+impl AutomaticBackupPolicyCoordinator {
+    fn execute<T>(
+        &self,
+        operation: impl FnOnce() -> Result<T, BackupError>,
+    ) -> Result<T, BackupError> {
+        let _guard = self.operation.lock().map_err(|_| BackupError::Lock)?;
+        operation()
+    }
+
+    pub fn configure(
+        &self,
+        control_root: &Path,
+        destination: &Path,
+        interval_days: u32,
+        retention_count: u32,
+    ) -> Result<AutomaticBackupStatus, BackupError> {
+        self.execute(|| {
+            configure_automatic_backup(control_root, destination, interval_days, retention_count)
+        })
+    }
+
+    pub fn disable(&self, control_root: &Path) -> Result<AutomaticBackupStatus, BackupError> {
+        self.execute(|| disable_automatic_backup(control_root))
+    }
+
+    pub fn status(&self, control_root: &Path) -> Result<AutomaticBackupStatus, BackupError> {
+        self.execute(|| automatic_backup_status(control_root))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn run_due(
+        &self,
+        control_root: &Path,
+        connection: &Mutex<Connection>,
+        blob_root: &Path,
+        database_key: &str,
+        account_id: &str,
+        now_utc_ms: i64,
+    ) -> Result<Option<BackupSummary>, BackupError> {
+        self.execute(|| {
+            run_due_automatic_backup(
+                control_root,
+                connection,
+                blob_root,
+                database_key,
+                account_id,
+                now_utc_ms,
+            )
+        })
+    }
+}
+
+#[cfg(windows)]
+fn replace_file_atomically(source: &Path, target: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt as _;
+
+    use windows::{
+        Win32::Storage::FileSystem::{
+            MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+        },
+        core::PCWSTR,
+    };
+
+    let source = source
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let target = target
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    unsafe {
+        MoveFileExW(
+            PCWSTR::from_raw(source.as_ptr()),
+            PCWSTR::from_raw(target.as_ptr()),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+        .map_err(|error| std::io::Error::other(error.to_string()))
+    }
+}
+
+#[cfg(not(windows))]
+fn replace_file_atomically(source: &Path, target: &Path) -> std::io::Result<()> {
+    fs::rename(source, target)
+}
+
+#[cfg(unix)]
+fn sync_parent_directory(path: &Path) -> std::io::Result<()> {
+    fs::File::open(path)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_parent_directory(_path: &Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 fn prune_owned_packages(destination: &Path, retention_count: u32) -> Result<(), BackupError> {
@@ -276,6 +379,8 @@ fn disabled_status() -> AutomaticBackupStatus {
 
 #[cfg(test)]
 mod tests {
+    use std::{sync::Barrier, thread, time::Duration};
+
     use super::*;
 
     #[test]
@@ -366,5 +471,64 @@ mod tests {
                 .last_success_at_utc_ms,
             None
         );
+    }
+
+    #[test]
+    fn failed_policy_replacement_preserves_the_previous_policy() {
+        let root = tempfile::tempdir().expect("policy root");
+        let target = root.path().join(POLICY_FILE);
+        let missing_source = root.path().join("missing-policy.tmp");
+        fs::write(&target, b"previous policy").expect("seed policy");
+
+        assert!(replace_file_atomically(&missing_source, &target).is_err());
+        assert_eq!(
+            fs::read(&target).expect("previous policy remains"),
+            b"previous policy"
+        );
+    }
+
+    #[test]
+    fn policy_coordinator_serializes_status_with_an_in_flight_policy_operation() {
+        let control = tempfile::tempdir().expect("control");
+        let coordinator = AutomaticBackupPolicyCoordinator::default();
+        let operation_started = Arc::new(Barrier::new(2));
+        let release_operation = Arc::new(Barrier::new(2));
+        let first_coordinator = coordinator.clone();
+        let first_started = Arc::clone(&operation_started);
+        let first_release = Arc::clone(&release_operation);
+        let first = thread::spawn(move || {
+            first_coordinator
+                .execute(|| {
+                    first_started.wait();
+                    first_release.wait();
+                    Ok(())
+                })
+                .expect("first operation");
+        });
+        operation_started.wait();
+
+        let second_coordinator = coordinator.clone();
+        let control_root = control.path().to_owned();
+        let (completed_tx, completed_rx) = std::sync::mpsc::channel();
+        let second = thread::spawn(move || {
+            let result = second_coordinator.status(&control_root);
+            completed_tx.send(result).expect("report completion");
+        });
+
+        assert!(
+            completed_rx
+                .recv_timeout(Duration::from_millis(50))
+                .is_err()
+        );
+        release_operation.wait();
+        assert!(
+            !completed_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("status completion")
+                .expect("status")
+                .enabled
+        );
+        first.join().expect("first join");
+        second.join().expect("second join");
     }
 }

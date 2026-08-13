@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ArrowDown, ArrowUp, Crop, Plus, Redo2, RotateCw, ScanLine, Trash2, Undo2, X, ZoomIn, ZoomOut } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { acquireDialogDocumentBoundary } from '../../../app/dialog-document-boundary'
-import { trapDialogFocus } from '../../../app/dialog-focus'
+import { acquireDialogDocumentBoundary } from '@/shared/ui/dialog-document-boundary'
+import { trapDialogFocus } from '@/shared/ui/dialog-focus'
 import type { CaptureCropRecipe } from '../../../shared/api/bindings'
 import {
   fitImageWithin,

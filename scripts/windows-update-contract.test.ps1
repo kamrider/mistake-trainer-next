@@ -137,13 +137,20 @@ try {
         Assert-Contract (-not $workflowText.Contains($forbiddenName)) "free workflow still referenced $forbiddenName."
     }
 
-    $supportPolicyText = Get-Content -LiteralPath $supportPolicyPath -Raw
-    Assert-Contract ($supportPolicyText -match '状态均为 `NotSigned`') 'support policy did not document the unsigned executable contract.'
-    Assert-Contract ($supportPolicyText -match 'Tauri updater 私钥签名') 'support policy did not preserve updater signing.'
-    Assert-Contract ($supportPolicyText -notmatch '必须使用同一个受信任发布者身份') 'support policy still required trusted Authenticode for the free channel.'
+    $supportPolicyText = Get-Content -LiteralPath $supportPolicyPath -Raw -Encoding UTF8
+    $unsignedStatusPhrase = (-join @([char]0x72B6, [char]0x6001, [char]0x5747, [char]0x4E3A)) + ' `NotSigned`'
+    $updaterSigningPhrase = 'Tauri updater ' + (-join @([char]0x79C1, [char]0x94A5, [char]0x7B7E, [char]0x540D))
+    $trustedPublisherPhrase = -join @(
+        [char]0x5FC5, [char]0x987B, [char]0x4F7F, [char]0x7528, [char]0x540C,
+        [char]0x4E00, [char]0x4E2A, [char]0x53D7, [char]0x4FE1, [char]0x4EFB,
+        [char]0x53D1, [char]0x5E03, [char]0x8005, [char]0x8EAB, [char]0x4EFD
+    )
+    Assert-Contract ($supportPolicyText.Contains($unsignedStatusPhrase)) 'support policy did not document the unsigned executable contract.'
+    Assert-Contract ($supportPolicyText.Contains($updaterSigningPhrase)) 'support policy did not preserve updater signing.'
+    Assert-Contract (-not $supportPolicyText.Contains($trustedPublisherPhrase)) 'support policy still required trusted Authenticode for the free channel.'
 
-    $changelogText = Get-Content -LiteralPath $changelogPath -Raw
-    Assert-Contract ($changelogText -match '## 0\.1\.0 — 2026-08-10') 'stable 0.1.0 changelog entry was missing.'
+    $changelogText = Get-Content -LiteralPath $changelogPath -Raw -Encoding UTF8
+    Assert-Contract ($changelogText -match '## 0\.1\.0 \u2014 2026-08-10') 'stable 0.1.0 changelog entry was missing.'
     Assert-Contract ($changelogText -match 'intentionally not Authenticode-signed') 'stable changelog did not disclose the unsigned installer risk.'
     Assert-Contract ($changelogText -notmatch 'before a paid production release') 'changelog still required a paid production release.'
 

@@ -17,6 +17,7 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json-summary'],
+      exclude: ['src/shared/api/bindings.ts'],
       thresholds: {
         statements: 70,
         branches: 70,

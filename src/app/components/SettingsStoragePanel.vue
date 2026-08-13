@@ -2,13 +2,8 @@
 import { CheckCircle2, Database, FolderCheck, TriangleAlert } from '@lucide/vue'
 import { computed, ref } from 'vue'
 import type { StorageLocationStatus } from '../../shared/api/bindings'
+import type { SettingsStorageReceiptCopy } from '../../shared/contracts/settings-storage'
 import { formatSettingsBytes } from '../settings-formatters'
-
-export interface SettingsStorageReceiptCopy {
-  kind: 'success' | 'warning'
-  title: string
-  detail: string
-}
 
 const props = defineProps<{
   status: StorageLocationStatus | undefined

@@ -17,7 +17,7 @@ describe('Windows library lifecycle contract', () => {
 
   it('requires journaled exact-confirmation abandonment', () => {
     const access = source('src-tauri/src/commands/access.rs')
-    const reset = source('src-tauri/src/modules/library_reset.rs')
+    const reset = source('src-tauri/src/infrastructure/library_reset.rs')
     expect(access).toContain('永久放弃原资料库')
     expect(access).toContain('fresh_start_preflight')
     expect(access).toContain('validate_existing_library')

@@ -71,9 +71,10 @@ describe('capture asset staging ownership', () => {
       expect(production).not.toContain(forbidden)
     }
     for (const token of [
+      'application::ports::assets::AssetEncryptor',
       'inspect_capture_image(&input.bytes)?',
       'plaintext_sha256(&input.bytes)',
-      'encrypt_asset(&input.bytes, asset_key)',
+      '.encrypt(&input.bytes)',
       'stage_encrypted_capture_asset(',
       'Option<StagedCaptureAsset>',
       '.promote()?',
@@ -82,6 +83,7 @@ describe('capture asset staging ownership', () => {
     ]) {
       expect(orchestrator).toContain(token)
     }
+    expect(orchestrator).not.toContain('infrastructure::assets')
     expect(orchestrator).toMatch(
       /transaction\.commit\(\)\?;\s*(?:if let Some\([^)]*\) = &mut staged_asset \{\s*)?[^}]*\.mark_committed\(\)/s,
     )

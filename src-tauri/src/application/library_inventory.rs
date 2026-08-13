@@ -1,9 +1,12 @@
-use std::path::Path;
-
 use serde::Serialize;
 use specta::Type;
 
-use crate::infrastructure::runtime::CredentialEnvelopeState;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CredentialEnvelopeState {
+    Absent,
+    Complete,
+    Partial,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LibraryArtifactState {
@@ -73,19 +76,6 @@ pub const fn classify_startup_inventory(inventory: StartupInventory) -> StartupD
             StartupDisposition::RecoveryRequired(LibraryRecoveryReason::CredentialsIncomplete)
         }
     }
-}
-
-pub fn inspect_library_artifacts(
-    library_root: &Path,
-) -> Result<LibraryArtifactState, std::io::Error> {
-    for path in [library_root.join("library.db"), library_root.join("assets")] {
-        match std::fs::symlink_metadata(path) {
-            Ok(_) => return Ok(LibraryArtifactState::Present),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(LibraryArtifactState::Absent)
 }
 
 #[cfg(test)]

@@ -10,7 +10,7 @@ use super::{
     SyncPullError, asset_staging::StagedAsset, sync_pull_decoder::DecodedChange, validate_uuid,
 };
 use crate::{
-    infrastructure::assets::remove_asset_blob,
+    application::ports::assets::AssetBlobRemover,
     modules::{
         review::rebuild_schedule_for_problem,
         sync_conflict_merge::{
@@ -34,6 +34,7 @@ pub(super) fn apply_page(
     changes: &[DecodedChange],
     staged_assets: &mut [StagedAsset],
     blob_root: &Path,
+    asset_blob_remover: &dyn AssetBlobRemover,
     page_cursor: i64,
     now_utc_ms: i64,
 ) -> Result<usize, SyncPullError> {
@@ -94,7 +95,7 @@ pub(super) fn apply_page(
     record_pull_success_tx(&transaction, account_id, page_cursor, now_utc_ms)?;
     transaction.commit()?;
     for relative_path in orphan_blob_paths {
-        remove_orphan_blob(blob_root, &relative_path);
+        remove_orphan_blob(asset_blob_remover, blob_root, &relative_path);
     }
     Ok(changes.len())
 }
@@ -704,6 +705,10 @@ fn apply_asset_tombstone(
     Ok(Some(relative_path))
 }
 
-fn remove_orphan_blob(blob_root: &Path, relative_path: &str) {
-    let _ = remove_asset_blob(blob_root, relative_path);
+fn remove_orphan_blob(
+    asset_blob_remover: &dyn AssetBlobRemover,
+    blob_root: &Path,
+    relative_path: &str,
+) {
+    let _ = asset_blob_remover.remove(blob_root, relative_path);
 }

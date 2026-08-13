@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use crate::{
     application::result::AppResult,
+    infrastructure::assets::KeyedAssetDecryptor,
     infrastructure::runtime::LibraryRuntime,
     modules::exports::{
         CreateExportSnapshot, DeletedExportSnapshotSummary, ExportCandidate, ExportCandidateSource,
@@ -118,7 +119,6 @@ pub fn export_generate(
         match prepare_export(
             &connection,
             &state.blob_root,
-            &state.asset_key,
             state.account_id(),
             &profile.id,
             &snapshot_id,
@@ -133,7 +133,8 @@ pub fn export_generate(
     else {
         return AppResult::success(None);
     };
-    match write_prepared_export(prepared, &destination) {
+    let asset_decryptor = KeyedAssetDecryptor::new(&state.asset_key);
+    match write_prepared_export(prepared, &destination, &asset_decryptor) {
         Ok(summary) => AppResult::success(Some(summary)),
         Err(error) => export_generation_error(error),
     }

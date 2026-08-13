@@ -470,7 +470,7 @@ pub fn capture_quality_check(
     result_or_error(check_capture_quality(
         &connection,
         &state.blob_root,
-        &state.asset_key,
+        &crate::infrastructure::assets::KeyedAssetDecryptor::new(&state.asset_key),
         state.account_id(),
         &profile.id,
         &batch_id,

@@ -1,6 +1,6 @@
 use std::{fmt, sync::RwLock};
 
-use crate::infrastructure::supabase::redact_email;
+use crate::domain::privacy::redact_email;
 
 use super::{AuthStatus, AuthStatusKind};
 

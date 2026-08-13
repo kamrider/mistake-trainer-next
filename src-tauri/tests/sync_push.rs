@@ -7,7 +7,7 @@ use std::{
 
 use mistake_trainer_next_lib::{
     infrastructure::{
-        assets::{encrypt_asset, plaintext_sha256},
+        assets::{KeyedAssetDecryptor, encrypt_asset, plaintext_sha256},
         database::run_migrations,
         supabase::{
             CloudError, CloudPushTransport, ObjectUploadResult, PushAcknowledgement,
@@ -268,7 +268,7 @@ fn small_asset_is_verified_uploaded_then_acknowledged_atomically() {
         REMOTE_USER_ID,
         ACCESS_TOKEN,
         fixture.root.path(),
-        &ASSET_KEY,
+        &KeyedAssetDecryptor::new(&ASSET_KEY),
         NOW,
     ));
 
@@ -298,7 +298,7 @@ fn missing_acknowledgement_keeps_the_outbox_operation_for_retry() {
             REMOTE_USER_ID,
             ACCESS_TOKEN,
             fixture.root.path(),
-            &ASSET_KEY,
+            &KeyedAssetDecryptor::new(&ASSET_KEY),
             NOW,
         ))
         .unwrap_err();
@@ -325,7 +325,7 @@ fn corrupt_local_blob_never_reaches_storage_or_metadata_rpc() {
             REMOTE_USER_ID,
             ACCESS_TOKEN,
             fixture.root.path(),
-            &ASSET_KEY,
+            &KeyedAssetDecryptor::new(&ASSET_KEY),
             NOW,
         ))
         .unwrap_err();
@@ -356,7 +356,7 @@ fn large_asset_uses_exact_six_mebibyte_tus_chunks_before_metadata_push() {
             REMOTE_USER_ID,
             ACCESS_TOKEN,
             fixture.root.path(),
-            &ASSET_KEY,
+            &KeyedAssetDecryptor::new(&ASSET_KEY),
             NOW,
         ))
         .unwrap();
@@ -406,7 +406,7 @@ fn resumable_upload_uses_the_server_offset_and_sends_only_the_remainder() {
             REMOTE_USER_ID,
             ACCESS_TOKEN,
             fixture.root.path(),
-            &ASSET_KEY,
+            &KeyedAssetDecryptor::new(&ASSET_KEY),
             NOW,
         ))
         .unwrap();
@@ -440,7 +440,7 @@ fn expired_resumable_upload_is_replaced_before_any_resume_request() {
             REMOTE_USER_ID,
             ACCESS_TOKEN,
             fixture.root.path(),
-            &ASSET_KEY,
+            &KeyedAssetDecryptor::new(&ASSET_KEY),
             NOW,
         ))
         .unwrap();
@@ -465,7 +465,7 @@ fn rpc_network_failure_preserves_the_same_operation_id_for_replay() {
             REMOTE_USER_ID,
             ACCESS_TOKEN,
             fixture.root.path(),
-            &ASSET_KEY,
+            &KeyedAssetDecryptor::new(&ASSET_KEY),
             NOW,
         ))
         .unwrap_err();
@@ -489,7 +489,7 @@ fn rpc_network_failure_preserves_the_same_operation_id_for_replay() {
             REMOTE_USER_ID,
             ACCESS_TOKEN,
             fixture.root.path(),
-            &ASSET_KEY,
+            &KeyedAssetDecryptor::new(&ASSET_KEY),
             NOW + 1_000_000,
         ))
         .unwrap();

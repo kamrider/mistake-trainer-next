@@ -74,21 +74,21 @@ defineExpose({ focusRestoreAction })
       <div class="backup-actions">
         <button
           type="button"
-          :disabled="creating || creatingPortable || preparing || restoring"
+          :disabled="automaticBusy || creating || creatingPortable || preparing || restoring"
           @click="emit('create')"
         >
           <ArchiveRestore :size="16" />{{ creating ? '正在创建…' : '创建加密备份' }}
         </button>
         <button
           type="button"
-          :disabled="creating || creatingPortable || preparing || restoring"
+          :disabled="automaticBusy || creating || creatingPortable || preparing || restoring"
           @click="emit('createPortable')"
         >
           <ShieldCheck :size="16" />{{ creatingPortable ? '正在封装备份…' : '创建便携加密备份' }}
         </button>
         <button
           type="button"
-          :disabled="creating || creatingPortable || preparing || restoring"
+          :disabled="automaticBusy || creating || creatingPortable || preparing || restoring"
           @click="emit('prepare')"
         >
           <FolderCheck :size="16" />{{ preparing ? '正在校验并暂存…' : '选择备份并准备恢复' }}
@@ -175,7 +175,7 @@ defineExpose({ focusRestoreAction })
       >
       <button
         type="submit"
-        :disabled="!recoveryKey || creating || creatingPortable || preparing || restoring"
+        :disabled="!recoveryKey || automaticBusy || creating || creatingPortable || preparing || restoring"
       >
         {{ preparing ? '正在验证并转换…' : '选择便携备份并准备恢复' }}
       </button>
@@ -206,7 +206,7 @@ defineExpose({ focusRestoreAction })
         <button
           ref="restoreAction"
           type="button"
-          :disabled="creating || creatingPortable || preparing || restoring"
+          :disabled="automaticBusy || creating || creatingPortable || preparing || restoring"
           @click="emit('openRestore')"
         >
           查看风险并确认恢复

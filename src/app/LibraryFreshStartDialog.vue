@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { TriangleAlert, X } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { acquireDialogDocumentBoundary } from './dialog-document-boundary'
-import { trapDialogFocus } from './dialog-focus'
+import { acquireDialogDocumentBoundary } from '@/shared/ui/dialog-document-boundary'
+import { trapDialogFocus } from '@/shared/ui/dialog-focus'
 
-defineProps<{ busy: boolean }>()
+defineProps<{ busy: boolean; message?: string }>()
 const emit = defineEmits<{ cancel: [], confirm: [confirmation: string] }>()
 const requiredText = '永久放弃原资料库'
 const confirmation = ref('')
@@ -74,6 +74,13 @@ function handleKeydown(event: KeyboardEvent) {
       <p id="fresh-description">
         这只会清除本机保留的加密身份与恢复控制信息，不会删除任何外置目录。之后应用会建立一个全新的空资料库；原资料若无备份将无法找回。
       </p>
+      <p
+        v-if="message"
+        class="dialog-error"
+        role="alert"
+      >
+        {{ message }}
+      </p>
       <label>
         <span>请输入“{{ requiredText }}”以确认</span>
         <input
@@ -111,6 +118,7 @@ function handleKeydown(event: KeyboardEvent) {
 .warning-mark { color: var(--cinnabar); }
 h2 { margin: 12px 0 0; color: var(--green-deep); font-family: var(--font-serif); }
 p { color: var(--ink-muted); line-height: 1.75; }
+.dialog-error { padding: 11px 12px; border: 1px solid rgba(185,88,63,.35); border-radius: 10px; color: var(--cinnabar); background: rgba(185,88,63,.08); line-height: 1.55; }
 label { display: grid; gap: 8px; margin-top: 18px; color: var(--ink); font-size: 13px; font-weight: 700; }
 input { min-height: 44px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--paper-raised); }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }

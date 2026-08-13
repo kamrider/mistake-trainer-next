@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { Cloud, Laptop, ShieldAlert, X } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { acquireDialogDocumentBoundary } from '../../../app/dialog-document-boundary'
-import { trapDialogFocus } from '../../../app/dialog-focus'
+import { acquireDialogDocumentBoundary } from '@/shared/ui/dialog-document-boundary'
+import { trapDialogFocus } from '@/shared/ui/dialog-focus'
 import type { SyncConflictChoice } from '../../../shared/api/bindings'
 
 const props = defineProps<{

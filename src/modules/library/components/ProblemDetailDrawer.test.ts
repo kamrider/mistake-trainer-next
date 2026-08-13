@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
-import type { NavigationAttempt } from '../../../app/composables/useUnsavedChangesGuard'
+import type { NavigationAttempt } from '@/shared/ui/composables/useUnsavedChangesGuard'
 import ProblemDetailDrawer from './ProblemDetailDrawer.vue'
 
 describe('ProblemDetailDrawer', () => {

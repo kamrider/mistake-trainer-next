@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::{
     application::result::AppResult,
-    infrastructure::runtime::LibraryRuntime,
+    infrastructure::{assets::KeyedAssetDecryptor, runtime::LibraryRuntime},
     modules::{
         problem_bulk_metadata::{
             ProblemBulkMetadata, ProblemBulkMetadataReport, update_problem_bulk_metadata,
@@ -75,7 +75,7 @@ pub fn problem_list_for(
     match list_problem_summaries_with_previews(
         &connection,
         &runtime.blob_root,
-        &runtime.asset_key,
+        &KeyedAssetDecryptor::new(&runtime.asset_key),
         ProblemListQuery {
             account_id: runtime.account_id().to_owned(),
             profile_id: profile.id,
@@ -106,7 +106,7 @@ pub fn problem_detail_for(
     match get_problem_detail(
         &connection,
         &runtime.blob_root,
-        &runtime.asset_key,
+        &KeyedAssetDecryptor::new(&runtime.asset_key),
         ProblemDetailQuery {
             account_id: runtime.account_id().to_owned(),
             profile_id: profile.id,

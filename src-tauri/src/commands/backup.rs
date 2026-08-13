@@ -15,10 +15,7 @@ use crate::{
     },
     infrastructure::runtime::{KeyringSecretStore, LibraryRuntime, load_restore_credentials},
     modules::{
-        automatic_backup::{
-            AutomaticBackupStatus, automatic_backup_status, configure_automatic_backup,
-            disable_automatic_backup,
-        },
+        automatic_backup::{AutomaticBackupPolicyCoordinator, AutomaticBackupStatus},
         backup::{
             BackupError, BackupRestoreCandidate, BackupRestoreReceipt, BackupSummary,
             PortableBackupReceipt, RestoreMode, create_backup, create_portable_backup,
@@ -35,8 +32,9 @@ const LOCAL_LIBRARY_SERVICE: &str = "com.mistaketrainer.next.local-library";
 #[specta::specta]
 pub fn backup_automatic_status(
     control_root: State<'_, ApplicationControlRoot>,
+    coordinator: State<'_, AutomaticBackupPolicyCoordinator>,
 ) -> AppResult<AutomaticBackupStatus> {
-    match automatic_backup_status(&control_root.0) {
+    match coordinator.status(&control_root.0) {
         Ok(status) => AppResult::success(status),
         Err(error) => backup_failure("backup_automatic_status_failed", &error),
     }
@@ -46,10 +44,12 @@ pub fn backup_automatic_status(
 #[specta::specta]
 pub async fn backup_automatic_configure(
     control_root: State<'_, ApplicationControlRoot>,
+    coordinator: State<'_, AutomaticBackupPolicyCoordinator>,
     interval_days: u32,
     retention_count: u32,
 ) -> Result<AppResult<Option<AutomaticBackupStatus>>, ()> {
     let control_root = control_root.0.clone();
+    let coordinator = coordinator.inner().clone();
     let worker = tauri::async_runtime::spawn_blocking(move || {
         let Some(destination) = rfd::FileDialog::new()
             .set_title("选择自动备份文件夹")
@@ -57,7 +57,8 @@ pub async fn backup_automatic_configure(
         else {
             return Ok(None);
         };
-        configure_automatic_backup(&control_root, &destination, interval_days, retention_count)
+        coordinator
+            .configure(&control_root, &destination, interval_days, retention_count)
             .map(Some)
     });
     Ok(match worker.await {
@@ -71,8 +72,9 @@ pub async fn backup_automatic_configure(
 #[specta::specta]
 pub fn backup_automatic_disable(
     control_root: State<'_, ApplicationControlRoot>,
+    coordinator: State<'_, AutomaticBackupPolicyCoordinator>,
 ) -> AppResult<AutomaticBackupStatus> {
-    match disable_automatic_backup(&control_root.0) {
+    match coordinator.disable(&control_root.0) {
         Ok(status) => AppResult::success(status),
         Err(error) => backup_failure("backup_automatic_disable_failed", &error),
     }

@@ -8,11 +8,12 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
+    application::ports::assets::AssetDecryptor,
     application::ports::sync::{
         CloudError, CloudPushTransport, ObjectUploadResult, PushAcknowledgement,
         RemoteObjectMetadata,
     },
-    infrastructure::assets::{decrypt_asset, plaintext_sha256},
+    domain::assets::plaintext_sha256,
     modules::sync_store::{
         LeasedPushBatch, PendingAssetTransfer, SyncStoreError, acknowledge_push_batch,
         fail_push_batch, lease_push_batch,
@@ -89,7 +90,7 @@ pub async fn push_once<T: CloudPushTransport>(
     remote_user_id: &str,
     access_token: &str,
     blob_root: &Path,
-    asset_key: &[u8; 32],
+    asset_decryptor: &dyn AssetDecryptor,
     now_utc_ms: i64,
 ) -> Result<PushReport, SyncPushError> {
     let batch = lease_push_batch(connection, account_id, remote_user_id, now_utc_ms, 100)?;
@@ -105,7 +106,7 @@ pub async fn push_once<T: CloudPushTransport>(
         transport,
         access_token,
         blob_root,
-        asset_key,
+        asset_decryptor,
         now_utc_ms,
         &batch,
     )
@@ -124,7 +125,7 @@ async fn push_leased_batch<T: CloudPushTransport>(
     transport: &T,
     access_token: &str,
     blob_root: &Path,
-    asset_key: &[u8; 32],
+    asset_decryptor: &dyn AssetDecryptor,
     now_utc_ms: i64,
     batch: &LeasedPushBatch,
 ) -> Result<PushReport, SyncPushError> {
@@ -135,7 +136,7 @@ async fn push_leased_batch<T: CloudPushTransport>(
             transport,
             access_token,
             blob_root,
-            asset_key,
+            asset_decryptor,
             now_utc_ms,
             asset,
         )
@@ -169,7 +170,7 @@ async fn ensure_remote_asset<T: CloudPushTransport>(
     transport: &T,
     access_token: &str,
     blob_root: &Path,
-    asset_key: &[u8; 32],
+    asset_decryptor: &dyn AssetDecryptor,
     now_utc_ms: i64,
     asset: &PendingAssetTransfer,
 ) -> Result<bool, SyncPushError> {
@@ -182,7 +183,7 @@ async fn ensure_remote_asset<T: CloudPushTransport>(
         return Ok(false);
     }
 
-    let plaintext = read_verified_asset(blob_root, asset_key, asset)?;
+    let plaintext = read_verified_asset(blob_root, asset_decryptor, asset)?;
     if plaintext.as_slice().len() <= STANDARD_UPLOAD_LIMIT {
         let result = transport
             .upload_small_object(
@@ -355,7 +356,7 @@ fn load_transfer(
 
 fn read_verified_asset(
     blob_root: &Path,
-    asset_key: &[u8; 32],
+    asset_decryptor: &dyn AssetDecryptor,
     asset: &PendingAssetTransfer,
 ) -> Result<SensitiveBytes, SyncPushError> {
     let path = resolve_asset_path(blob_root, &asset.encrypted_path)?;
@@ -365,8 +366,9 @@ fn read_verified_asset(
         return Err(SyncPushError::InvalidLocalAsset);
     }
     let encrypted = std::fs::read(path).map_err(|_| SyncPushError::InvalidLocalAsset)?;
-    let plaintext =
-        decrypt_asset(&encrypted, asset_key).map_err(|_| SyncPushError::InvalidLocalAsset)?;
+    let plaintext = asset_decryptor
+        .decrypt(&encrypted)
+        .map_err(|_| SyncPushError::InvalidLocalAsset)?;
     if plaintext.len() > MAX_ASSET_BYTES
         || i64::try_from(plaintext.len()).ok() != Some(asset.byte_length)
         || plaintext_sha256(&plaintext) != asset.plaintext_sha256

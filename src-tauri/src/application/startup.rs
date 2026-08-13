@@ -4,13 +4,13 @@ use thiserror::Error;
 
 use crate::{
     application::library_inventory::{
-        StartupDisposition, StartupInventory, classify_startup_inventory, inspect_library_artifacts,
+        CredentialEnvelopeState, StartupDisposition, StartupInventory, classify_startup_inventory,
     },
     infrastructure::{
+        library_inventory::inspect_library_artifacts,
         runtime::{
-            CredentialEnvelopeState, LibraryRuntime, RuntimeError, SecretStore,
-            initialize_local_library, inspect_local_credential_envelope, library_is_locked,
-            load_restore_credentials,
+            LibraryRuntime, RuntimeError, SecretStore, initialize_local_library,
+            inspect_local_credential_envelope, library_is_locked, load_restore_credentials,
         },
         storage_location::{
             RESET_PENDING_FILE, RESTORE_PENDING_FILE, STORAGE_PENDING_FILE, StorageLocationError,

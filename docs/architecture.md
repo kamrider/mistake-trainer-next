@@ -19,6 +19,89 @@ Vue feature -> generated typed command client -> Tauri command -> Rust use case
 - Tauri commands validate DTOs and delegate; they do not contain domain policy.
 - Domain modules do not depend on Tauri, SQL, HTTP, or the operating system.
 - Infrastructure implements domain ports and is covered by integration tests.
+- Frontend feature modules consume app-wide capabilities through contracts in `src/shared`;
+  they do not import `src/app` implementations.
+- Reusable modal, focus, menu, and confirmation mechanics live in `src/shared/ui`.
+- Every consumed frontend feature exposes one `src/modules/<feature>/index.ts` public API.
+  Production consumers outside that feature import the module root and never traverse
+  `components`, `composables`, `domain`, or `services`.
+- `App.vue` composes command adapters and providers. `useApplicationSyncLifecycle` owns
+  cloud restore, sync phase transitions, browser triggers, cooldown, and success callbacks;
+  `createSyncController` owns request single-flight and mutation debounce.
+- `useLibraryAccessLifecycle` owns access phases and initialization admission.
+  `useLibraryRecoveryController` owns reconnect, recovery restore, fresh-start, recovery
+  dialog state, and cross-action single-flight; `App.vue` only adapts generated commands.
+- `useProfileManagement` owns profile loading, shell projection, mutation admission and
+  single-flight, workspace-transition policy, dashboard refresh policy, and profile mutation
+  sync scheduling. `App.vue` only adapts commands and supplies router, guard, and sync capabilities.
+- `useSettingsStorageLifecycle` owns settings-side storage status, migration receipt projection,
+  migration dialog lifecycle, safe cancellation/failure handling, and restart transition.
+  `SettingsView.vue` only adapts commands and supplies app capabilities.
+- `useSettingsBackupOperations` is the complete settings backup controller: it owns manual,
+  portable, restore, and automatic-backup admission, state, failure copy, restore-dialog focus,
+  and navigation busy. `SettingsView.vue` only adapts commands and supplies focus/page callbacks.
+- `useSettingsWindowsUpdate` owns the explicit settings compatibility/status probes, update
+  check/install single-flight, exact-version policy, stale-report invalidation, and focus return;
+  `useStartupUpdate` separately owns silent throttled startup checks.
+- `useSettingsDiagnosticsExport` owns diagnostic export single-flight, native cancellation,
+  privacy-safe failure copy, stale-receipt clearing, and focus restoration. The generated receipt
+  exposed to Vue contains no absolute path.
+- `useSettingsCloudSession` owns the coupled cloud-session and local-device boundary: credential
+  restore/authentication, device access status, ordered sign-out-then-lock, restart admission,
+  lock dialog state, and mode-aware focus restoration.
+- `useCaptureCropPresentation` owns ordinary, development-preview, and recognition crop modal
+  presentation, launcher/successor lookup, context-safe focus restoration, and pending-focus
+  disposal. `CaptureView.vue` only adapts crop and recognition operations.
+- `useCaptureQualityAnalysis` owns quality-check admission and caching, per-item reports/errors,
+  dismissal, stale-result protection, batch-context reset, and crop-seed projection.
+  `CaptureView.vue` only adapts the generated quality command and binds presentation state.
+- `useCaptureBatchData` owns batch list/detail state, requested-detail identity, stale-response
+  rejection, route projection, external detail replacement, clear invalidation, and development
+  hydration. OCR preloading is registered after OCR composition, avoiding setup-order coupling.
+- `useCaptureOrganizerActions` owns revision-aware organizer transactions, including pair-
+  suggestion application, save/busy transitions, stale-result rejection, conflict refresh,
+  input-invalid recovery copy, and success notices. `CaptureView.vue` only adapts commands.
+- `useCaptureDraftPersistence` composes the lower-level save queue and owns update inputs,
+  revision-conflict classification and retry, safe detail replacement, failure copy, blocked
+  flushing, batch retention, readonly unsaved/busy projections, and disposal.
+- Rust application policy is infrastructure-independent. `application/startup.rs` is the
+  explicit composition root that may coordinate infrastructure and module operations.
+- Pure privacy policy such as stable email-hint redaction lives in `domain::privacy`; both
+  authentication state and Supabase debug formatting depend inward on that policy.
+- Asset-reading use cases depend on the application-owned `AssetDecryptor` port. Capture-quality
+  analysis, export generation, and problem preview/detail queries receive a decryptor from their
+  command/composition boundary; sync push uses the same port before upload. Only
+  `infrastructure::assets::KeyedAssetDecryptor` knows the concrete asset cipher and key. Stable
+  plaintext content identity is the pure `domain::assets::plaintext_sha256` policy. Sync pull
+  likewise receives the application-owned `AssetEncryptor` port before staging downloaded blobs;
+  problem creation and capture ingestion use the same write capability.
+- Derivation transactions that must decrypt a source and encrypt derived assets depend on the
+  asset crypto ports: crop accepts the combined `AssetCipher`, while recognition uses the read
+  and write capabilities on its bounded job input. Neither imports the concrete cipher.
+- Sync pull commits database tombstones before invoking the application-owned
+  `AssetBlobRemover`; infrastructure implements containment-safe filesystem deletion.
+- Missing-library reset is an infrastructure recovery operation: it journals and removes only
+  product-owned control files and the local credential envelope, never the abandoned data tree.
+- Legacy import exposes feature-level error categories instead of infrastructure crypto errors;
+  the import transaction consumes `AssetEncryptor` and maps encryption failures to that category.
+- `pnpm contract:architecture` enforces dependency direction and ratchets remaining Rust
+  module-to-infrastructure exceptions.
+
+### Remaining Rust boundary batches
+
+The ratchet is intentionally not presented as zero debt. The remaining seven files belong to
+four larger migrations that must preserve filesystem and credential transaction semantics:
+
+- `auth_sync.rs`: split provider/runtime construction and secret persistence behind auth ports.
+- `backup_creation.rs`, `backup_portability.rs`, and `backup_validation.rs`: separate backup
+  policy from encrypted-database opening, package I/O, and cross-key asset transformation.
+- `storage_migration.rs` and `storage_migration_snapshot.rs`: separate migration policy from
+  journal/control-file I/O, database snapshot creation, and runtime reopen.
+- `product_check.rs`: relocate the installed-product smoke orchestrator to an explicit outer
+  composition boundary; it intentionally exercises infrastructure and multiple use cases.
+
+Each batch must remove its files from the exact architecture ratchet; adding a new exception is
+always a contract failure.
 
 ## Modules
 

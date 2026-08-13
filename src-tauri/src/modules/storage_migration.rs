@@ -267,7 +267,15 @@ pub fn stage_storage_migration_from_source(
             },
         )?;
 
+        // Keep the shared database connection exclusively locked from the snapshot through the
+        // pending journal and fail-closed transition. A writer that was already waiting wakes only
+        // after query_only is enabled, so it cannot commit data to the old root after the snapshot.
+        let connection = source
+            .connection
+            .lock()
+            .map_err(|_| StorageMigrationError::Lock)?;
         let (asset_count, copied_bytes) = snapshot::stage_library_snapshot(
+            &connection,
             source,
             &stage_library_root,
             &stage_product_root,
@@ -277,6 +285,13 @@ pub fn stage_storage_migration_from_source(
         fs::rename(&stage_product_root, &destination_product_root)?;
         final_created = true;
         fs::remove_dir(&stage_root)?;
+        let receipt = StorageMigrationReceipt {
+            outcome: StorageMigrationOutcome::Scheduled,
+            destination_label: redacted_location_label(&selected_parent),
+            copied_asset_count: u32::try_from(asset_count)
+                .map_err(|_| StorageMigrationError::TooLarge)?,
+            copied_bytes: copied_bytes as f64,
+        };
         let journal = StorageMigrationJournal {
             schema_version: JOURNAL_SCHEMA_VERSION,
             migration_id: migration_id.clone(),
@@ -290,14 +305,12 @@ pub fn stage_storage_migration_from_source(
             &journal,
             false,
         )?;
+        if let Err(error) = connection.pragma_update(None, "query_only", true) {
+            let _ = remove_control_file(control_root.as_path(), STORAGE_PENDING_FILE);
+            return Err(StorageMigrationError::Database(error));
+        }
 
-        Ok(StorageMigrationReceipt {
-            outcome: StorageMigrationOutcome::Scheduled,
-            destination_label: redacted_location_label(&selected_parent),
-            copied_asset_count: u32::try_from(asset_count)
-                .map_err(|_| StorageMigrationError::TooLarge)?,
-            copied_bytes: copied_bytes as f64,
-        })
+        Ok(receipt)
     })();
 
     if result.is_err() {

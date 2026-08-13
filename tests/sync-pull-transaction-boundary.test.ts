@@ -47,7 +47,9 @@ describe('sync pull page transaction boundary', () => {
       'rebuild_schedule_for_problem(',
       'record_pull_success_tx(',
       'transaction.commit()?',
-      'remove_orphan_blob(blob_root, &relative_path)',
+      'AssetBlobRemover',
+      'remove_orphan_blob(asset_blob_remover, blob_root, &relative_path)',
+      'asset_blob_remover.remove(blob_root, relative_path)',
     ]) {
       expect(transaction).toContain(token)
     }
@@ -69,8 +71,12 @@ describe('sync pull page transaction boundary', () => {
       transaction.indexOf('transaction.commit()?'),
     )
     expect(transaction.indexOf('transaction.commit()?')).toBeLessThan(
-      transaction.indexOf('remove_orphan_blob(blob_root, &relative_path)'),
+      transaction.indexOf(
+        'remove_orphan_blob(asset_blob_remover, blob_root, &relative_path)',
+      ),
     )
+    expect(transaction).not.toContain('infrastructure::assets')
+    expect(transaction).not.toContain('remove_asset_blob')
   })
 
   it('leaves remote I/O in the facade and decoding and staging isolated', () => {
@@ -82,9 +88,11 @@ describe('sync pull page transaction boundary', () => {
 
     for (const token of [
       'pub async fn pull_until_current<T: CloudPullTransport>',
+      'application::ports::assets::{AssetBlobRemover, AssetEncryptor}',
+      'domain::assets::plaintext_sha256',
       '.download_object(access_token, &asset.storage_object)',
       'validate_download(asset, &downloaded)?',
-      'encrypt_asset(&downloaded.bytes, asset_key)',
+      '.encrypt(&downloaded.bytes)',
       'stage_encrypted_asset(',
       'cleanup_page(&staged_assets, false)',
       'cleanup_page(&staged_assets, true)',
@@ -92,6 +100,7 @@ describe('sync pull page transaction boundary', () => {
     ]) {
       expect(facade).toContain(token)
     }
+    expect(facade).not.toContain('infrastructure::assets')
 
     for (const forbidden of [
       'async fn',

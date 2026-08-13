@@ -5,7 +5,10 @@ use std::{
 
 use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
 use mistake_trainer_next_lib::{
-    infrastructure::database::{open_encrypted_database, run_migrations},
+    infrastructure::{
+        assets::KeyedAssetDecryptor,
+        database::{open_encrypted_database, run_migrations},
+    },
     modules::{
         exports::{
             CreateExportSnapshot, ExportError, ExportLayout, create_export_snapshot,
@@ -63,6 +66,7 @@ fn generation_writes_original_images_and_word_documents_without_exposing_paths()
     let question = png([24, 80, 65, 255]);
     let answer = png([185, 88, 63, 255]);
     let asset_key = [9_u8; 32];
+    let asset_decryptor = KeyedAssetDecryptor::new(&asset_key);
     let problem = create_problem(
         &mut connection,
         &directory.path().join("assets"),
@@ -129,7 +133,7 @@ fn generation_writes_original_images_and_word_documents_without_exposing_paths()
     let folder = generate_export(
         &connection,
         &directory.path().join("assets"),
-        &asset_key,
+        &asset_decryptor,
         "account-1",
         &profile.id,
         &folder_snapshot.id,
@@ -171,7 +175,7 @@ fn generation_writes_original_images_and_word_documents_without_exposing_paths()
     let first = generate_export(
         &connection,
         &directory.path().join("assets"),
-        &asset_key,
+        &asset_decryptor,
         "account-1",
         &profile.id,
         &docx_snapshot.id,
@@ -181,7 +185,7 @@ fn generation_writes_original_images_and_word_documents_without_exposing_paths()
     let second = generate_export(
         &connection,
         &directory.path().join("assets"),
-        &asset_key,
+        &asset_decryptor,
         "account-1",
         &profile.id,
         &docx_snapshot.id,
@@ -227,7 +231,7 @@ fn generation_writes_original_images_and_word_documents_without_exposing_paths()
     let grouped = generate_export(
         &connection,
         &directory.path().join("assets"),
-        &asset_key,
+        &asset_decryptor,
         "account-1",
         &profile.id,
         &grouped_snapshot.id,
@@ -251,7 +255,7 @@ fn generation_writes_original_images_and_word_documents_without_exposing_paths()
     let relative = generate_export(
         &connection,
         &directory.path().join("assets"),
-        &asset_key,
+        &asset_decryptor,
         "account-1",
         &profile.id,
         &docx_snapshot.id,

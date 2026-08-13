@@ -1,5 +1,4 @@
 use std::{
-    fmt::Write,
     fs, io,
     path::{Component, Path},
 };
@@ -8,8 +7,14 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
     aead::{Aead, KeyInit},
 };
-use sha2::{Digest, Sha256};
 use thiserror::Error;
+
+use crate::application::ports::assets::{
+    AssetBlobRemovalError, AssetBlobRemover, AssetDecryptionError, AssetDecryptor,
+    AssetEncryptionError, AssetEncryptor,
+};
+
+pub use crate::domain::assets::plaintext_sha256;
 
 const MAGIC: &[u8; 4] = b"MTB1";
 const NONCE_LENGTH: usize = 12;
@@ -25,13 +30,60 @@ pub enum AssetCryptoError {
     Random,
 }
 
-pub fn plaintext_sha256(plaintext: &[u8]) -> String {
-    let digest = Sha256::digest(plaintext);
-    let mut encoded = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        write!(&mut encoded, "{byte:02x}").expect("writing to a String cannot fail");
+pub struct KeyedAssetDecryptor<'a> {
+    key: &'a [u8; 32],
+}
+
+impl<'a> KeyedAssetDecryptor<'a> {
+    pub const fn new(key: &'a [u8; 32]) -> Self {
+        Self { key }
     }
-    encoded
+}
+
+impl AssetDecryptor for KeyedAssetDecryptor<'_> {
+    fn decrypt(&self, encrypted: &[u8]) -> Result<Vec<u8>, AssetDecryptionError> {
+        decrypt_asset(encrypted, self.key).map_err(|_| AssetDecryptionError)
+    }
+}
+
+impl AssetDecryptor for [u8; 32] {
+    fn decrypt(&self, encrypted: &[u8]) -> Result<Vec<u8>, AssetDecryptionError> {
+        decrypt_asset(encrypted, self).map_err(|_| AssetDecryptionError)
+    }
+}
+
+pub struct KeyedAssetEncryptor<'a> {
+    key: &'a [u8; 32],
+}
+
+impl<'a> KeyedAssetEncryptor<'a> {
+    pub const fn new(key: &'a [u8; 32]) -> Self {
+        Self { key }
+    }
+}
+
+impl AssetEncryptor for KeyedAssetEncryptor<'_> {
+    fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>, AssetEncryptionError> {
+        encrypt_asset(plaintext, self.key).map_err(|_| AssetEncryptionError)
+    }
+}
+
+// Compatibility adapter for owners that already keep the key as fixed-size secret state.
+// Feature APIs still depend on `AssetEncryptor`, so the cipher remains replaceable in tests
+// and at composition boundaries.
+impl AssetEncryptor for [u8; 32] {
+    fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>, AssetEncryptionError> {
+        encrypt_asset(plaintext, self).map_err(|_| AssetEncryptionError)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FilesystemAssetBlobRemover;
+
+impl AssetBlobRemover for FilesystemAssetBlobRemover {
+    fn remove(&self, blob_root: &Path, relative_path: &str) -> Result<bool, AssetBlobRemovalError> {
+        remove_asset_blob(blob_root, relative_path).map_err(|_| AssetBlobRemovalError)
+    }
 }
 
 pub fn encrypt_asset(plaintext: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, AssetCryptoError> {

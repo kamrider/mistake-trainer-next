@@ -2,8 +2,8 @@
 import { FolderCheck, RefreshCw, ShieldCheck, TriangleAlert, X } from '@lucide/vue'
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { BackupRestoreCandidate } from '../shared/api/bindings'
-import { acquireDialogDocumentBoundary } from './dialog-document-boundary'
-import { trapDialogFocus } from './dialog-focus'
+import { acquireDialogDocumentBoundary } from '@/shared/ui/dialog-document-boundary'
+import { trapDialogFocus } from '@/shared/ui/dialog-focus'
 
 const props = defineProps<{ candidate: BackupRestoreCandidate, busy: boolean, bootstrap?: boolean }>()
 const emit = defineEmits<{ cancel: [], confirm: [] }>()

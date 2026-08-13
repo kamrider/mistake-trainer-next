@@ -130,4 +130,22 @@ describe('SettingsBackupPanel', () => {
     expect(screen.getByRole('button', { name: '正在校验并暂存…' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '查看风险并确认恢复' })).toBeDisabled()
   })
+
+  it('disables every manual backup and restore entry point during automatic configuration', async () => {
+    render(SettingsBackupPanel, {
+      props: {
+        ...baseProps,
+        candidate,
+        automaticBusy: true,
+      },
+    })
+
+    expect(screen.getByRole('button', { name: '创建加密备份' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '创建便携加密备份' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '选择备份并准备恢复' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '查看风险并确认恢复' })).toBeDisabled()
+
+    await userEvent.type(screen.getByLabelText('跨设备恢复密钥'), 'recovery-key')
+    expect(screen.getByRole('button', { name: '选择便携备份并准备恢复' })).toBeDisabled()
+  })
 })

@@ -1206,6 +1206,90 @@ describe('SettingsView', () => {
     expect(await screen.findByText('正在准备重启…')).toBeVisible()
   })
 
+  it('clears a stale automatic-backup error after a successful retry', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    api.backupAutomaticConfigure
+      .mockResolvedValueOnce({ status: 'ok', data: { ok: false, error: {
+        code: 'backup_automatic_configure_failed',
+        userMessage: '自动备份目录不可写。',
+        retryable: true,
+        diagnosticId: 'automatic-backup-test',
+      } } })
+      .mockResolvedValueOnce({ status: 'ok', data: { ok: true, data: {
+        enabled: true,
+        intervalDays: 7,
+        retentionCount: 5,
+        destinationLabel: 'StudyDisk / Mistake Trainer Automatic Backups',
+        lastSuccessAtUtcMs: null,
+      } } })
+    render(SettingsView)
+
+    await userEvent.click(await screen.findByRole('button', { name: '选择目录并启用' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('自动备份目录不可写。')
+
+    await userEvent.click(screen.getByRole('button', { name: '选择目录并启用' }))
+
+    expect(await screen.findByText(/已启用 · StudyDisk/)).toBeVisible()
+    expect(screen.queryByText('自动备份目录不可写。')).not.toBeInTheDocument()
+  })
+
+  it('clears a stale automatic-backup disable error after a successful retry', async () => {
+    api.backupAutomaticStatus.mockResolvedValue({ ok: true, data: {
+      enabled: true,
+      intervalDays: 7,
+      retentionCount: 5,
+      destinationLabel: 'StudyDisk / Mistake Trainer Automatic Backups',
+      lastSuccessAtUtcMs: null,
+    } })
+    api.backupAutomaticDisable
+      .mockResolvedValueOnce({ ok: false, error: {
+        code: 'backup_automatic_disable_failed',
+        userMessage: '自动备份暂时无法停用。',
+        retryable: true,
+        diagnosticId: 'automatic-disable-test',
+      } })
+      .mockResolvedValueOnce({ ok: true, data: {
+        enabled: false,
+        intervalDays: 7,
+        retentionCount: 5,
+        destinationLabel: null,
+        lastSuccessAtUtcMs: null,
+      } })
+    render(SettingsView)
+
+    await userEvent.click(await screen.findByRole('button', { name: '停用自动备份' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('自动备份暂时无法停用。')
+
+    await userEvent.click(screen.getByRole('button', { name: '停用自动备份' }))
+
+    expect(await screen.findByRole('button', { name: '选择目录并启用' })).toBeEnabled()
+    expect(screen.queryByText('自动备份暂时无法停用。')).not.toBeInTheDocument()
+  })
+
+  it('rejects manual backup commands while automatic configuration is pending', async () => {
+    const configuration = deferred()
+    api.backupAutomaticConfigure.mockReturnValue(configuration.promise)
+    render(SettingsView)
+
+    const automaticButton = await screen.findByRole('button', { name: '选择目录并启用' })
+    const createButton = screen.getByRole('button', { name: '创建加密备份' })
+    const prepareButton = screen.getByRole('button', { name: '选择备份并准备恢复' })
+    automaticButton.click()
+    createButton.click()
+    prepareButton.click()
+
+    await waitFor(() => expect(api.backupAutomaticConfigure).toHaveBeenCalledOnce())
+    expect(api.backupCreate).not.toHaveBeenCalled()
+    expect(api.backupPrepareRestore).not.toHaveBeenCalled()
+
+    configuration.resolve({ status: 'ok', data: { ok: true, data: null } })
+    await waitFor(() => expect(automaticButton).toBeEnabled())
+  })
+
   it('admits only one native backup operation before disabled state renders', async () => {
     const creation = deferred()
     api.backupCreate.mockReturnValue(creation.promise)
@@ -1214,13 +1298,16 @@ describe('SettingsView', () => {
 
     const createButton = await screen.findByRole('button', { name: /创建加密备份/ })
     const prepareButton = screen.getByRole('button', { name: /选择备份并准备恢复/ })
+    const automaticButton = screen.getByRole('button', { name: '选择目录并启用' })
     createButton.click()
     createButton.click()
     prepareButton.click()
+    automaticButton.click()
     await waitFor(() => expect(api.backupCreate).toHaveBeenCalled())
 
     expect(api.backupCreate).toHaveBeenCalledOnce()
     expect(api.backupPrepareRestore).not.toHaveBeenCalled()
+    expect(api.backupAutomaticConfigure).not.toHaveBeenCalled()
 
     creation.resolve({ status: 'ok', data: { ok: true, data: null } })
     await waitFor(() => expect(createButton).toBeEnabled())

@@ -2,8 +2,8 @@
 import { ArchiveRestore, ShieldCheck, X } from '@lucide/vue'
 import { nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import type { WindowsUpdateCheckReport } from '../../shared/api/bindings'
-import { acquireDialogDocumentBoundary } from '../dialog-document-boundary'
-import { trapDialogFocus } from '../dialog-focus'
+import { acquireDialogDocumentBoundary } from '@/shared/ui/dialog-document-boundary'
+import { trapDialogFocus } from '@/shared/ui/dialog-focus'
 
 const props = defineProps<{
   report: WindowsUpdateCheckReport

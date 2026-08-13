@@ -3,16 +3,17 @@ import { isTauri } from '@tauri-apps/api/core'
 import { ChartNoAxesColumnIncreasing, Clock3, FileArchive, Flame, RotateCcw } from '@lucide/vue'
 import { computed, inject, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
-import ActionConfirmDialog from '../components/ActionConfirmDialog.vue'
-import { useActionConfirmation } from '../composables/useActionConfirmation'
+import ActionConfirmDialog from '@/shared/ui/components/ActionConfirmDialog.vue'
+import { useActionConfirmation } from '@/shared/ui/composables/useActionConfirmation'
 import { useDurableActionGuard } from '../composables/useDurableActionGuard'
-import ExportCandidatePicker from '../../modules/export/components/ExportCandidatePicker.vue'
-import ExportSnapshotHistory from '../../modules/export/components/ExportSnapshotHistory.vue'
-import ExportWorkflowGuide from '../../modules/export/components/ExportWorkflowGuide.vue'
-import DueForecastPanel from '../../modules/report/components/DueForecastPanel.vue'
-import WeakAreaPanel from '../../modules/report/components/WeakAreaPanel.vue'
-import { useExportCandidateSelection } from '../../modules/export/composables/useExportCandidateSelection'
-import { useExportSnapshotMutations } from '../../modules/export/composables/useExportSnapshotMutations'
+import {
+  ExportCandidatePicker,
+  ExportSnapshotHistory,
+  ExportWorkflowGuide,
+  useExportCandidateSelection,
+  useExportSnapshotMutations,
+} from '@/modules/export'
+import { DueForecastPanel, WeakAreaPanel } from '@/modules/report'
 import { commands, type DeletedExportSnapshotSummary, type ExportCandidate, type ExportCandidateSource, type ExportLayout, type ExportSnapshotSummary, type ReportSummary } from '../../shared/api/bindings'
 import { normalizeAppResult } from '../../shared/api/normalize-result'
 import { syncControllerKey } from '../sync-controller'
