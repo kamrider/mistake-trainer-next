@@ -430,24 +430,28 @@ async function exportDiagnostics() {
 }
 
 async function createBackup() {
+  if (automaticBackupBusy.value) return
   errorMessage.value = ''
   await runCreateBackup()
   if (errorMessage.value === backupNavigationBusyMessage) errorMessage.value = ''
 }
 
 async function createPortableBackup() {
+  if (automaticBackupBusy.value) return
   errorMessage.value = ''
   await runCreatePortableBackup()
   if (errorMessage.value === backupNavigationBusyMessage) errorMessage.value = ''
 }
 
 async function prepareRestore() {
+  if (automaticBackupBusy.value) return
   errorMessage.value = ''
   await runPrepareRestore()
   if (errorMessage.value === backupNavigationBusyMessage) errorMessage.value = ''
 }
 
 async function preparePortableRestore(recoveryKey: string) {
+  if (automaticBackupBusy.value) return
   errorMessage.value = ''
   await runPreparePortableRestore(recoveryKey)
   if (errorMessage.value === backupNavigationBusyMessage) errorMessage.value = ''
@@ -464,7 +468,7 @@ async function loadAutomaticBackupStatus() {
 }
 
 async function configureAutomaticBackup(intervalDays: number, retentionCount: number) {
-  if (automaticBackupBusy.value) return
+  if (automaticBackupBusy.value || backupBusy.value) return
   automaticBackupBusy.value = true
   clearBackupMessage()
   try {
@@ -483,7 +487,7 @@ async function configureAutomaticBackup(intervalDays: number, retentionCount: nu
 }
 
 async function disableAutomaticBackup() {
-  if (automaticBackupBusy.value) return
+  if (automaticBackupBusy.value || backupBusy.value) return
   automaticBackupBusy.value = true
   clearBackupMessage()
   try {
@@ -500,7 +504,7 @@ async function disableAutomaticBackup() {
 }
 
 function openRestoreDialog() {
-  if (backupBusy.value || !restoreCandidate.value) return
+  if (automaticBackupBusy.value || backupBusy.value || !restoreCandidate.value) return
   restoreDialogOpen.value = true
 }
 

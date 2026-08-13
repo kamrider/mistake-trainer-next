@@ -197,6 +197,7 @@ fn write_policy(
             }
         }
         replace_file_atomically(&temporary, &target)?;
+        sync_parent_directory(control_root)?;
         Ok(())
     })();
     if result.is_err() && temporary.parent() == Some(control_root) {
@@ -239,6 +240,16 @@ fn replace_file_atomically(source: &Path, target: &Path) -> std::io::Result<()> 
 #[cfg(not(windows))]
 fn replace_file_atomically(source: &Path, target: &Path) -> std::io::Result<()> {
     fs::rename(source, target)
+}
+
+#[cfg(unix)]
+fn sync_parent_directory(path: &Path) -> std::io::Result<()> {
+    fs::File::open(path)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_parent_directory(_path: &Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 fn prune_owned_packages(destination: &Path, retention_count: u32) -> Result<(), BackupError> {
