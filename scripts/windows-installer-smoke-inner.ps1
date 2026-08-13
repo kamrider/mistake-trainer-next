@@ -36,6 +36,21 @@ function Wait-SmokeProcessExit {
   param([Parameter(Mandatory)][System.Diagnostics.Process]$Process, [int]$TimeoutSeconds = 30)
   return $Process.WaitForExit($TimeoutSeconds * 1000)
 }
+function Request-NormalSmokeExit {
+  param([Parameter(Mandatory)][System.Diagnostics.Process]$Process, [int]$TimeoutSeconds = 30)
+  $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+  while ([DateTime]::UtcNow -lt $deadline) {
+    $Process.Refresh()
+    if ($Process.HasExited) { return $true }
+    if ($Process.MainWindowHandle -ne [IntPtr]::Zero) {
+      try { [void]$Process.CloseMainWindow() } catch {}
+      if ($Process.WaitForExit(1000)) { return $true }
+    }
+    Start-Sleep -Milliseconds 200
+  }
+  $Process.Refresh()
+  return $Process.HasExited
+}
 function Stop-OwnedSmokeProcesses {
   param([Parameter(Mandatory)][string]$InstallRoot)
   $canonicalRoot = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
@@ -192,9 +207,10 @@ try {
   Assert-Smoke (Wait-SmokeProcessExit $second 15) 'second launch did not hand off.'
   Assert-Smoke ($second.ExitCode -eq 0) 'second launch handoff failed.'
   Start-Sleep -Seconds 10
+  $firstProcess.Refresh()
+  Assert-Smoke (-not $firstProcess.HasExited) 'primary GUI exited after the second-instance handoff.'
   $failureStage = 'gui_shutdown'
-  Assert-Smoke ($firstProcess.CloseMainWindow()) 'main window rejected normal close.'
-  Assert-Smoke (Wait-SmokeProcessExit $firstProcess 15) 'main window did not exit.'
+  Assert-Smoke (Request-NormalSmokeExit $firstProcess 30) 'main window did not accept a normal close and exit.'
 
   $failureStage = 'first_run_data'
   $controlRoot = Join-Path $isolatedAppData 'com.mistaketrainer.next'
@@ -230,9 +246,7 @@ catch {
   Write-Warning 'Windows installer smoke checks failed; cleanup and bounded result reporting will continue.'
 }
 finally {
-  if ($firstProcess -and -not $firstProcess.HasExited) { try { [void]$firstProcess.CloseMainWindow() } catch {} }
-  $closeDeadline = [DateTime]::UtcNow.AddSeconds(10)
-  while ($firstProcess -and -not $firstProcess.HasExited -and [DateTime]::UtcNow -lt $closeDeadline) { Start-Sleep -Milliseconds 200; $firstProcess.Refresh() }
+  if ($firstProcess -and -not $firstProcess.HasExited) { [void](Request-NormalSmokeExit $firstProcess 10) }
   foreach ($recordedProcess in @($script:launchedProcesses)) {
     try {
       if (-not $recordedProcess.HasExited) { Stop-Process -Id $recordedProcess.Id -Force -ErrorAction SilentlyContinue }

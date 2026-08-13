@@ -11,6 +11,7 @@ describe('Windows installer smoke isolation', () => {
     expect(inner).toContain("$env:CI -ne 'true'")
     expect(inner).toContain("$env:MISTAKE_TRAINER_EPHEMERAL_WINDOWS -ne '1'")
     expect(inner).toContain('function Start-SmokeProcess')
+    expect(inner).toContain('function Request-NormalSmokeExit')
     expect(inner).toContain('$script:launchedProcesses.Add($process)')
     expect(inner).not.toContain('Start-ProcessInJob')
     expect(inner).not.toContain('New-KillOnCloseJob')
@@ -77,6 +78,8 @@ describe('Windows installer smoke isolation', () => {
       inner.indexOf("$failureStage = 'product_check_ready'"),
     )
     expect(inner).toContain('Wait-MainWindow $firstProcess 60')
+    expect(inner).toContain('Request-NormalSmokeExit $firstProcess 30')
+    expect(inner).toContain("'primary GUI exited after the second-instance handoff.'")
     expect(inner).toContain('$firstProcess = Start-Process -FilePath $applicationPath -PassThru')
     expect(inner).toContain('$script:launchedProcesses.Add($firstProcess)')
     expect(inner).toContain('$second = Start-Process -FilePath $applicationPath -PassThru')
