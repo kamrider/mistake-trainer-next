@@ -36,6 +36,22 @@ function Wait-SmokeProcessExit {
   param([Parameter(Mandatory)][System.Diagnostics.Process]$Process, [int]$TimeoutSeconds = 30)
   return $Process.WaitForExit($TimeoutSeconds * 1000)
 }
+function Stop-OwnedSmokeProcesses {
+  param([Parameter(Mandatory)][string]$InstallRoot)
+  $canonicalRoot = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
+  $prefix = "$canonicalRoot\"
+  foreach ($process in @(Get-Process -ErrorAction Stop)) {
+    try { $canonicalPath = [IO.Path]::GetFullPath([string]$process.Path) } catch { continue }
+    if (-not $canonicalPath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { continue }
+    Stop-Process -InputObject $process -Force -ErrorAction SilentlyContinue
+  }
+  $deadline = [DateTime]::UtcNow.AddSeconds(10)
+  while ([DateTime]::UtcNow -lt $deadline) {
+    if (-not (Test-OwnedSmokeProcessPresent -Root $canonicalRoot)) { return $true }
+    Start-Sleep -Milliseconds 200
+  }
+  return -not (Test-OwnedSmokeProcessPresent -Root $canonicalRoot)
+}
 function Get-SmokeTreeFingerprint([string]$Root) {
   if (-not (Test-Path -LiteralPath $Root -PathType Container)) { return '' }
   $entries = @(Get-ChildItem -LiteralPath $Root -Recurse -File -Force | Sort-Object FullName | ForEach-Object {
@@ -80,6 +96,7 @@ $status = 'failed'
 $checksPassed = $false
 $installer = $null
 $uninstallerPath = $null
+$installRoot = $null
 $sentinelPath = $null
 $sentinelHash = $null
 $libraryPath = $null
@@ -220,6 +237,9 @@ finally {
     try {
       if (-not $recordedProcess.HasExited) { Stop-Process -Id $recordedProcess.Id -Force -ErrorAction SilentlyContinue }
     } catch {}
+  }
+  if ($installRoot -and -not (Stop-OwnedSmokeProcesses -InstallRoot $installRoot)) {
+    $failureCodes += 'owned_process_cleanup_failed'
   }
   if ($uninstallerPath -and (Test-Path -LiteralPath $uninstallerPath -PathType Leaf)) {
     try {

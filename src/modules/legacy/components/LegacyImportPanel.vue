@@ -2,7 +2,7 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { ArchiveRestore, Clock3, FolderSearch, History, RotateCcw, ShieldCheck, TriangleAlert } from '@lucide/vue'
 import { computed, inject, nextTick, onMounted, ref } from 'vue'
-import { syncControllerKey } from '../../../app/sync-controller'
+import { syncControllerKey } from '@/shared/contracts/sync-controller'
 import {
   commands,
   type AppResult,

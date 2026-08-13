@@ -2,6 +2,8 @@ use std::fmt::Write as _;
 
 use uuid::Uuid;
 
+use crate::application::library_inventory::CredentialEnvelopeState;
+
 use super::RuntimeError;
 
 const DATABASE_KEY: &str = "database-key";
@@ -16,13 +18,6 @@ const LOCAL_CREDENTIAL_NAMES: [&str; 5] = [
     DEVICE_ID,
     LIBRARY_LOCK_STATE,
 ];
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CredentialEnvelopeState {
-    Absent,
-    Complete,
-    Partial,
-}
 
 pub trait SecretStore: Send + Sync {
     fn get(&self, name: &str) -> Result<Option<String>, String>;

@@ -86,15 +86,18 @@ describe('sync pull asset staging ownership', () => {
     }
     for (const token of [
       'pub async fn pull_until_current<T: CloudPullTransport>',
+      'application::ports::assets::{AssetBlobRemover, AssetEncryptor}',
+      'domain::assets::plaintext_sha256',
       '.download_object(access_token, &asset.storage_object)',
       'validate_download(asset, &downloaded)?',
-      'encrypt_asset(&downloaded.bytes, asset_key)',
+      '.encrypt(&downloaded.bytes)',
       'stage_encrypted_asset(',
       'cleanup_page(&staged_assets, false)',
       'cleanup_page(&staged_assets, true)',
     ]) {
       expect(facade).toContain(token)
     }
+    expect(facade).not.toContain('infrastructure::assets')
     for (const token of [
       'staged_assets: &mut [StagedAsset]',
       'staged: Option<&mut StagedAsset>',

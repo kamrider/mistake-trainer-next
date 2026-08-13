@@ -9,13 +9,14 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use crate::application::ports::assets::AssetEncryptor;
+
 use super::{
     LegacyAssetPlan, LegacyImportError, LegacyImportPhase, LegacyImportPlan, LegacyImportProgress,
     LegacyImportReceipt, LegacyRating, build_legacy_import_plan,
     legacy_scan::{MAX_ASSET_BYTES, read_bounded, take_chars},
     legacy_tree_fingerprint,
 };
-use crate::infrastructure::assets::encrypt_asset;
 
 struct StagedLegacyAsset {
     id: String,
@@ -31,7 +32,7 @@ struct StagedLegacyAsset {
 pub fn import_legacy_plan(
     connection: &mut Connection,
     blob_root: &Path,
-    key: &[u8; 32],
+    asset_encryptor: &dyn AssetEncryptor,
     account_id: &str,
     candidate_id: &str,
     plan: LegacyImportPlan,
@@ -121,7 +122,10 @@ pub fn import_legacy_plan(
             let staged_path = staging_root.join(format!("{id}.tmp"));
             let final_path = blob_root.join(&relative);
             fs::create_dir_all(&staging_root)?;
-            fs::write(&staged_path, encrypt_asset(&bytes, key)?)?;
+            let encrypted = asset_encryptor
+                .encrypt(&bytes)
+                .map_err(|_| LegacyImportError::Crypto)?;
+            fs::write(&staged_path, encrypted)?;
             staged_assets.push(StagedLegacyAsset {
                 id: id.clone(),
                 plaintext_sha256: hash.clone(),

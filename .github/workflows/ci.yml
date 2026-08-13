@@ -74,6 +74,12 @@ jobs:
       - name: Test signed-release source contract
         shell: powershell
         run: .\scripts\windows-release-source-contract.tests.ps1
+      - name: Test updater artifact contract
+        shell: powershell
+        run: .\scripts\windows-update-contract.test.ps1
+      - name: Test installer smoke cleanup contract
+        shell: powershell
+        run: .\scripts\windows-installer-smoke-cleanup.tests.ps1
       - run: pnpm tauri build
       - name: Smoke test installed GUI and single instance
         shell: powershell

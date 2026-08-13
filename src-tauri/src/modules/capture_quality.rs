@@ -5,7 +5,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use crate::infrastructure::assets::decrypt_asset;
+use crate::application::ports::assets::AssetDecryptor;
 
 use super::capture_inbox::{
     CaptureInboxError, NormalizedCropRect, image_format_for_media_type, query_batch,
@@ -41,7 +41,7 @@ pub struct CaptureQualityReport {
 pub fn check_capture_quality(
     connection: &Connection,
     blob_root: &Path,
-    key: &[u8; 32],
+    decryptor: &dyn AssetDecryptor,
     account_id: &str,
     profile_id: &str,
     batch_id: &str,
@@ -60,7 +60,9 @@ pub fn check_capture_quality(
         .optional()?
         .ok_or(CaptureInboxError::ItemNotFound)?;
     let encrypted = read_encrypted_blob(blob_root, &encrypted_path)?;
-    let plaintext = decrypt_asset(&encrypted, key).map_err(|_| CaptureInboxError::Crypto)?;
+    let plaintext = decryptor
+        .decrypt(&encrypted)
+        .map_err(|_| CaptureInboxError::Crypto)?;
     let image =
         image::load_from_memory_with_format(&plaintext, image_format_for_media_type(&media_type)?)
             .map_err(|_| CaptureInboxError::InvalidImage)?;

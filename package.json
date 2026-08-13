@@ -1,6 +1,6 @@
 {
   "name": "mistake-trainer-next",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.11.0",
@@ -16,6 +16,7 @@
     "build": "pnpm mobile:vendor:check && vue-tsc --noEmit && vite build",
     "bindings:generate": ".\\scripts\\cargo-msvc.cmd run --manifest-path src-tauri\\Cargo.toml --bin mistake-trainer-next -- --export-bindings",
     "bindings:check": "pnpm bindings:generate && git diff --exit-code -- src/shared/api/bindings.ts",
+    "contract:architecture": "vitest run tests/architecture-dependency-direction.test.ts && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/rust-boundary-contract.ps1",
     "contract:rust-boundaries": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/rust-boundary-contract.ps1",
     "preview": "vite preview",
     "typecheck": "vue-tsc --noEmit",

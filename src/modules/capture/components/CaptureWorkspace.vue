@@ -5,7 +5,7 @@ import {
   Sparkles, Trash2, Undo2, UploadCloud,
 } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { useMenuButton } from '../../../app/composables/useMenuButton'
+import { useMenuButton } from '@/shared/ui/composables/useMenuButton'
 import type {
   CaptureBatchDetail, CaptureBatchSummary, CaptureDraftSummary, CaptureItemSummary,
   CaptureLanAddress, CaptureLanPreflight, CaptureLanSession, CaptureLayoutMode,
@@ -14,8 +14,8 @@ import type {
 } from '../../../shared/api/bindings'
 import CaptureRecognitionEntry from '../../ocr/components/CaptureRecognitionEntry.vue'
 import CaptureRecognitionReview from '../../ocr/components/CaptureRecognitionReview.vue'
-import ActionConfirmDialog from '../../../app/components/ActionConfirmDialog.vue'
-import { useActionConfirmation } from '../../../app/composables/useActionConfirmation'
+import ActionConfirmDialog from '@/shared/ui/components/ActionConfirmDialog.vue'
+import { useActionConfirmation } from '@/shared/ui/composables/useActionConfirmation'
 import CaptureLanDialog from './CaptureLanDialog.vue'
 import CaptureLayoutTemplatePanel from './CaptureLayoutTemplatePanel.vue'
 import CaptureThumbnail from './CaptureThumbnail.vue'

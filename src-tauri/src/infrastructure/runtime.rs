@@ -16,8 +16,9 @@ use crate::{
 #[path = "runtime_credentials.rs"]
 mod credentials;
 
+pub use crate::application::library_inventory::CredentialEnvelopeState;
+pub use credentials::LIBRARY_LOCK_STATE;
 pub(crate) use credentials::RestoreCredentials;
-pub use credentials::{CredentialEnvelopeState, LIBRARY_LOCK_STATE};
 pub use credentials::{KeyringSecretStore, SecretStore};
 
 pub fn library_is_locked(secrets: &dyn SecretStore) -> Result<bool, RuntimeError> {

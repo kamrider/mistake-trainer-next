@@ -26,11 +26,13 @@ function harness() {
     stageRole: vi.fn().mockResolvedValue(success(updated)),
     mergeCard: vi.fn().mockResolvedValue(success(updated)),
     deleteDraft: vi.fn().mockResolvedValue(success(updated)),
+    applyPairSuggestions: vi.fn().mockResolvedValue(success(updated)),
   }
   const onDetailChange = vi.fn((value: CaptureBatchDetail) => { current = value })
   const onBusyChange = vi.fn((value: boolean) => { blocked = value })
   const onSaveStateChange = vi.fn()
   const onError = vi.fn()
+  const onNotice = vi.fn()
   const reloadDetail = vi.fn().mockResolvedValue(undefined)
   const controller = useCaptureOrganizerActions({
     desktopAvailable: true,
@@ -40,14 +42,15 @@ function harness() {
     onSaveStateChange,
     onDetailChange,
     onError,
+    onNotice,
     reloadDetail,
     operations,
   })
-  return { controller, operations, onDetailChange, onBusyChange, onSaveStateChange, onError, reloadDetail, setCurrent: (value?: CaptureBatchDetail) => { current = value }, setBlocked: (value: boolean) => { blocked = value } }
+  return { controller, operations, onDetailChange, onBusyChange, onSaveStateChange, onError, onNotice, reloadDetail, setCurrent: (value?: CaptureBatchDetail) => { current = value }, setBlocked: (value: boolean) => { blocked = value } }
 }
 
 describe('useCaptureOrganizerActions', () => {
-  it('builds exact revision-aware inputs for all six organizer actions', async () => {
+  it('builds exact revision-aware inputs for all seven organizer actions', async () => {
     const cases = [
       async () => { const h = harness(); await h.controller.applyLayout('alternating', 2, 1, null); expect(h.operations.applyLayout).toHaveBeenCalledWith({ batchId: 'batch-1', expectedRevision: 7, mode: 'alternating', questionImagesPerDraft: 2, answerImagesPerDraft: 1, splitIndex: null }) },
       async () => { const h = harness(); await h.controller.assignBatchSubject('化学'); expect(h.operations.assignSubject).toHaveBeenCalledWith({ batchId: 'batch-1', expectedRevision: 7, subject: '化学' }) },
@@ -55,8 +58,27 @@ describe('useCaptureOrganizerActions', () => {
       async () => { const h = harness(); await h.controller.stageItemRole('item-1', 'question'); expect(h.operations.stageRole).toHaveBeenCalledWith({ batchId: 'batch-1', expectedRevision: 7, itemId: 'item-1', stagedRole: 'question' }) },
       async () => { const h = harness(); await h.controller.mergeCard(['item-1'], null, '物理'); expect(h.operations.mergeCard).toHaveBeenCalledWith({ batchId: 'batch-1', expectedRevision: 7, targetDraftId: null, itemIds: ['item-1'], newDraftSubject: '物理' }) },
       async () => { const h = harness(); await h.controller.deleteDraft('draft-1'); expect(h.operations.deleteDraft).toHaveBeenCalledWith('batch-1', 7, 'draft-1') },
+      async () => { const h = harness(); await h.controller.applyPairSuggestions(['pair-1']); expect(h.operations.applyPairSuggestions).toHaveBeenCalledWith({ batchId: 'batch-1', expectedRevision: 7, pairIds: ['pair-1'] }) },
     ]
     for (const run of cases) await run()
+  })
+
+  it('owns pair-suggestion success notice and stale-input recovery policy', async () => {
+    const successCase = harness()
+    await successCase.controller.applyPairSuggestions(['pair-1', 'pair-2'])
+    expect(successCase.onNotice).toHaveBeenCalledWith(
+      '已把 2 组题面与答案生成采集草稿；确认科目后再保存到正式题库。',
+    )
+
+    const stale = harness()
+    stale.operations.applyPairSuggestions.mockResolvedValue(
+      failure('capture_input_invalid', 'raw invalid', true, 'diag-invalid'),
+    )
+    await stale.controller.applyPairSuggestions(['pair-1'])
+    expect(stale.onError).toHaveBeenLastCalledWith(
+      '这组题答素材刚刚被移动、改角色或已加入其他题卡，已刷新并保留你的现有整理。',
+    )
+    expect(stale.reloadDetail).toHaveBeenCalledWith('batch-1')
   })
 
   it('owns busy and save-state transitions for persisted organizer changes', async () => {

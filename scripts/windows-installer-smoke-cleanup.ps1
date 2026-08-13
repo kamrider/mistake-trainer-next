@@ -14,6 +14,17 @@ function Convert-OwnedSmokeTimestampToUtc {
   ).UtcDateTime
 }
 
+function Test-OwnedSmokeProcessPresent {
+  param([Parameter(Mandatory)][string]$Root)
+  $canonicalRoot = [IO.Path]::GetFullPath($Root).TrimEnd('\')
+  $prefix = "$canonicalRoot\"
+  foreach ($process in @(Get-Process -ErrorAction Stop)) {
+    try { $canonicalPath = [IO.Path]::GetFullPath([string]$process.Path) } catch { continue }
+    if ($canonicalPath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+  }
+  return $false
+}
+
 function Remove-OwnedStaleSmokeRoot {
   param([Parameter(Mandatory)][string]$RunnerTemp, [DateTime]$NowUtc = [DateTime]::UtcNow)
   $canonicalRunner = (Resolve-Path -LiteralPath $RunnerTemp).Path.TrimEnd('\')
@@ -39,6 +50,7 @@ function Remove-OwnedStaleSmokeRoot {
       try { $ownerAlive = $owner.StartTime.ToUniversalTime() -eq $recordedOwnerStart } catch { $ownerAlive = $true }
     }
     if ($ownerAlive) { continue }
+    if (Test-OwnedSmokeProcessPresent -Root $canonicalCandidate) { continue }
     Remove-Item -LiteralPath $canonicalCandidate -Recurse -Force
   }
 }
@@ -62,6 +74,7 @@ function Remove-OwnedCurrentSmokeRoot {
   if (-not $markerItem -or $markerItem.PSIsContainer -or $markerItem.Length -gt 4096 -or ($markerItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return $false }
   try { $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json } catch { return $false }
   if ($marker.schemaVersion -ne 1 -or $marker.runId -cne $RunId) { return $false }
+  if (Test-OwnedSmokeProcessPresent -Root $canonicalCandidate) { return $false }
 
   Remove-Item -LiteralPath $canonicalCandidate -Recurse -Force
   return $true

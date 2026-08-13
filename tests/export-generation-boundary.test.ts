@@ -76,7 +76,9 @@ describe('export generation boundary', () => {
 
     expect(generator).toContain('pub(super) struct PreparedExport')
     expect(generator).toContain('use docx_rs::')
-    expect(generator).toContain('decrypt_asset')
+    expect(generator).toContain('AssetDecryptor')
+    expect(generator).toContain('.decrypt(&encrypted)')
+    expect(generator).not.toContain('infrastructure::assets')
     expect(facade).not.toContain('docx_rs')
     expect(facade).not.toContain('decrypt_asset')
   })

@@ -2,10 +2,14 @@
 import { isTauri } from '@tauri-apps/api/core'
 import { computed, inject, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
-import ReviewRoom from '@/modules/review/components/ReviewRoom.vue'
-import SchulteFocus from '@/modules/review/components/SchulteFocus.vue'
-import { useReviewClock } from '@/modules/review/composables/useReviewClock'
-import { mapSimpleRating, type FsrsRating, type SimpleRating } from '@/modules/review/domain/rating'
+import {
+  ReviewRoom,
+  SchulteFocus,
+  mapSimpleRating,
+  useReviewClock,
+  type FsrsRating,
+  type SimpleRating,
+} from '@/modules/review'
 import { commands, type ProblemDetail, type ReviewFocusState, type ReviewQueueOverview } from '@/shared/api/bindings'
 import { normalizeAppResult } from '@/shared/api/normalize-result'
 import { useDurableActionGuard } from '@/app/composables/useDurableActionGuard'

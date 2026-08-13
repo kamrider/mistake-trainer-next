@@ -3,6 +3,7 @@ $ErrorActionPreference = 'Stop'
 $root = Join-Path ([IO.Path]::GetTempPath()) "mistake-trainer-cleanup-test-$([guid]::NewGuid().ToString('N'))"
 $outside = Join-Path ([IO.Path]::GetTempPath()) "mistake-trainer-installer-smoke-99999999999999999999999999999999"
 New-Item -ItemType Directory -Path $root, $outside | Out-Null
+$liveFixtureProcess = $null
 
 function New-SmokeFixture {
   param([string]$Name, [string]$RunId, [int]$OwnerPid = 2147483647, [string]$OwnerStartedAtUtc = '2000-01-01T00:00:00.0000000Z', [string]$CreatedAtUtc = '2000-01-01T00:00:00Z', [string]$MarkerRunId = $RunId)
@@ -53,9 +54,34 @@ try {
   if (Remove-OwnedCurrentSmokeRoot -RunnerTemp $root -SmokeRoot $mismatch -RunId $mismatchId) { throw 'Current cleanup accepted a mismatched marker.' }
   if (Remove-OwnedCurrentSmokeRoot -RunnerTemp $root -SmokeRoot $reparse -RunId $reparseId) { throw 'Current cleanup accepted a reparse root.' }
   if (Remove-OwnedCurrentSmokeRoot -RunnerTemp $root -SmokeRoot $outside -RunId '99999999999999999999999999999999') { throw 'Current cleanup accepted a root outside runner temp.' }
+
+  $liveCurrentId = '99999999999999999999999999999998'
+  $liveCurrent = New-SmokeFixture "mistake-trainer-installer-smoke-$liveCurrentId" $liveCurrentId
+  $liveInstallRoot = Join-Path $liveCurrent 'installed'
+  New-Item -ItemType Directory -Path $liveInstallRoot | Out-Null
+  $fixtureExecutable = Join-Path $liveInstallRoot 'owned-sleeper.exe'
+  Copy-Item -LiteralPath (Join-Path $PSHOME 'powershell.exe') -Destination $fixtureExecutable
+  $liveFixtureProcess = Start-Process -FilePath $fixtureExecutable -ArgumentList @('-NoProfile', '-Command', 'Start-Sleep -Seconds 60') -PassThru
+  $liveDeadline = [DateTime]::UtcNow.AddSeconds(5)
+  while (-not (Test-OwnedSmokeProcessPresent -Root $liveCurrent) -and [DateTime]::UtcNow -lt $liveDeadline) {
+    Start-Sleep -Milliseconds 100
+  }
+  if (-not (Test-OwnedSmokeProcessPresent -Root $liveCurrent)) { throw 'Live owned fixture process was not detected.' }
+  Remove-OwnedStaleSmokeRoot -RunnerTemp $root -NowUtc ([DateTime]'2026-01-01T00:00:00Z')
+  if (-not (Test-Path -LiteralPath $liveCurrent)) { throw 'Stale cleanup removed a root with a live owned process.' }
+  if (Remove-OwnedCurrentSmokeRoot -RunnerTemp $root -SmokeRoot $liveCurrent -RunId $liveCurrentId) { throw 'Current cleanup accepted a root with a live owned process.' }
+  if (-not (Test-Path -LiteralPath $liveCurrent)) { throw 'Current cleanup partially removed a root with a live owned process.' }
+  Stop-Process -Id $liveFixtureProcess.Id -Force
+  [void]$liveFixtureProcess.WaitForExit(5000)
+  $liveFixtureProcess = $null
+  if (-not (Remove-OwnedCurrentSmokeRoot -RunnerTemp $root -SmokeRoot $liveCurrent -RunId $liveCurrentId)) { throw 'Current cleanup refused the root after its owned process exited.' }
+  if (Test-Path -LiteralPath $liveCurrent) { throw 'Current cleanup left the root after its owned process exited.' }
   Write-Output 'Owned stale smoke cleanup rejection matrix passed'
 }
 finally {
+  if ($liveFixtureProcess -and -not $liveFixtureProcess.HasExited) {
+    Stop-Process -Id $liveFixtureProcess.Id -Force -ErrorAction SilentlyContinue
+  }
   Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $outside -Recurse -Force -ErrorAction SilentlyContinue
 }

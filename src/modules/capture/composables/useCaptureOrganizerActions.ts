@@ -6,8 +6,9 @@ import type {
   CaptureItemStageRoleInput,
   CaptureLayoutInput,
   CaptureLayoutMode,
+  CapturePairSuggestionsApplyInput,
 } from '../../../shared/api/bindings'
-import type { AppResult } from '../../../shared/api/app-result'
+import type { AppError, AppResult } from '../../../shared/api/app-result'
 
 export type CaptureOrganizerSaveState = 'idle' | 'saving' | 'saved' | 'error'
 
@@ -25,6 +26,7 @@ interface CaptureOrganizerOperations {
   stageRole: (input: CaptureItemStageRoleInput) => Promise<AppResult<CaptureBatchDetail>>
   mergeCard: (input: CaptureCardMergeInput) => Promise<AppResult<CaptureBatchDetail>>
   deleteDraft: (batchId: string, expectedRevision: number, draftId: string) => Promise<AppResult<CaptureBatchDetail>>
+  applyPairSuggestions: (input: CapturePairSuggestionsApplyInput) => Promise<AppResult<CaptureBatchDetail>>
 }
 
 interface CaptureOrganizerOptions {
@@ -35,6 +37,7 @@ interface CaptureOrganizerOptions {
   onSaveStateChange: (state: CaptureOrganizerSaveState) => void
   onDetailChange: (detail: CaptureBatchDetail) => void
   onError: (message: string) => void
+  onNotice: (message: string) => void
   reloadDetail: (batchId: string) => Promise<void>
   operations: CaptureOrganizerOperations
 }
@@ -44,6 +47,9 @@ interface MutationSpec {
   trackSave: boolean
   clearError: boolean
   call: (detail: CaptureBatchDetail) => Promise<AppResult<CaptureBatchDetail>>
+  errorMessage?: (error: AppError) => string
+  reloadOnErrorCodes?: string[]
+  onSuccess?: () => void
 }
 
 export function useCaptureOrganizerActions(options: CaptureOrganizerOptions) {
@@ -68,11 +74,12 @@ export function useCaptureOrganizerActions(options: CaptureOrganizerOptions) {
       if (result.ok) {
         options.onDetailChange(result.data)
         if (spec.trackSave) options.onSaveStateChange('saved')
+        spec.onSuccess?.()
       }
       else {
         if (spec.trackSave) options.onSaveStateChange('error')
-        options.onError(result.error.userMessage)
-        if (result.error.code === 'capture_revision_conflict') {
+        options.onError(spec.errorMessage?.(result.error) ?? result.error.userMessage)
+        if ((spec.reloadOnErrorCodes ?? ['capture_revision_conflict']).includes(result.error.code)) {
           await options.reloadDetail(batchId)
         }
       }
@@ -115,5 +122,22 @@ export function useCaptureOrganizerActions(options: CaptureOrganizerOptions) {
       fallbackMessage: '题卡没有撤销成功，原有图片和分组仍会保留。', trackSave: true, clearError: true,
       call: current => options.operations.deleteDraft(current.batch.id, current.batch.revision, draftId),
     }),
+    applyPairSuggestions: (pairIds: string[]) => pairIds.length ? run({
+      fallbackMessage: '题答匹配没有应用；素材牌库和现有题卡保持不变。',
+      trackSave: true,
+      clearError: true,
+      call: current => options.operations.applyPairSuggestions({
+        batchId: current.batch.id,
+        expectedRevision: current.batch.revision,
+        pairIds,
+      }),
+      errorMessage: error => error.code === 'capture_input_invalid'
+        ? '这组题答素材刚刚被移动、改角色或已加入其他题卡，已刷新并保留你的现有整理。'
+        : error.userMessage,
+      reloadOnErrorCodes: ['capture_revision_conflict', 'capture_input_invalid'],
+      onSuccess: () => options.onNotice(
+        `已把 ${pairIds.length} 组题面与答案生成采集草稿；确认科目后再保存到正式题库。`,
+      ),
+    }) : Promise.resolve(),
   }
 }

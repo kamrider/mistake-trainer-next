@@ -9,7 +9,7 @@ import {
   Settings,
   SquareStack,
 } from '@lucide/vue'
-import ProfileSwitcher from '../modules/profiles/components/ProfileSwitcher.vue'
+import { ProfileSwitcher } from '@/modules/profiles'
 import type { ProfileSummary } from '../shared/api/bindings'
 import type { SyncStatusCopy } from './sync-controller'
 

@@ -2,20 +2,20 @@
 import { isTauri } from '@tauri-apps/api/core'
 import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
-import LibraryWorkspace from '../../modules/library/components/LibraryWorkspace.vue'
-import LibraryBulkMetadataDialog from '../../modules/library/components/LibraryBulkMetadataDialog.vue'
-import ProblemDetailDrawer from '../../modules/library/components/ProblemDetailDrawer.vue'
-import { useLibraryBatchStatus } from '../../modules/library/composables/useLibraryBatchStatus'
-import { useLibraryProblemActions } from '../../modules/library/composables/useLibraryProblemActions'
-import { useLibraryReviewLaunch } from '../../modules/library/composables/useLibraryReviewLaunch'
 import {
   EMPTY_LIBRARY_FILTERS,
+  LibraryBulkMetadataDialog,
+  LibraryWorkspace,
+  ProblemDetailDrawer,
+  useLibraryBatchStatus,
+  useLibraryProblemActions,
+  useLibraryReviewLaunch,
   type LibraryAdvancedFilters,
-} from '../../modules/library/domain/libraryFilters'
+} from '@/modules/library'
 import { commands, type ProblemDetail, type ProblemStatusFilter, type ProblemSummary } from '../../shared/api/bindings'
 import { normalizeAppResult } from '../../shared/api/normalize-result'
 import { useDurableActionGuard } from '../composables/useDurableActionGuard'
-import type { NavigationAttempt } from '../composables/useUnsavedChangesGuard'
+import type { NavigationAttempt } from '@/shared/ui/composables/useUnsavedChangesGuard'
 import { syncControllerKey } from '../sync-controller'
 import { workspaceTransitionGuardKey } from '../workspace-transition-guard'
 

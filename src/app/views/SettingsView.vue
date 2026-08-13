@@ -3,14 +3,13 @@ import { isTauri } from '@tauri-apps/api/core'
 import { CheckCircle2, RotateCcw } from '@lucide/vue'
 import { computed, inject, nextTick, onMounted, ref } from 'vue'
 import { routeLocationKey, routerKey } from 'vue-router'
-import { commands, type AutomaticBackupStatus, type DiagnosticExportReceipt, type LibraryAccessStatus, type ReviewFocusPolicy, type ReviewPreferences, type ReviewPreferencesInput, type SettingsOverview, type StorageLocationStatus, type StorageMigrationReceipt, type SubjectPreferences, type SubjectPreferencesInput, type WindowsCompatibilityStatus, type WindowsUpdateCheckReport, type WindowsUpdateStatus } from '../../shared/api/bindings'
+import { commands, type ReviewFocusPolicy, type ReviewPreferences, type ReviewPreferencesInput, type SettingsOverview, type SubjectPreferences, type SubjectPreferencesInput } from '../../shared/api/bindings'
 import { normalizeAppResult } from '../../shared/api/normalize-result'
 import { backendKindLabel, loadSyncBackendStatus, setSyncBackend } from '../../shared/api/sync-backend'
-import LegacyImportPanel from '../../modules/legacy/components/LegacyImportPanel.vue'
-import OcrCapabilityPanel from '../../modules/ocr/components/OcrCapabilityPanel.vue'
-import { useOcrComponentManagement } from '../../modules/ocr/composables/useOcrComponentManagement'
-import SyncConflictCenter from '../../modules/sync/components/SyncConflictCenter.vue'
-import ActionConfirmDialog from '../components/ActionConfirmDialog.vue'
+import { LegacyImportPanel } from '@/modules/legacy'
+import { OcrCapabilityPanel, useOcrComponentManagement } from '@/modules/ocr'
+import { SyncConflictCenter } from '@/modules/sync'
+import ActionConfirmDialog from '@/shared/ui/components/ActionConfirmDialog.vue'
 import BackupRestoreDialog from '../BackupRestoreDialog.vue'
 import SettingsBackupPanel from '../components/SettingsBackupPanel.vue'
 import SettingsCloudAuthPanel from '../components/SettingsCloudAuthPanel.vue'
@@ -20,7 +19,6 @@ import SettingsReviewPanel from '../components/SettingsReviewPanel.vue'
 import type { SettingsReviewOption } from '../components/SettingsReviewPanel.vue'
 import SettingsSectionNav from '../components/SettingsSectionNav.vue'
 import SettingsStoragePanel from '../components/SettingsStoragePanel.vue'
-import type { SettingsStorageReceiptCopy } from '../components/SettingsStoragePanel.vue'
 import SettingsSubjectPanel from '../components/SettingsSubjectPanel.vue'
 import SettingsSyncBackendPanel from '../components/SettingsSyncBackendPanel.vue'
 import type { SettingsBackendOption } from '../components/SettingsSyncBackendPanel.vue'
@@ -28,7 +26,7 @@ import SettingsUpdatePanel from '../components/SettingsUpdatePanel.vue'
 import LibraryLockDialog from '../LibraryLockDialog.vue'
 import { libraryAccessControllerKey } from '../library-access-controller'
 import { buildSettingsSections } from '../settings-section-catalog'
-import { formatSettingsAuthStatus, formatSettingsBytes, formatSettingsTime } from '../settings-formatters'
+import { formatSettingsAuthStatus, formatSettingsTime } from '../settings-formatters'
 import { syncControllerKey } from '../sync-controller'
 import { workspaceTransitionGuardKey } from '../workspace-transition-guard'
 import StorageMigrationDialog from '../StorageMigrationDialog.vue'
@@ -36,64 +34,87 @@ import { useQueuedPreferenceSave } from '../composables/useQueuedPreferenceSave'
 import { useSettingsBackendSelection } from '../composables/useSettingsBackendSelection'
 import { useSettingsBackupOperations } from '../composables/useSettingsBackupOperations'
 import { useSettingsCloudSession } from '../composables/useSettingsCloudSession'
+import { useSettingsDiagnosticsExport } from '../composables/useSettingsDiagnosticsExport'
 import { useSettingsPageLoad } from '../composables/useSettingsPageLoad'
+import { useSettingsStorageLifecycle } from '../composables/useSettingsStorageLifecycle'
 import { useSettingsSyncOperations } from '../composables/useSettingsSyncOperations'
+import { useSettingsWindowsUpdate } from '../composables/useSettingsWindowsUpdate'
 import { useSubjectPreferenceDraft } from '../composables/useSubjectPreferenceDraft'
-import { useUnsavedChangesGuard } from '../composables/useUnsavedChangesGuard'
+import { useUnsavedChangesGuard } from '@/shared/ui/composables/useUnsavedChangesGuard'
 
 const overview = ref<SettingsOverview>()
 const errorMessage = ref('')
-const restoreDialogOpen = ref(false)
 const backupPanel = ref<{ focusRestoreAction: () => void }>()
 const {
   phase: backupPhase,
-  busy: backupBusy,
+  navigationBusy: backupNavigationBusy,
+  automaticBusy: automaticBackupBusy,
+  automaticStatus: automaticBackupStatus,
   created: createdBackup,
   portableReceipt,
   candidate: restoreCandidate,
+  restoreDialogOpen,
   message: backupMessage,
-  clearMessage: clearBackupMessage,
-  createBackup: runCreateBackup,
-  createPortableBackup: runCreatePortableBackup,
+  createBackup,
+  createPortableBackup,
   clearPortableReceipt,
-  prepareRestore: runPrepareRestore,
-  preparePortableRestore: runPreparePortableRestore,
-  restoreBackup: runRestoreBackup,
+  prepareRestore,
+  preparePortableRestore,
+  loadAutomaticStatus: loadAutomaticBackupStatus,
+  configureAutomaticBackup,
+  disableAutomaticBackup,
+  openRestoreDialog,
+  closeRestoreDialog,
+  confirmRestore,
 } = useSettingsBackupOperations({
-  create: async () => {
-    const invocation = await commands.backupCreate()
-    if (invocation.status === 'error') throw new Error('backup command rejected')
-    return normalizeAppResult(invocation.data)
+  operations: {
+    create: async () => {
+      const invocation = await commands.backupCreate()
+      if (invocation.status === 'error') throw new Error('backup command rejected')
+      return normalizeAppResult(invocation.data)
+    },
+    createPortable: async () => {
+      const invocation = await commands.backupCreatePortable()
+      if (invocation.status === 'error') throw new Error('portable backup command rejected')
+      return normalizeAppResult(invocation.data)
+    },
+    prepareRestore: async () => {
+      const invocation = await commands.backupPrepareRestore()
+      if (invocation.status === 'error') throw new Error('backup command rejected')
+      return normalizeAppResult(invocation.data)
+    },
+    preparePortableRestore: async (recoveryKey) => {
+      const invocation = await commands.backupPreparePortableRestore(recoveryKey)
+      if (invocation.status === 'error') throw new Error('portable restore command rejected')
+      return normalizeAppResult(invocation.data)
+    },
+    restore: async (candidateId) => {
+      const invocation = await commands.backupRestore(candidateId)
+      if (invocation.status === 'error') throw new Error('restore command rejected')
+      return normalizeAppResult(invocation.data)
+    },
   },
-  createPortable: async () => {
-    const invocation = await commands.backupCreatePortable()
-    if (invocation.status === 'error') throw new Error('portable backup command rejected')
-    return normalizeAppResult(invocation.data)
+  automatic: {
+    status: async () => normalizeAppResult(await commands.backupAutomaticStatus()),
+    configure: async (intervalDays, retentionCount) => {
+      const invocation = await commands.backupAutomaticConfigure(intervalDays, retentionCount)
+      if (invocation.status === 'error') throw new Error('automatic backup command rejected')
+      return normalizeAppResult(invocation.data)
+    },
+    disable: async () => normalizeAppResult(await commands.backupAutomaticDisable()),
   },
-  prepareRestore: async () => {
-    const invocation = await commands.backupPrepareRestore()
-    if (invocation.status === 'error') throw new Error('backup command rejected')
-    return normalizeAppResult(invocation.data)
+  onOperationStart: () => {
+    errorMessage.value = ''
   },
-  preparePortableRestore: async (recoveryKey) => {
-    const invocation = await commands.backupPreparePortableRestore(recoveryKey)
-    if (invocation.status === 'error') throw new Error('portable restore command rejected')
-    return normalizeAppResult(invocation.data)
-  },
-  restore: async (candidateId) => {
-    const invocation = await commands.backupRestore(candidateId)
-    if (invocation.status === 'error') throw new Error('restore command rejected')
-    return normalizeAppResult(invocation.data)
+  restoreFocus: async () => {
+    await nextTick()
+    backupPanel.value?.focusRestoreAction()
   },
 })
 const creatingBackup = computed(() => backupPhase.value === 'creating')
 const creatingPortableBackup = computed(() => backupPhase.value === 'creating_portable')
 const preparingRestore = computed(() => backupPhase.value === 'preparing')
 const restoring = computed(() => backupPhase.value === 'restoring')
-const automaticBackupStatus = ref<AutomaticBackupStatus>()
-const automaticBackupBusy = ref(false)
-const deviceAccessStatus = ref<LibraryAccessStatus>()
-const deviceAccessError = ref('')
 const deviceOverviewPanel = ref<{ focusLockAction: () => void }>()
 const cloudAuthPanel = ref<{ focusSignOutAction: () => void }>()
 const libraryAccessController = inject(libraryAccessControllerKey, undefined)
@@ -139,9 +160,15 @@ const cloudSession = useSettingsCloudSession({
       return normalizeAppResult(invocation.data)
     },
     lockLibrary: async () => normalizeAppResult(await commands.libraryLock()),
+    loadDeviceAccess: async () => normalizeAppResult(await commands.libraryAccessStatus()),
   },
   onConnected: () => globalSyncController?.run('manual'),
   onRestarting: () => libraryAccessController?.enterRestarting(),
+  restoreLockFocus: async (mode) => {
+    await nextTick()
+    if (mode === 'sign-out') cloudAuthPanel.value?.focusSignOutAction()
+    else deviceOverviewPanel.value?.focusLockAction()
+  },
 })
 const {
   auth: cloudAuth,
@@ -154,11 +181,14 @@ const {
   lockDialogMode,
   lockingLibrary,
   lockErrorMessage,
+  deviceAccessStatus,
+  deviceAccessError,
   restoreSession: restoreAuthSession,
   submit: signIn,
   openLibraryLock,
-  closeLibraryLock: closeCloudLibraryLock,
+  closeLibraryLock,
   confirmLibraryLock,
+  loadDeviceAccessStatus,
 } = cloudSession
 const inboxReturnBatchId = computed(() => {
   if (currentRoute?.query.returnTo !== 'inbox') return ''
@@ -234,9 +264,9 @@ const {
   cancel: cancelPreferenceLeave,
 } = useUnsavedChangesGuard({
   dirty: () => subjectPreferencesDirty.value || reviewPreferencesDirty.value,
-  busy: () => savingSubjects.value || savingReviewPreferences.value || backupBusy.value,
+  busy: () => savingSubjects.value || savingReviewPreferences.value || backupNavigationBusy.value,
   onBusy: () => {
-    errorMessage.value = backupBusy.value
+    errorMessage.value = backupNavigationBusy.value
       ? backupNavigationBusyMessage
       : preferenceNavigationBusyMessage
   },
@@ -260,24 +290,99 @@ const {
     tone: 'danger',
   },
 })
-const storageStatus = ref<StorageLocationStatus>()
-const storageStatusError = ref('')
-const storageMigrationReceipt = ref<StorageMigrationReceipt>()
-const storageDialogOpen = ref(false)
-const storageMigrating = ref(false)
-const storageMigrationError = ref('')
 const storagePanel = ref<{ focusMigrationAction: () => void }>()
-const diagnosticsReceipt = ref<DiagnosticExportReceipt>()
-const exportingDiagnostics = ref(false)
-const diagnosticsMessage = ref('')
+const {
+  status: storageStatus,
+  statusMessage: storageStatusError,
+  receiptCopy: storageReceiptCopy,
+  dialogOpen: storageDialogOpen,
+  busy: storageMigrating,
+  migrationMessage: storageMigrationError,
+  loadStatus: loadStorageStatus,
+  loadReceipt: loadStorageMigrationReceipt,
+  showBrowserPreview: showStorageBrowserPreview,
+  openMigration: openStorageMigration,
+  closeMigration: closeStorageMigration,
+  confirmMigration: confirmStorageMigration,
+} = useSettingsStorageLifecycle({
+  operations: {
+    status: async () => {
+      const invocation = await commands.storageStatus()
+      if (invocation.status === 'error') throw new Error('storage status command rejected')
+      return normalizeAppResult(invocation.data)
+    },
+    receipt: async () => normalizeAppResult(await commands.storageMigrationReceipt()),
+    migrate: async () => {
+      const invocation = await commands.storageMigrateSelect()
+      if (invocation.status === 'error') throw new Error('storage migration command rejected')
+      return normalizeAppResult(invocation.data)
+    },
+  },
+  enterRestarting: () => libraryAccessController?.enterRestarting(),
+  restoreMigrationFocus: async () => {
+    await nextTick()
+    storagePanel.value?.focusMigrationAction()
+  },
+})
 const diagnosticsPanel = ref<{ focusPrimaryAction: () => void }>()
-const windowsCompatibility = ref<WindowsCompatibilityStatus>()
-const windowsUpdateStatus = ref<WindowsUpdateStatus>()
-const windowsUpdateReport = ref<WindowsUpdateCheckReport>()
-const checkingWindowsUpdate = ref(false)
-const installingWindowsUpdate = ref(false)
-const windowsUpdateMessage = ref('')
+const {
+  receipt: diagnosticsReceipt,
+  busy: exportingDiagnostics,
+  message: diagnosticsMessage,
+  exportDiagnostics,
+} = useSettingsDiagnosticsExport({
+  available: isTauri(),
+  exportReport: async () => {
+    const invocation = await commands.diagnosticsExport()
+    if (invocation.status === 'error') throw new Error('diagnostics command rejected')
+    return normalizeAppResult(invocation.data)
+  },
+  restoreFocus: async () => {
+    await nextTick()
+    diagnosticsPanel.value?.focusPrimaryAction()
+  },
+})
 const windowsUpdatePanel = ref<{ focusPrimaryAction: () => void }>()
+const {
+  compatibility: windowsCompatibility,
+  status: windowsUpdateStatus,
+  report: windowsUpdateReport,
+  checking: checkingWindowsUpdate,
+  installing: installingWindowsUpdate,
+  message: windowsUpdateMessage,
+  publicationLabel: windowsUpdatePublicationLabel,
+  loadCompatibility: loadWindowsCompatibility,
+  loadStatus: loadWindowsUpdateStatus,
+  check: checkWindowsUpdate,
+  install: installWindowsUpdate,
+} = useSettingsWindowsUpdate({
+  operations: {
+    compatibility: async () => {
+      const invocation = await commands.compatibilityStatus()
+      if (invocation.status === 'error') throw new Error('compatibility command rejected')
+      return normalizeAppResult(invocation.data)
+    },
+    status: async () => {
+      const invocation = await commands.windowsUpdateStatus()
+      if (invocation.status === 'error') throw new Error('update status command rejected')
+      return normalizeAppResult(invocation.data)
+    },
+    check: async () => {
+      const invocation = await commands.windowsUpdateCheck()
+      if (invocation.status === 'error') throw new Error('update command rejected')
+      return normalizeAppResult(invocation.data)
+    },
+    install: async expectedVersion => {
+      const invocation = await commands.windowsUpdateInstall(expectedVersion)
+      if (invocation.status === 'error') throw new Error('update install command rejected')
+      return normalizeAppResult(invocation.data)
+    },
+  },
+  restoreFocus: async () => {
+    await nextTick()
+    windowsUpdatePanel.value?.focusPrimaryAction()
+  },
+})
 const {
   capability: ocrCapability,
   busy: ocrBusy,
@@ -372,240 +477,6 @@ async function saveReviewPreferences() {
   }
 }
 
-const storageReceiptCopy = computed<SettingsStorageReceiptCopy | undefined>(() => {
-  const receipt = storageMigrationReceipt.value
-  if (!receipt) return undefined
-  const summary = `${receipt.destinationLabel} · ${receipt.copiedAssetCount} 个加密资源 · ${formatSettingsBytes(receipt.copiedBytes)}`
-  if (receipt.outcome === 'moved') {
-    return {
-      kind: 'success',
-      title: '资料库已安全迁移',
-      detail: `${summary}。新位置已经过解密与完整性校验。`,
-    }
-  }
-  if (receipt.outcome === 'cleanup_required') {
-    return {
-      kind: 'warning',
-      title: '新位置已启用，原副本需手动清理',
-      detail: `${summary}。资料库可正常使用，但原位置的旧密文副本未能自动删除。`,
-    }
-  }
-  if (receipt.outcome === 'rolled_back') {
-    return {
-      kind: 'warning',
-      title: '迁移未生效，已自动回到原位置',
-      detail: '目标副本没有通过最终启动校验；原资料库保持完整，请更换位置后重试。',
-    }
-  }
-  return {
-    kind: 'warning',
-    title: '迁移等待安全重启',
-    detail: `${summary}。应用重启后会做最后一次解密校验，再决定提交或回滚。`,
-  }
-})
-
-async function exportDiagnostics() {
-  if (exportingDiagnostics.value || !isTauri()) return
-  exportingDiagnostics.value = true
-  diagnosticsMessage.value = ''
-  diagnosticsReceipt.value = undefined
-  try {
-    const invocation = await commands.diagnosticsExport()
-    if (invocation.status === 'error') throw new Error('diagnostics command rejected')
-    const result = normalizeAppResult(invocation.data)
-    if (!result.ok) {
-      diagnosticsMessage.value = result.error.userMessage
-      return
-    }
-    if (result.data) diagnosticsReceipt.value = result.data
-  }
-  catch {
-    diagnosticsMessage.value = '诊断报告没有生成，现有资料不会受到影响；请检查磁盘空间和保存位置后重试。'
-  }
-  finally {
-    exportingDiagnostics.value = false
-    await nextTick()
-    diagnosticsPanel.value?.focusPrimaryAction()
-  }
-}
-
-async function createBackup() {
-  if (automaticBackupBusy.value) return
-  errorMessage.value = ''
-  await runCreateBackup()
-  if (errorMessage.value === backupNavigationBusyMessage) errorMessage.value = ''
-}
-
-async function createPortableBackup() {
-  if (automaticBackupBusy.value) return
-  errorMessage.value = ''
-  await runCreatePortableBackup()
-  if (errorMessage.value === backupNavigationBusyMessage) errorMessage.value = ''
-}
-
-async function prepareRestore() {
-  if (automaticBackupBusy.value) return
-  errorMessage.value = ''
-  await runPrepareRestore()
-  if (errorMessage.value === backupNavigationBusyMessage) errorMessage.value = ''
-}
-
-async function preparePortableRestore(recoveryKey: string) {
-  if (automaticBackupBusy.value) return
-  errorMessage.value = ''
-  await runPreparePortableRestore(recoveryKey)
-  if (errorMessage.value === backupNavigationBusyMessage) errorMessage.value = ''
-}
-
-async function loadAutomaticBackupStatus() {
-  try {
-    const result = normalizeAppResult(await commands.backupAutomaticStatus())
-    if (result.ok) automaticBackupStatus.value = result.data
-  }
-  catch {
-    // Automatic backup is optional; other settings remain available.
-  }
-}
-
-async function configureAutomaticBackup(intervalDays: number, retentionCount: number) {
-  if (automaticBackupBusy.value || backupBusy.value) return
-  automaticBackupBusy.value = true
-  clearBackupMessage()
-  try {
-    const invocation = await commands.backupAutomaticConfigure(intervalDays, retentionCount)
-    if (invocation.status === 'error') throw new Error('automatic backup command rejected')
-    const result = normalizeAppResult(invocation.data)
-    if (!result.ok) backupMessage.value = result.error.userMessage
-    else if (result.data) automaticBackupStatus.value = result.data
-  }
-  catch {
-    backupMessage.value = '自动备份设置没有更新；现有备份和资料库保持不变。'
-  }
-  finally {
-    automaticBackupBusy.value = false
-  }
-}
-
-async function disableAutomaticBackup() {
-  if (automaticBackupBusy.value || backupBusy.value) return
-  automaticBackupBusy.value = true
-  clearBackupMessage()
-  try {
-    const result = normalizeAppResult(await commands.backupAutomaticDisable())
-    if (!result.ok) backupMessage.value = result.error.userMessage
-    else automaticBackupStatus.value = result.data
-  }
-  catch {
-    backupMessage.value = '自动备份没有停用；请稍后重试。'
-  }
-  finally {
-    automaticBackupBusy.value = false
-  }
-}
-
-function openRestoreDialog() {
-  if (automaticBackupBusy.value || backupBusy.value || !restoreCandidate.value) return
-  restoreDialogOpen.value = true
-}
-
-async function confirmRestore() {
-  errorMessage.value = ''
-  const started = await runRestoreBackup()
-  if (errorMessage.value === backupNavigationBusyMessage) errorMessage.value = ''
-  if (!started) await closeRestoreDialog()
-}
-
-async function closeRestoreDialog() {
-  if (backupBusy.value) return
-  restoreDialogOpen.value = false
-  await nextTick()
-  backupPanel.value?.focusRestoreAction()
-}
-
-async function loadStorageStatus() {
-  storageStatusError.value = ''
-  try {
-    const invocation = await commands.storageStatus()
-    if (invocation.status === 'error') throw new Error('storage status command rejected')
-    const result = normalizeAppResult(invocation.data)
-    if (result.ok) storageStatus.value = result.data
-    else {
-      storageStatus.value = undefined
-      storageStatusError.value = result.error.userMessage
-    }
-  }
-  catch {
-    storageStatus.value = undefined
-    storageStatusError.value = '资料库容量暂时无法读取；迁移入口不会使用猜测数据。'
-  }
-}
-
-async function loadStorageMigrationReceipt() {
-  try {
-    const result = normalizeAppResult(await commands.storageMigrationReceipt())
-    if (result.ok && result.data) storageMigrationReceipt.value = result.data
-  }
-  catch {
-    // The receipt is supplementary and must not hide otherwise usable settings.
-  }
-}
-
-async function loadDeviceAccessStatus() {
-  deviceAccessError.value = ''
-  try {
-    const result = normalizeAppResult(await commands.libraryAccessStatus())
-    if (result.ok) deviceAccessStatus.value = result.data
-    else {
-      deviceAccessStatus.value = undefined
-      deviceAccessError.value = result.error.userMessage
-    }
-  }
-  catch {
-    deviceAccessStatus.value = undefined
-    deviceAccessError.value = '当前设备的离线解锁状态暂时无法读取；资料库仍保持本机加密。'
-  }
-}
-
-function openStorageMigration() {
-  if (storageMigrating.value) return
-  storageMigrationError.value = ''
-  storageDialogOpen.value = true
-}
-
-async function closeStorageMigration() {
-  if (storageMigrating.value) return
-  storageDialogOpen.value = false
-  await nextTick()
-  storagePanel.value?.focusMigrationAction()
-}
-
-async function confirmStorageMigration() {
-  if (storageMigrating.value) return
-  storageMigrating.value = true
-  storageMigrationError.value = ''
-  try {
-    const invocation = await commands.storageMigrateSelect()
-    if (invocation.status === 'error') throw new Error('storage migration command rejected')
-    const result = normalizeAppResult(invocation.data)
-    if (!result.ok) {
-      storageMigrationError.value = result.error.userMessage
-      storageMigrating.value = false
-      return
-    }
-    if (!result.data) {
-      storageMigrating.value = false
-      await closeStorageMigration()
-      return
-    }
-    libraryAccessController?.enterRestarting()
-    // Success deliberately stays busy until Rust restarts and validates the new copy.
-  }
-  catch {
-    storageMigrationError.value = '迁移没有开始或没有完成，原资料库保持不变，请检查目标磁盘后重试。'
-    storageMigrating.value = false
-  }
-}
-
 const { loading, load } = useSettingsPageLoad({
   errorMessage,
   blockedMessage: () => (
@@ -615,9 +486,7 @@ const { loading, load } = useSettingsPageLoad({
     || savingReviewPreferences.value
   ) ? preferenceRefreshGuardMessage : undefined,
   isDesktop: isTauri,
-  onBrowserPreview: () => {
-    storageStatusError.value = '容量和迁移会在 Windows 桌面应用中显示；浏览器预览不会读取本机资料。'
-  },
+  onBrowserPreview: showStorageBrowserPreview,
   revisions: () => ({
     subjects: subjectPreferencesRevision.value,
     review: reviewPreferencesRevision.value,
@@ -640,108 +509,6 @@ const { loading, load } = useSettingsPageLoad({
     { label: '智能功能', run: loadOcrCapability },
   ],
 })
-
-async function loadWindowsCompatibility() {
-  try {
-    const invocation = await commands.compatibilityStatus()
-    if (invocation.status === 'error') return
-    const result = normalizeAppResult(invocation.data)
-    if (result.ok) windowsCompatibility.value = result.data
-  }
-  catch {
-    // The settings page remains usable when this optional probe is unavailable.
-  }
-}
-
-async function loadWindowsUpdateStatus() {
-  try {
-    const invocation = await commands.windowsUpdateStatus()
-    if (invocation.status === 'error') return
-    const result = normalizeAppResult(invocation.data)
-    if (result.ok) windowsUpdateStatus.value = result.data
-  }
-  catch {
-    // Updating is optional. A failed status probe must not affect local workflows.
-  }
-}
-
-async function checkWindowsUpdate() {
-  if (
-    checkingWindowsUpdate.value
-    || installingWindowsUpdate.value
-    || !windowsUpdateStatus.value?.enabled
-  ) return
-  checkingWindowsUpdate.value = true
-  windowsUpdateReport.value = undefined
-  windowsUpdateMessage.value = ''
-  try {
-    const invocation = await commands.windowsUpdateCheck()
-    if (invocation.status === 'error') throw new Error('update command rejected')
-    const result = normalizeAppResult(invocation.data)
-    if (!result.ok) {
-      windowsUpdateMessage.value = result.error.userMessage
-      return
-    }
-    windowsUpdateReport.value = result.data
-    windowsUpdateMessage.value = result.data.available && result.data.version
-      ? `发现已签名版本 ${result.data.version}。下载后仍会再次核对版本和签名。`
-      : '当前已经是最新版本。'
-  }
-  catch {
-    windowsUpdateMessage.value = '暂时无法检查更新，请确认网络连接后重试；当前版本可继续离线使用。'
-  }
-  finally {
-    checkingWindowsUpdate.value = false
-    await nextTick()
-    windowsUpdatePanel.value?.focusPrimaryAction()
-  }
-}
-
-async function installWindowsUpdate() {
-  const version = windowsUpdateReport.value?.version
-  if (
-    installingWindowsUpdate.value
-    || checkingWindowsUpdate.value
-    || !windowsUpdateReport.value?.available
-    || !version
-  ) return
-  installingWindowsUpdate.value = true
-  windowsUpdateMessage.value = '正在下载并验证更新；安装开始时应用会关闭。'
-  try {
-    const invocation = await commands.windowsUpdateInstall(version)
-    if (invocation.status === 'error') throw new Error('update install command rejected')
-    const result = normalizeAppResult(invocation.data)
-    if (!result.ok) {
-      windowsUpdateReport.value = undefined
-      windowsUpdateMessage.value = result.error.userMessage
-      return
-    }
-    windowsUpdateMessage.value = '安装程序已启动；请按系统提示完成更新。'
-  }
-  catch {
-    windowsUpdateReport.value = undefined
-    windowsUpdateMessage.value = '更新没有安装，当前版本保持不变；请稍后重新检查。'
-  }
-  finally {
-    installingWindowsUpdate.value = false
-    await nextTick()
-    windowsUpdatePanel.value?.focusPrimaryAction()
-  }
-}
-
-function formatUpdatePublication(value: string | null) {
-  if (!value) return ''
-  const timestamp = Date.parse(value)
-  return Number.isFinite(timestamp) ? formatSettingsTime(timestamp) : ''
-}
-
-async function closeLibraryLock() {
-  const mode = closeCloudLibraryLock()
-  if (!mode) return
-  await nextTick()
-  if (mode === 'sign-out') cloudAuthPanel.value?.focusSignOutAction()
-  else deviceOverviewPanel.value?.focusLockAction()
-}
 
 async function refreshOverviewAfterConflict() {
   try {
@@ -951,7 +718,7 @@ onMounted(async () => {
       :checking="checkingWindowsUpdate"
       :installing="installingWindowsUpdate"
       :message="windowsUpdateMessage"
-      :publication-label="formatUpdatePublication(windowsUpdateReport?.publishedAt ?? null)"
+      :publication-label="windowsUpdatePublicationLabel"
       @check="checkWindowsUpdate"
       @install="installWindowsUpdate"
     />

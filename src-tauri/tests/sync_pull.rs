@@ -9,6 +9,7 @@ use std::{
 use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
 use mistake_trainer_next_lib::{
     infrastructure::{
+        assets::{FilesystemAssetBlobRemover, KeyedAssetEncryptor},
         database::run_migrations,
         supabase::{CloudError, CloudPullTransport, DownloadedRemoteAsset, RemotePullChange},
     },
@@ -190,7 +191,8 @@ fn valid_page_applies_assets_library_and_deterministic_schedule() {
             REMOTE_USER_ID,
             "access-token",
             root.path(),
-            &ASSET_KEY,
+            &KeyedAssetEncryptor::new(&ASSET_KEY),
+            &FilesystemAssetBlobRemover,
             10_000,
         ))
         .unwrap();
@@ -258,7 +260,8 @@ fn invalid_account_is_rejected_without_advancing_cursor_or_writing_data() {
             REMOTE_USER_ID,
             "access-token",
             root.path(),
-            &ASSET_KEY,
+            &KeyedAssetEncryptor::new(&ASSET_KEY),
+            &FilesystemAssetBlobRemover,
             10_000,
         ))
         .unwrap_err();
@@ -305,7 +308,8 @@ fn mismatched_download_is_rejected_and_does_not_leave_a_blob() {
             REMOTE_USER_ID,
             "access-token",
             root.path(),
-            &ASSET_KEY,
+            &KeyedAssetEncryptor::new(&ASSET_KEY),
+            &FilesystemAssetBlobRemover,
             10_000,
         ))
         .unwrap_err();
@@ -346,7 +350,8 @@ fn failed_pull_does_not_delete_a_preexisting_unowned_blob() {
             REMOTE_USER_ID,
             "access-token",
             root.path(),
-            &ASSET_KEY,
+            &KeyedAssetEncryptor::new(&ASSET_KEY),
+            &FilesystemAssetBlobRemover,
             10_000,
         ))
         .unwrap_err();
@@ -400,7 +405,8 @@ fn later_download_failure_cleans_assets_staged_earlier_in_the_page() {
             REMOTE_USER_ID,
             "access-token",
             root.path(),
-            &ASSET_KEY,
+            &KeyedAssetEncryptor::new(&ASSET_KEY),
+            &FilesystemAssetBlobRemover,
             10_000,
         ))
         .unwrap_err();
@@ -568,7 +574,8 @@ fn profile_and_orphan_asset_tombstones_delete_locally_and_select_a_replacement()
             REMOTE_USER_ID,
             "access-token",
             root.path(),
-            &ASSET_KEY,
+            &KeyedAssetEncryptor::new(&ASSET_KEY),
+            &FilesystemAssetBlobRemover,
             1_000,
         ))
         .unwrap();
@@ -677,7 +684,8 @@ fn concurrent_problem_edits_on_different_fields_auto_merge_and_reenqueue() {
             REMOTE_USER_ID,
             "access-token",
             root.path(),
-            &ASSET_KEY,
+            &KeyedAssetEncryptor::new(&ASSET_KEY),
+            &FilesystemAssetBlobRemover,
             10_000,
         ))
         .unwrap();
@@ -708,7 +716,8 @@ fn concurrent_problem_edits_on_different_fields_auto_merge_and_reenqueue() {
             REMOTE_USER_ID,
             "access-token",
             root.path(),
-            &ASSET_KEY,
+            &KeyedAssetEncryptor::new(&ASSET_KEY),
+            &FilesystemAssetBlobRemover,
             20_000,
         ))
         .unwrap();
@@ -764,7 +773,8 @@ fn concurrent_problem_edits_on_the_same_field_create_one_true_conflict() {
             REMOTE_USER_ID,
             "access-token",
             root.path(),
-            &ASSET_KEY,
+            &KeyedAssetEncryptor::new(&ASSET_KEY),
+            &FilesystemAssetBlobRemover,
             10_000,
         ))
         .unwrap();
@@ -795,7 +805,8 @@ fn concurrent_problem_edits_on_the_same_field_create_one_true_conflict() {
             REMOTE_USER_ID,
             "access-token",
             root.path(),
-            &ASSET_KEY,
+            &KeyedAssetEncryptor::new(&ASSET_KEY),
+            &FilesystemAssetBlobRemover,
             20_000,
         ))
         .unwrap();
@@ -860,7 +871,8 @@ fn a_newer_matching_remote_revision_closes_an_obsolete_open_conflict() {
             REMOTE_USER_ID,
             "access-token",
             root.path(),
-            &ASSET_KEY,
+            &KeyedAssetEncryptor::new(&ASSET_KEY),
+            &FilesystemAssetBlobRemover,
             10_000,
         ))
         .unwrap();
@@ -890,7 +902,8 @@ fn a_newer_matching_remote_revision_closes_an_obsolete_open_conflict() {
             REMOTE_USER_ID,
             "access-token",
             root.path(),
-            &ASSET_KEY,
+            &KeyedAssetEncryptor::new(&ASSET_KEY),
+            &FilesystemAssetBlobRemover,
             20_000,
         ))
         .unwrap();
@@ -923,7 +936,8 @@ fn a_newer_matching_remote_revision_closes_an_obsolete_open_conflict() {
             REMOTE_USER_ID,
             "access-token",
             root.path(),
-            &ASSET_KEY,
+            &KeyedAssetEncryptor::new(&ASSET_KEY),
+            &FilesystemAssetBlobRemover,
             30_000,
         ))
         .unwrap();
@@ -978,7 +992,8 @@ fn remote_problem_delete_conflicts_with_a_local_edit_instead_of_erasing_it() {
             REMOTE_USER_ID,
             "access-token",
             root.path(),
-            &ASSET_KEY,
+            &KeyedAssetEncryptor::new(&ASSET_KEY),
+            &FilesystemAssetBlobRemover,
             10_000,
         ))
         .unwrap();
@@ -1027,7 +1042,8 @@ fn remote_problem_delete_conflicts_with_a_local_edit_instead_of_erasing_it() {
             REMOTE_USER_ID,
             "access-token",
             root.path(),
-            &ASSET_KEY,
+            &KeyedAssetEncryptor::new(&ASSET_KEY),
+            &FilesystemAssetBlobRemover,
             20_000,
         ))
         .unwrap();

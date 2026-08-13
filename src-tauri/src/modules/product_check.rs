@@ -246,7 +246,7 @@ fn run_product_checks(
         let summaries = list_problem_summaries_with_previews(
             &connection,
             &runtime.blob_root,
-            &runtime.asset_key,
+            &crate::infrastructure::assets::KeyedAssetDecryptor::new(&runtime.asset_key),
             ProblemListQuery {
                 account_id: runtime.account_id().to_owned(),
                 profile_id: profile.id.clone(),
@@ -265,7 +265,7 @@ fn run_product_checks(
         let detail = get_problem_detail(
             &connection,
             &runtime.blob_root,
-            &runtime.asset_key,
+            &crate::infrastructure::assets::KeyedAssetDecryptor::new(&runtime.asset_key),
             ProblemDetailQuery {
                 account_id: runtime.account_id().to_owned(),
                 profile_id: profile.id.clone(),
@@ -378,7 +378,7 @@ fn run_product_checks(
         generate_export(
             &connection,
             &runtime.blob_root,
-            &runtime.asset_key,
+            &crate::infrastructure::assets::KeyedAssetDecryptor::new(&runtime.asset_key),
             runtime.account_id(),
             &profile.id,
             &snapshot.id,
@@ -468,7 +468,7 @@ fn run_product_checks(
         let detail = get_problem_detail(
             &connection,
             &reopened.blob_root,
-            &reopened.asset_key,
+            &crate::infrastructure::assets::KeyedAssetDecryptor::new(&reopened.asset_key),
             ProblemDetailQuery {
                 account_id: reopened.account_id().to_owned(),
                 profile_id: reopened.active_profile().id,

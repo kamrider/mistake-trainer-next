@@ -10,6 +10,8 @@ use reqwest::{StatusCode, Url, redirect::Policy};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::domain::privacy::redact_email;
+
 pub use crate::application::ports::sync::{
     CloudError, CloudPullTransport, CloudPushTransport, DownloadedRemoteAsset, ObjectUploadResult,
     PushAcknowledgement, RemoteObjectMetadata, RemotePullChange,
@@ -886,14 +888,4 @@ fn now_utc_seconds() -> i64 {
         .as_secs()
         .try_into()
         .unwrap_or(i64::MAX)
-}
-
-pub(crate) fn redact_email(email: &str) -> String {
-    let Some((local, domain)) = email.split_once('@') else {
-        return "***".to_owned();
-    };
-    let mut characters = local.chars();
-    let first = characters.next().unwrap_or('*');
-    let last = characters.last().unwrap_or(first);
-    format!("{first}***{last}@{domain}")
 }

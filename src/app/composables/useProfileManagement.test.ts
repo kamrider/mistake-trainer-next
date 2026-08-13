@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { ProfileOverview } from '../../shared/api/bindings'
 import { failure, success, type AppResult } from '../../shared/api/app-result'
-import { useProfileManagement } from './useProfileManagement'
+import type { ProfileOverview } from '../../shared/api/bindings'
+import {
+  useProfileManagement,
+  type ProfileManagementOptions,
+} from './useProfileManagement'
 
 const daily = {
   id: 'daily', name: '日常学习', createdAtUtcMs: 1, updatedAtUtcMs: 1, revision: 1,
@@ -19,37 +22,62 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-function createHarness(enabled = true) {
-  const listProfiles = vi.fn(async () => success(initial))
+function createHarness(
+  overrides: Partial<Omit<ProfileManagementOptions, 'operations'>> = {},
+) {
+  const operations = {
+    list: vi.fn(async () => success(initial)),
+    create: vi.fn(async () => success(switched)),
+    rename: vi.fn(async () => success(switched)),
+    remove: vi.fn(async () => success(initial)),
+    select: vi.fn(async () => success(switched)),
+  }
+  const attemptWorkspaceTransition = vi.fn(async () => true)
   const scheduleSync = vi.fn()
   const refreshWorkspace = vi.fn(async () => undefined)
   const controller = useProfileManagement({
-    enabled,
-    listProfiles,
+    enabled: true,
+    operations,
+    attemptWorkspaceTransition,
     scheduleSync,
     refreshWorkspace,
+    ...overrides,
   })
-  return { controller, listProfiles, scheduleSync, refreshWorkspace }
+  return {
+    controller,
+    operations,
+    attemptWorkspaceTransition,
+    scheduleSync,
+    refreshWorkspace,
+  }
 }
 
 describe('useProfileManagement', () => {
-  it('keeps loading single-flight and rejects a concurrent mutation', async () => {
+  it('projects real desktop state and one stable browser-preview profile', () => {
+    const desktop = createHarness()
+    expect(desktop.controller.shellProfiles.value).toEqual([])
+    expect(desktop.controller.shellActiveProfileId.value).toBe('')
+
+    const preview = createHarness({ enabled: false })
+    expect(preview.controller.shellProfiles.value).toEqual([expect.objectContaining({
+      id: 'preview-profile',
+      name: '本机学习档案',
+    })])
+    expect(preview.controller.shellActiveProfileId.value).toBe('preview-profile')
+  })
+
+  it('keeps loading single-flight and rejects a concurrent profile action', async () => {
     const current = createHarness()
     const gate = deferred<AppResult<ProfileOverview>>()
-    const mutationOperation = vi.fn(async () => success(switched))
-    current.listProfiles.mockReturnValueOnce(gate.promise)
+    current.operations.list.mockReturnValueOnce(gate.promise)
 
     const loading = current.controller.loadProfiles()
     expect(current.controller.busy.value).toBe(true)
     expect(await current.controller.loadProfiles()).toBe(false)
-    const mutationAccepted = await current.controller.mutateProfile(
-      mutationOperation,
-      { refreshWorkspace: true, scheduleSync: true },
-    )
+    expect(await current.controller.renameProfile('daily', '每日复盘')).toBe(false)
 
-    expect(mutationAccepted).toBe(false)
-    expect(current.listProfiles).toHaveBeenCalledOnce()
-    expect(mutationOperation).not.toHaveBeenCalled()
+    expect(current.operations.list).toHaveBeenCalledOnce()
+    expect(current.operations.rename).not.toHaveBeenCalled()
     gate.resolve(success(initial))
     expect(await loading).toBe(true)
     expect(current.controller.profiles.value).toEqual([daily])
@@ -57,75 +85,90 @@ describe('useProfileManagement', () => {
     expect(current.controller.busy.value).toBe(false)
   })
 
-  it('keeps a mutation single-flight against refreshes and other mutations', async () => {
+  it('owns create and rename transition, refresh, and sync policies', async () => {
+    const created = createHarness()
+    expect(await created.controller.createProfile('错题冲刺')).toBe(true)
+    expect(created.attemptWorkspaceTransition).toHaveBeenCalledOnce()
+    expect(created.operations.create).toHaveBeenCalledWith('错题冲刺')
+    expect(created.refreshWorkspace).toHaveBeenCalledOnce()
+    expect(created.scheduleSync).toHaveBeenCalledOnce()
+
+    const renamed = createHarness()
+    expect(await renamed.controller.renameProfile('contest', '竞赛提高')).toBe(true)
+    expect(renamed.operations.rename).toHaveBeenCalledWith('contest', '竞赛提高')
+    expect(renamed.attemptWorkspaceTransition).not.toHaveBeenCalled()
+    expect(renamed.refreshWorkspace).not.toHaveBeenCalled()
+    expect(renamed.scheduleSync).toHaveBeenCalledOnce()
+  })
+
+  it('guards and refreshes only deletion of the active profile', async () => {
+    const active = createHarness()
+    await active.controller.loadProfiles()
+    expect(await active.controller.deleteProfile('daily', '日常学习')).toBe(true)
+    expect(active.operations.remove).toHaveBeenCalledWith('daily', '日常学习')
+    expect(active.attemptWorkspaceTransition).toHaveBeenCalledOnce()
+    expect(active.refreshWorkspace).toHaveBeenCalledOnce()
+    expect(active.scheduleSync).toHaveBeenCalledOnce()
+
+    const inactive = createHarness()
+    await inactive.controller.loadProfiles()
+    expect(await inactive.controller.deleteProfile('contest', '竞赛强化')).toBe(true)
+    expect(inactive.attemptWorkspaceTransition).not.toHaveBeenCalled()
+    expect(inactive.refreshWorkspace).not.toHaveBeenCalled()
+    expect(inactive.scheduleSync).toHaveBeenCalledOnce()
+  })
+
+  it('skips the current profile and guards a real selection without scheduling mutation sync', async () => {
     const current = createHarness()
+    await current.controller.loadProfiles()
+
+    expect(await current.controller.selectProfile('daily')).toBe(false)
+    expect(current.operations.select).not.toHaveBeenCalled()
+    expect(current.attemptWorkspaceTransition).not.toHaveBeenCalled()
+
+    expect(await current.controller.selectProfile('contest')).toBe(true)
+    expect(current.operations.select).toHaveBeenCalledWith('contest')
+    expect(current.attemptWorkspaceTransition).toHaveBeenCalledOnce()
+    expect(current.refreshWorkspace).toHaveBeenCalledOnce()
+    expect(current.scheduleSync).not.toHaveBeenCalled()
+  })
+
+  it('cancels guarded work before invoking a native operation', async () => {
+    const current = createHarness({
+      attemptWorkspaceTransition: vi.fn(async () => false),
+    })
+
+    expect(await current.controller.createProfile('错题冲刺')).toBe(false)
+    expect(current.operations.create).not.toHaveBeenCalled()
+    expect(current.refreshWorkspace).not.toHaveBeenCalled()
+    expect(current.scheduleSync).not.toHaveBeenCalled()
+  })
+
+  it('queues one silent profile refresh behind an in-flight mutation', async () => {
+    const current = createHarness()
+    await current.controller.loadProfiles()
+    current.operations.list.mockClear()
     const gate = deferred<AppResult<ProfileOverview>>()
-    const operation = vi.fn(() => gate.promise)
-    const competing = vi.fn(async () => success(initial))
-    current.listProfiles.mockResolvedValueOnce(success(switched))
+    current.operations.select.mockReturnValueOnce(gate.promise)
 
-    const mutation = current.controller.mutateProfile(
-      operation,
-      { refreshWorkspace: true, scheduleSync: true },
-    )
+    const mutation = current.controller.selectProfile('contest')
+    await Promise.resolve()
     expect(current.controller.busy.value).toBe(true)
-
     expect(await current.controller.loadProfiles()).toBe(false)
-    expect(await current.controller.mutateProfile(
-      competing,
-      { refreshWorkspace: false, scheduleSync: false },
-    )).toBe(false)
-    expect(current.listProfiles).not.toHaveBeenCalled()
-    expect(competing).not.toHaveBeenCalled()
+    expect(await current.controller.renameProfile('daily', '每日复盘')).toBe(false)
+    expect(current.operations.list).not.toHaveBeenCalled()
+    expect(current.operations.rename).not.toHaveBeenCalled()
 
     gate.resolve(success(switched))
     expect(await mutation).toBe(true)
-    expect(current.controller.profiles.value).toEqual([daily, contest])
-    expect(current.controller.activeProfileId.value).toBe(contest.id)
-    expect(current.scheduleSync).toHaveBeenCalledOnce()
-    expect(current.refreshWorkspace).toHaveBeenCalledOnce()
-    expect(current.listProfiles).toHaveBeenCalledOnce()
+    expect(current.operations.list).toHaveBeenCalledOnce()
+    expect(current.controller.errorMessage.value).toBe('')
     expect(current.controller.busy.value).toBe(false)
   })
 
-  it('runs a queued refresh silently without revoking mutation feedback', async () => {
-    const durable = createHarness()
-    const durableGate = deferred<AppResult<ProfileOverview>>()
-    durable.listProfiles.mockResolvedValueOnce(failure(
-      'profile_list_failed', '学习档案读取失败。', true, 'diag-queued-list',
-    ))
-    const durableMutation = durable.controller.mutateProfile(
-      () => durableGate.promise,
-      { refreshWorkspace: false, scheduleSync: false },
-    )
-    expect(await durable.controller.loadProfiles()).toBe(false)
-    durableGate.resolve(success(switched))
-
-    expect(await durableMutation).toBe(true)
-    expect(durable.controller.profiles.value).toEqual([daily, contest])
-    expect(durable.controller.errorMessage.value).toBe('')
-    expect(durable.listProfiles).toHaveBeenCalledOnce()
-
+  it('reports load application and transport failures without replacing the overview', async () => {
     const rejected = createHarness()
-    const rejectedGate = deferred<AppResult<ProfileOverview>>()
-    rejected.listProfiles.mockRejectedValueOnce(new Error('refresh unavailable'))
-    const rejectedMutation = rejected.controller.mutateProfile(
-      () => rejectedGate.promise,
-      { refreshWorkspace: false, scheduleSync: false },
-    )
-    expect(await rejected.controller.loadProfiles()).toBe(false)
-    rejectedGate.resolve(failure(
-      'profile_select_failed', '档案没有切换。', true, 'diag-select',
-    ))
-
-    expect(await rejectedMutation).toBe(false)
-    expect(rejected.controller.errorMessage.value).toBe('档案没有切换。')
-    expect(rejected.listProfiles).toHaveBeenCalledOnce()
-  })
-
-  it('reports list application and transport failures without replacing the overview', async () => {
-    const rejected = createHarness()
-    rejected.listProfiles.mockResolvedValueOnce(failure(
+    rejected.operations.list.mockResolvedValueOnce(failure(
       'profile_list_failed', '学习档案读取失败。', true, 'diag-list',
     ))
     expect(await rejected.controller.loadProfiles()).toBe(false)
@@ -133,66 +176,54 @@ describe('useProfileManagement', () => {
     expect(rejected.controller.profiles.value).toEqual([])
 
     const thrown = createHarness()
-    thrown.listProfiles.mockRejectedValueOnce(new Error('database unavailable'))
+    thrown.operations.list.mockRejectedValueOnce(new Error('database unavailable'))
     expect(await thrown.controller.loadProfiles()).toBe(false)
     expect(thrown.controller.errorMessage.value).toBe('学习档案没有读取成功，请重新打开应用后重试。')
     expect(thrown.controller.busy.value).toBe(false)
   })
 
-  it('reports mutation application and transport failures without running side effects', async () => {
+  it('reports mutation failures without running durable-success side effects', async () => {
     const rejected = createHarness()
-    expect(await rejected.controller.mutateProfile(
-      async () => failure('profile_failed', '档案没有切换。', true, 'diag-mutation'),
-      { refreshWorkspace: true, scheduleSync: true },
-    )).toBe(false)
-    expect(rejected.controller.errorMessage.value).toBe('档案没有切换。')
+    rejected.operations.rename.mockResolvedValueOnce(failure(
+      'profile_failed', '档案没有重命名。', true, 'diag-mutation',
+    ))
+    expect(await rejected.controller.renameProfile('daily', '每日复盘')).toBe(false)
+    expect(rejected.controller.errorMessage.value).toBe('档案没有重命名。')
     expect(rejected.scheduleSync).not.toHaveBeenCalled()
-    expect(rejected.refreshWorkspace).not.toHaveBeenCalled()
 
     const thrown = createHarness()
-    expect(await thrown.controller.mutateProfile(
-      async () => { throw new Error('database unavailable') },
-      { refreshWorkspace: true, scheduleSync: true },
-    )).toBe(false)
+    thrown.operations.rename.mockRejectedValueOnce(new Error('database unavailable'))
+    expect(await thrown.controller.renameProfile('daily', '每日复盘')).toBe(false)
     expect(thrown.controller.errorMessage.value).toBe('学习档案没有完成这次操作，请稍后重试。')
     expect(thrown.controller.busy.value).toBe(false)
   })
 
   it('preserves durable mutation success when optional side effects fail', async () => {
-    const current = createHarness()
-    current.scheduleSync.mockImplementationOnce(() => { throw new Error('scheduler unavailable') })
-    current.refreshWorkspace.mockRejectedValueOnce(new Error('navigation cancelled'))
+    const current = createHarness({
+      scheduleSync: vi.fn(() => { throw new Error('scheduler unavailable') }),
+      refreshWorkspace: vi.fn(async () => { throw new Error('navigation cancelled') }),
+    })
 
-    expect(await current.controller.mutateProfile(
-      async () => success(switched),
-      { refreshWorkspace: true, scheduleSync: true },
-    )).toBe(true)
-
+    expect(await current.controller.createProfile('错题冲刺')).toBe(true)
     expect(current.controller.profiles.value).toEqual([daily, contest])
     expect(current.controller.activeProfileId.value).toBe(contest.id)
     expect(current.controller.errorMessage.value).toBe('')
-    expect(current.scheduleSync).toHaveBeenCalledOnce()
-    expect(current.refreshWorkspace).toHaveBeenCalledOnce()
     expect(current.controller.busy.value).toBe(false)
   })
 
-  it('skips disabled work and respects mutation side-effect policy', async () => {
-    const disabled = createHarness(false)
-    const operation = vi.fn(async () => success(switched))
-    expect(await disabled.controller.loadProfiles()).toBe(false)
-    expect(await disabled.controller.mutateProfile(
-      operation,
-      { refreshWorkspace: true, scheduleSync: true },
-    )).toBe(false)
-    expect(disabled.listProfiles).not.toHaveBeenCalled()
-    expect(operation).not.toHaveBeenCalled()
+  it('skips all disabled profile work', async () => {
+    const disabled = createHarness({ enabled: false })
 
-    const current = createHarness()
-    expect(await current.controller.mutateProfile(
-      async () => success(switched),
-      { refreshWorkspace: false, scheduleSync: false },
-    )).toBe(true)
-    expect(current.scheduleSync).not.toHaveBeenCalled()
-    expect(current.refreshWorkspace).not.toHaveBeenCalled()
+    expect(await disabled.controller.loadProfiles()).toBe(false)
+    expect(await disabled.controller.createProfile('错题冲刺')).toBe(false)
+    expect(await disabled.controller.renameProfile('daily', '每日复盘')).toBe(false)
+    expect(await disabled.controller.deleteProfile('daily', '日常学习')).toBe(false)
+    expect(await disabled.controller.selectProfile('contest')).toBe(false)
+    expect(disabled.operations.list).not.toHaveBeenCalled()
+    expect(disabled.operations.create).not.toHaveBeenCalled()
+    expect(disabled.operations.rename).not.toHaveBeenCalled()
+    expect(disabled.operations.remove).not.toHaveBeenCalled()
+    expect(disabled.operations.select).not.toHaveBeenCalled()
+    expect(disabled.attemptWorkspaceTransition).not.toHaveBeenCalled()
   })
 })

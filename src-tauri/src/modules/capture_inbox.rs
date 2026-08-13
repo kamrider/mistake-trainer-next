@@ -7,7 +7,8 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    infrastructure::assets::{encrypt_asset, plaintext_sha256},
+    application::ports::assets::AssetEncryptor,
+    domain::assets::plaintext_sha256,
     modules::{
         capture::{CaptureImageError, inspect_capture_image},
         capture_asset_repository,
@@ -326,7 +327,7 @@ fn sanitize_source_name(value: &str) -> String {
 pub fn ingest_capture_item(
     connection: &mut Connection,
     blob_root: &Path,
-    asset_key: &[u8; 32],
+    asset_encryptor: &dyn AssetEncryptor,
     input: IngestCaptureItem,
 ) -> Result<CaptureItemSummary, CaptureInboxError> {
     if input.client_upload_id.trim().is_empty() || input.client_upload_id.chars().count() > 100 {
@@ -386,8 +387,9 @@ pub fn ingest_capture_item(
         asset_id
     } else {
         let asset_id = Uuid::now_v7().to_string();
-        let encrypted =
-            encrypt_asset(&input.bytes, asset_key).map_err(|_| CaptureInboxError::Crypto)?;
+        let encrypted = asset_encryptor
+            .encrypt(&input.bytes)
+            .map_err(|_| CaptureInboxError::Crypto)?;
         staged_asset = Some(stage_encrypted_capture_asset(
             blob_root,
             asset_id.clone(),

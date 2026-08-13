@@ -2,7 +2,10 @@ use std::io::Cursor;
 
 use image::{DynamicImage, GrayImage, ImageFormat, Luma};
 use mistake_trainer_next_lib::{
-    infrastructure::database::{open_encrypted_database, run_migrations},
+    infrastructure::{
+        assets::KeyedAssetDecryptor,
+        database::{open_encrypted_database, run_migrations},
+    },
     modules::{
         capture_inbox::{
             CaptureBatchState, CaptureInboxError, CreateCaptureBatch, IngestCaptureItem,
@@ -126,11 +129,12 @@ fn quality_check_is_owned_read_only_and_item_scoped() {
     let outbox_before: i64 = connection
         .query_row("SELECT COUNT(*) FROM sync_operations", [], |row| row.get(0))
         .expect("outbox count");
+    let decryptor = KeyedAssetDecryptor::new(&ASSET_KEY);
 
     let report = check_capture_quality(
         &connection,
         &library.blob_root(),
-        &ASSET_KEY,
+        &decryptor,
         ACCOUNT,
         &library.profile_id,
         &batch_id,
@@ -142,7 +146,7 @@ fn quality_check_is_owned_read_only_and_item_scoped() {
     let wrong_item = check_capture_quality(
         &connection,
         &library.blob_root(),
-        &ASSET_KEY,
+        &decryptor,
         ACCOUNT,
         &library.profile_id,
         &batch_id,
@@ -158,7 +162,7 @@ fn quality_check_is_owned_read_only_and_item_scoped() {
         let error = check_capture_quality(
             &connection,
             &library.blob_root(),
-            &ASSET_KEY,
+            &decryptor,
             account_id,
             profile_id,
             &other_batch_id,
@@ -204,7 +208,7 @@ fn corrupt_encrypted_asset_fails_closed() {
     let error = check_capture_quality(
         &connection,
         &library.blob_root(),
-        &ASSET_KEY,
+        &KeyedAssetDecryptor::new(&ASSET_KEY),
         ACCOUNT,
         &library.profile_id,
         &batch_id,

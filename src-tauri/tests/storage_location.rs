@@ -14,8 +14,8 @@ use mistake_trainer_next_lib::{
     infrastructure::{
         runtime::{SecretStore, initialize_local_library},
         storage_location::{
-            ResolvedStorage, STORAGE_POINTER_FILE, StoragePointer, resolve_storage,
-            write_storage_pointer,
+            ResolvedStorage, STORAGE_POINTER_FILE, StoragePointer, prepare_control_root,
+            resolve_storage, write_storage_pointer,
         },
     },
 };
@@ -140,6 +140,35 @@ fn genuinely_empty_install_still_creates_the_first_default_library() {
 
     assert!(matches!(startup, LibraryStartup::Ready(_)));
     assert!(control.path().join("library/library.db").is_file());
+}
+
+#[test]
+fn missing_control_root_is_prepared_before_retained_credentials_are_classified() {
+    let parent = tempdir().unwrap();
+    let control = parent.path().join("com.mistaketrainer.next");
+    let secrets = MemorySecretStore::default();
+    seed_complete_credentials(&secrets);
+
+    prepare_control_root(&control).expect("missing product control root should be created safely");
+    let startup = initialize_configured_application_library_if_accessible(&control, &secrets, 100)
+        .expect("retained credentials with missing data are recoverable");
+
+    assert!(matches!(
+        startup,
+        LibraryStartup::RecoveryRequired(LibraryRecoveryReason::LocalDataMissing)
+    ));
+    assert!(control.is_dir());
+    assert!(!control.join("library").exists());
+}
+
+#[test]
+fn preparing_the_control_root_never_replaces_an_existing_file() {
+    let parent = tempdir().unwrap();
+    let control = parent.path().join("com.mistaketrainer.next");
+    fs::write(&control, b"not a directory").unwrap();
+
+    assert!(prepare_control_root(&control).is_err());
+    assert_eq!(fs::read(&control).unwrap(), b"not a directory");
 }
 
 #[test]

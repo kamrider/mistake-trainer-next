@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { acquireDialogDocumentBoundary } from '../../../app/dialog-document-boundary'
-import { trapDialogFocus } from '../../../app/dialog-focus'
+import { acquireDialogDocumentBoundary } from '@/shared/ui/dialog-document-boundary'
+import { trapDialogFocus } from '@/shared/ui/dialog-focus'
 
 const props = withDefaults(defineProps<{
   open: boolean

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { CheckCircle2, Cloud, GitCompareArrows, Laptop, RefreshCw, TriangleAlert } from '@lucide/vue'
 import { computed, inject, nextTick, onMounted, ref } from 'vue'
-import { syncControllerKey } from '../../../app/sync-controller'
+import { syncControllerKey } from '@/shared/contracts/sync-controller'
 import {
   commands,
   type JsonValue,

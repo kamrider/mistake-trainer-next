@@ -103,6 +103,19 @@ pub fn storage_pointer_present(control_root: &Path) -> Result<bool, StorageLocat
     }
 }
 
+/// Creates the product-owned control root when it is genuinely absent, then
+/// applies the same file-type and reparse-point checks used by control-file
+/// operations. `create_dir` is deliberately non-recursive so an unexpected
+/// parent layout cannot be silently manufactured.
+pub fn prepare_control_root(control_root: &Path) -> Result<(), StorageLocationError> {
+    match fs::create_dir(control_root) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(StorageLocationError::File(error)),
+    }
+    validate_control_root(control_root)
+}
+
 pub fn control_file_present(
     control_root: &Path,
     file_name: &str,

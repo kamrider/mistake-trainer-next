@@ -3,7 +3,7 @@ import type {
   CaptureBatchSummary,
   CaptureItemSummary,
 } from '../../shared/api/bindings'
-import type { CaptureCropEditorState } from '../../modules/capture/composables/useCaptureItemEditing'
+import type { CaptureCropEditorState } from '@/modules/capture'
 
 export interface CaptureDevelopmentPreview {
   batches: CaptureBatchSummary[]

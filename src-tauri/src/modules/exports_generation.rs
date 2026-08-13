@@ -9,7 +9,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::infrastructure::assets::decrypt_asset;
+use crate::application::ports::assets::AssetDecryptor;
 
 use super::{ExportError, ExportLayout, GeneratedExportSummary};
 
@@ -50,33 +50,24 @@ pub(super) struct PreparedExport {
     snapshot: StoredSnapshot,
     problems: Vec<ExportProblem>,
     blob_root: PathBuf,
-    asset_key: [u8; 32],
 }
 
 pub fn generate_export(
     connection: &Connection,
     blob_root: &Path,
-    asset_key: &[u8; 32],
+    asset_decryptor: &dyn AssetDecryptor,
     account_id: &str,
     profile_id: &str,
     snapshot_id: &str,
     destination: &Path,
 ) -> Result<GeneratedExportSummary, ExportError> {
-    let prepared = prepare_export(
-        connection,
-        blob_root,
-        asset_key,
-        account_id,
-        profile_id,
-        snapshot_id,
-    )?;
-    write_prepared_export(prepared, destination)
+    let prepared = prepare_export(connection, blob_root, account_id, profile_id, snapshot_id)?;
+    write_prepared_export(prepared, destination, asset_decryptor)
 }
 
 pub(super) fn prepare_export(
     connection: &Connection,
     blob_root: &Path,
-    asset_key: &[u8; 32],
     account_id: &str,
     profile_id: &str,
     snapshot_id: &str,
@@ -87,13 +78,13 @@ pub(super) fn prepare_export(
         snapshot,
         problems,
         blob_root: blob_root.to_owned(),
-        asset_key: *asset_key,
     })
 }
 
 pub(super) fn write_prepared_export(
     prepared: PreparedExport,
     destination: &Path,
+    asset_decryptor: &dyn AssetDecryptor,
 ) -> Result<GeneratedExportSummary, ExportError> {
     if !destination.is_absolute() {
         return Err(ExportError::InvalidDestination);
@@ -108,7 +99,6 @@ pub(super) fn write_prepared_export(
         snapshot,
         problems,
         blob_root,
-        asset_key,
     } = prepared;
     let canonical_blob_root = blob_root
         .canonicalize()
@@ -122,17 +112,17 @@ pub(super) fn write_prepared_export(
             &base_name,
             &problems,
             &canonical_blob_root,
-            &asset_key,
+            asset_decryptor,
         )?,
         ExportLayout::QuestionAnswerAlternating | ExportLayout::QuestionsThenAnswers => {
-            validate_docx_assets(&problems, &canonical_blob_root, &asset_key)?;
+            validate_docx_assets(&problems, &canonical_blob_root, asset_decryptor)?;
             generate_docx(
                 &destination,
                 &base_name,
                 &snapshot,
                 &problems,
                 &canonical_blob_root,
-                &asset_key,
+                asset_decryptor,
             )?
         }
     };
@@ -253,7 +243,7 @@ fn load_export_problems(
 
 fn read_decrypted_export_asset(
     blob_root: &Path,
-    key: &[u8; 32],
+    asset_decryptor: &dyn AssetDecryptor,
     encrypted_path: &str,
 ) -> Result<Vec<u8>, ExportError> {
     let relative = Path::new(encrypted_path);
@@ -278,7 +268,9 @@ fn read_decrypted_export_asset(
     if u64::try_from(encrypted.len()).unwrap_or(u64::MAX) > MAX_ENCRYPTED_ASSET_BYTES {
         return Err(ExportError::AssetTooLarge);
     }
-    decrypt_asset(&encrypted, key).map_err(|_| ExportError::InvalidImage)
+    asset_decryptor
+        .decrypt(&encrypted)
+        .map_err(|_| ExportError::InvalidImage)
 }
 
 fn generate_original_folder(
@@ -286,7 +278,7 @@ fn generate_original_folder(
     base_name: &str,
     problems: &[ExportProblem],
     blob_root: &Path,
-    asset_key: &[u8; 32],
+    asset_decryptor: &dyn AssetDecryptor,
 ) -> Result<String, ExportError> {
     let output_name = base_name.to_owned();
     let final_path = destination.join(&output_name);
@@ -296,7 +288,7 @@ fn generate_original_folder(
         for (problem_index, problem) in problems.iter().enumerate() {
             for asset in &problem.assets {
                 let bytes =
-                    read_decrypted_export_asset(blob_root, asset_key, &asset.encrypted_path)?;
+                    read_decrypted_export_asset(blob_root, asset_decryptor, &asset.encrypted_path)?;
                 if bytes.len() != asset.byte_length {
                     return Err(ExportError::InvalidImage);
                 }
@@ -331,7 +323,7 @@ fn generate_docx(
     snapshot: &StoredSnapshot,
     problems: &[ExportProblem],
     blob_root: &Path,
-    asset_key: &[u8; 32],
+    asset_decryptor: &dyn AssetDecryptor,
 ) -> Result<String, ExportError> {
     let output_name = format!("{base_name}.docx");
     let final_path = destination.join(&output_name);
@@ -374,9 +366,10 @@ fn generate_docx(
             ExportLayout::QuestionAnswerAlternating => {
                 for (index, problem) in problems.iter().enumerate() {
                     document = add_problem_heading(document, index, problem, "题目");
-                    document = add_assets(document, problem, "question", blob_root, asset_key)?;
+                    document =
+                        add_assets(document, problem, "question", blob_root, asset_decryptor)?;
                     document = document.add_paragraph(section_heading("答案"));
-                    document = add_assets(document, problem, "answer", blob_root, asset_key)?;
+                    document = add_assets(document, problem, "answer", blob_root, asset_decryptor)?;
                     if index + 1 < problems.len() {
                         document = document.add_paragraph(page_break_paragraph());
                     }
@@ -386,13 +379,14 @@ fn generate_docx(
                 document = document.add_paragraph(section_heading("题目"));
                 for (index, problem) in problems.iter().enumerate() {
                     document = add_problem_heading(document, index, problem, "题目");
-                    document = add_assets(document, problem, "question", blob_root, asset_key)?;
+                    document =
+                        add_assets(document, problem, "question", blob_root, asset_decryptor)?;
                 }
                 document = document.add_paragraph(page_break_paragraph());
                 document = document.add_paragraph(section_heading("答案"));
                 for (index, problem) in problems.iter().enumerate() {
                     document = add_problem_heading(document, index, problem, "答案");
-                    document = add_assets(document, problem, "answer", blob_root, asset_key)?;
+                    document = add_assets(document, problem, "answer", blob_root, asset_decryptor)?;
                 }
             }
             ExportLayout::OriginalImageFolder => {
@@ -462,7 +456,7 @@ fn add_assets(
     problem: &ExportProblem,
     role: &str,
     blob_root: &Path,
-    asset_key: &[u8; 32],
+    asset_decryptor: &dyn AssetDecryptor,
 ) -> Result<Docx, ExportError> {
     let assets = problem
         .assets
@@ -478,7 +472,7 @@ fn add_assets(
         return Ok(document.add_paragraph(Paragraph::new().add_run(Run::new().add_text(label))));
     }
     for asset in assets {
-        let bytes = read_decrypted_export_asset(blob_root, asset_key, &asset.encrypted_path)?;
+        let bytes = read_decrypted_export_asset(blob_root, asset_decryptor, &asset.encrypted_path)?;
         if bytes.len() != asset.byte_length {
             return Err(ExportError::InvalidImage);
         }
@@ -498,11 +492,11 @@ fn add_assets(
 fn validate_docx_assets(
     problems: &[ExportProblem],
     blob_root: &Path,
-    asset_key: &[u8; 32],
+    asset_decryptor: &dyn AssetDecryptor,
 ) -> Result<(), ExportError> {
     let mut total_pixels = 0_u64;
     for asset in problems.iter().flat_map(|problem| &problem.assets) {
-        let bytes = read_decrypted_export_asset(blob_root, asset_key, &asset.encrypted_path)?;
+        let bytes = read_decrypted_export_asset(blob_root, asset_decryptor, &asset.encrypted_path)?;
         if bytes.len() != asset.byte_length {
             return Err(ExportError::InvalidImage);
         }

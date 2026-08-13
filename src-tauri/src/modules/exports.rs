@@ -6,6 +6,8 @@ use specta::Type;
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::application::ports::assets::AssetDecryptor;
+
 #[path = "exports_generation.rs"]
 mod generation;
 
@@ -16,27 +18,20 @@ pub(crate) struct PreparedExport(generation::PreparedExport);
 pub(crate) fn prepare_export(
     connection: &Connection,
     blob_root: &Path,
-    asset_key: &[u8; 32],
     account_id: &str,
     profile_id: &str,
     snapshot_id: &str,
 ) -> Result<PreparedExport, ExportError> {
-    generation::prepare_export(
-        connection,
-        blob_root,
-        asset_key,
-        account_id,
-        profile_id,
-        snapshot_id,
-    )
-    .map(PreparedExport)
+    generation::prepare_export(connection, blob_root, account_id, profile_id, snapshot_id)
+        .map(PreparedExport)
 }
 
 pub(crate) fn write_prepared_export(
     prepared: PreparedExport,
     destination: &Path,
+    asset_decryptor: &dyn AssetDecryptor,
 ) -> Result<GeneratedExportSummary, ExportError> {
-    generation::write_prepared_export(prepared.0, destination)
+    generation::write_prepared_export(prepared.0, destination, asset_decryptor)
 }
 
 const TRASH_RETENTION_MS: i64 = 30 * 86_400_000;

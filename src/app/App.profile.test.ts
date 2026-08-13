@@ -216,6 +216,7 @@ describe('App profile orchestration', () => {
     expect(router.currentRoute.value.name).toBe('workspace-guard-probe')
     expect(screen.getByRole('button', { name: /当前学习档案：日常学习/ })).toBeVisible()
 
+    await waitFor(() => expect(selectContest).toBeEnabled())
     await user.click(selectContest)
     await waitFor(() => {
       expect(commandMocks.profileSelect).toHaveBeenCalledOnce()
@@ -271,6 +272,7 @@ describe('App profile orchestration', () => {
 
     await waitFor(() => expect(attempt).toHaveBeenCalledOnce())
     expect(commandMocks.profileCreate).not.toHaveBeenCalled()
+    await new Promise(resolve => window.setTimeout(resolve, 0))
     await user.click(screen.getByRole('button', { name: '模拟删除当前档案' }))
 
     await waitFor(() => expect(attempt).toHaveBeenCalledTimes(2))
@@ -577,6 +579,46 @@ describe('App profile orchestration', () => {
     expect(commandMocks.systemStatus).not.toHaveBeenCalled()
     expect(commandMocks.profileList).not.toHaveBeenCalled()
     expect(commandMocks.backupRestoreStatus).not.toHaveBeenCalled()
+  })
+
+  it('keeps the fresh-start confirmation open when the recovery command rejects the request', async () => {
+    const backendMessage = '资料库状态已经变化；没有删除任何凭据。'
+    commandMocks.libraryAccessStatus.mockResolvedValue({
+      ok: true,
+      data: {
+        state: 'recovery_required',
+        trustedWindowsAccount: true,
+        recoveryReason: 'reset_incomplete',
+      },
+    })
+    commandMocks.libraryRecoveryStartFresh.mockResolvedValue({
+      ok: false,
+      error: {
+        code: 'LIBRARY_CHANGED',
+        userMessage: backendMessage,
+        retryable: false,
+        debugId: 'changed',
+      },
+    })
+    const user = userEvent.setup()
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/')
+    await router.isReady()
+    render(App, { global: { plugins: [router], stubs: { transition: false } } })
+
+    await user.click(await screen.findByRole('button', { name: '继续完成重新开始' }))
+    expect(screen.getByRole('dialog', { name: '放弃原资料并重新开始？' })).toBeVisible()
+
+    await user.type(screen.getByRole('textbox'), '永久放弃原资料库')
+    await user.click(screen.getByRole('button', { name: '确认放弃并重新开始' }))
+
+    expect(commandMocks.libraryRecoveryStartFresh).toHaveBeenCalledWith('永久放弃原资料库')
+    const dialog = screen.getByRole('dialog', { name: '放弃原资料并重新开始？' })
+    expect(dialog.querySelector('[role="alert"]')).toHaveTextContent(backendMessage)
+    expect(dialog).toBeVisible()
+    expect(screen.queryByRole('button', { name: '训练台' })).not.toBeInTheDocument()
+    expect(commandMocks.systemStatus).not.toHaveBeenCalled()
+    expect(commandMocks.profileList).not.toHaveBeenCalled()
   })
 
   it('unmounts the entire application shell as soon as a lock begins restarting', async () => {

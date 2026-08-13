@@ -390,6 +390,11 @@ pub async fn sync_now(
         let runtime = tokio::runtime::Runtime::new().map_err(|_| "sync_runtime_failed")?;
 
         runtime.block_on(async {
+            let asset_decryptor =
+                crate::infrastructure::assets::KeyedAssetDecryptor::new(&asset_key);
+            let asset_encryptor =
+                crate::infrastructure::assets::KeyedAssetEncryptor::new(&asset_key);
+            let asset_blob_remover = crate::infrastructure::assets::FilesystemAssetBlobRemover;
             let pushed = push_once(
                 &mut connection,
                 client.as_ref(),
@@ -397,7 +402,7 @@ pub async fn sync_now(
                 &remote_user_id,
                 &access_token,
                 &blob_root,
-                &asset_key,
+                &asset_decryptor,
                 current_utc_millis(),
             )
             .await
@@ -409,7 +414,8 @@ pub async fn sync_now(
                 &remote_user_id,
                 &access_token,
                 &blob_root,
-                &asset_key,
+                &asset_encryptor,
+                &asset_blob_remover,
                 current_utc_millis(),
             )
             .await

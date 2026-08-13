@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { ShieldAlert } from '@lucide/vue'
 import { nextTick, onBeforeUnmount, onMounted, ref, useId } from 'vue'
-import type { ActionConfirmationRequest } from '../composables/useActionConfirmation'
-import { acquireDialogDocumentBoundary } from '../dialog-document-boundary'
-import { trapDialogFocus } from '../dialog-focus'
+import type { ActionConfirmationRequest } from '@/shared/ui/composables/useActionConfirmation'
+import { acquireDialogDocumentBoundary } from '@/shared/ui/dialog-document-boundary'
+import { trapDialogFocus } from '@/shared/ui/dialog-focus'
 
 defineProps<{
   request: ActionConfirmationRequest

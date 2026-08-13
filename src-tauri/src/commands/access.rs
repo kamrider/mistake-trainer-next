@@ -7,12 +7,12 @@ use uuid::Uuid;
 
 use crate::{
     application::{
-        library_inventory::{
-            LibraryArtifactState, LibraryRecoveryReason, inspect_library_artifacts,
-        },
+        library_inventory::{LibraryArtifactState, LibraryRecoveryReason},
         result::AppResult,
     },
     commands::storage::ApplicationControlRoot,
+    infrastructure::library_inventory::inspect_library_artifacts,
+    infrastructure::library_reset::reset_missing_library,
     infrastructure::runtime::{
         KeyringSecretStore, SecretStore, set_library_locked, validate_existing_library,
         validate_library_unlock_credentials,
@@ -22,7 +22,6 @@ use crate::{
         resolve_storage,
     },
     modules::capture_lan::CaptureLanManager,
-    modules::library_reset::reset_missing_library,
 };
 
 const LOCAL_LIBRARY_SERVICE: &str = "com.mistaketrainer.next.local-library";

@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const lockPath = 'src/app/LibraryLockDialog.vue'
-const confirmPath = 'src/app/components/ActionConfirmDialog.vue'
+const confirmPath = 'src/shared/ui/components/ActionConfirmDialog.vue'
 const componentPaths = [lockPath, confirmPath]
 
 function source(componentPath: string) {

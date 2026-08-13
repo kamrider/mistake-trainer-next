@@ -6,8 +6,8 @@ import type {
   CaptureRecognitionReasonCode,
   CaptureRecognitionSuggestion,
 } from '../../../shared/api/bindings'
-import { acquireDialogDocumentBoundary } from '../../../app/dialog-document-boundary'
-import { trapDialogFocus } from '../../../app/dialog-focus'
+import { acquireDialogDocumentBoundary } from '@/shared/ui/dialog-document-boundary'
+import { trapDialogFocus } from '@/shared/ui/dialog-focus'
 import {
   useCaptureRecognitionReviewSession,
   type CaptureRecognitionReviewFilter,

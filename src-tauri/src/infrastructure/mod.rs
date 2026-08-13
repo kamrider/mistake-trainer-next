@@ -2,6 +2,8 @@ pub mod assets;
 pub mod capture_recognition_worker;
 pub mod cloud_backend;
 pub mod database;
+pub mod library_inventory;
+pub mod library_reset;
 pub mod recognition_anchor_layout;
 pub mod recognition_ppocr_runtime;
 pub mod recognition_product;

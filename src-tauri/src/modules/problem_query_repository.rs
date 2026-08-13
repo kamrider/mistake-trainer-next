@@ -6,7 +6,7 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::{infrastructure::assets::decrypt_asset, modules::capture::MAX_CAPTURE_FILE_BYTES};
+use crate::{application::ports::assets::AssetDecryptor, modules::capture::MAX_CAPTURE_FILE_BYTES};
 
 use super::{
     ProblemAssetPreview, ProblemDetail, ProblemDetailQuery, ProblemListQuery, ProblemSummary,
@@ -29,15 +29,15 @@ pub(super) fn list_problem_summaries(
 pub(super) fn list_problem_summaries_with_previews(
     connection: &Connection,
     blob_root: &Path,
-    key: &[u8; 32],
+    asset_decryptor: &dyn AssetDecryptor,
     query: ProblemListQuery,
 ) -> Result<Vec<ProblemSummary>, ProblemUseCaseError> {
-    list_problem_summaries_internal(connection, Some((blob_root, key)), query)
+    list_problem_summaries_internal(connection, Some((blob_root, asset_decryptor)), query)
 }
 
 fn list_problem_summaries_internal(
     connection: &Connection,
-    preview_store: Option<(&Path, &[u8; 32])>,
+    preview_store: Option<(&Path, &dyn AssetDecryptor)>,
     query: ProblemListQuery,
 ) -> Result<Vec<ProblemSummary>, ProblemUseCaseError> {
     struct ProblemSummaryRow {
@@ -181,18 +181,23 @@ fn list_problem_summaries_internal(
         .into_iter()
         .map(|row| {
             let tags = serde_json::from_str::<Vec<String>>(&row.tags_json)?;
-            let question_preview_data_url = preview_store.and_then(|(blob_root, key)| {
-                let encrypted_path = row.question_asset_path.as_deref()?;
-                let media_type = row.question_asset_media_type.as_deref()?;
-                let encrypted = read_decrypted_asset(blob_root, key, encrypted_path).ok()?;
-                let (preview_media_type, preview_bytes) =
-                    make_preview_with_dimension(&encrypted, media_type, LIST_PREVIEW_MAX_DIMENSION)
-                        .ok()?;
-                Some(format!(
-                    "data:{preview_media_type};base64,{}",
-                    STANDARD.encode(preview_bytes)
-                ))
-            });
+            let question_preview_data_url =
+                preview_store.and_then(|(blob_root, asset_decryptor)| {
+                    let encrypted_path = row.question_asset_path.as_deref()?;
+                    let media_type = row.question_asset_media_type.as_deref()?;
+                    let encrypted =
+                        read_decrypted_asset(blob_root, asset_decryptor, encrypted_path).ok()?;
+                    let (preview_media_type, preview_bytes) = make_preview_with_dimension(
+                        &encrypted,
+                        media_type,
+                        LIST_PREVIEW_MAX_DIMENSION,
+                    )
+                    .ok()?;
+                    Some(format!(
+                        "data:{preview_media_type};base64,{}",
+                        STANDARD.encode(preview_bytes)
+                    ))
+                });
             Ok(ProblemSummary {
                 id: row.id,
                 subject: row.subject,
@@ -211,7 +216,7 @@ fn list_problem_summaries_internal(
 pub(super) fn get_problem_detail(
     connection: &Connection,
     blob_root: &Path,
-    key: &[u8; 32],
+    asset_decryptor: &dyn AssetDecryptor,
     query: ProblemDetailQuery,
 ) -> Result<ProblemDetail, ProblemUseCaseError> {
     let detail_row = connection
@@ -267,7 +272,7 @@ pub(super) fn get_problem_detail(
     detail.assets = rows
         .into_iter()
         .map(|(id, role, position, media_type, encrypted_path)| {
-            let bytes = read_decrypted_asset(blob_root, key, &encrypted_path)?;
+            let bytes = read_decrypted_asset(blob_root, asset_decryptor, &encrypted_path)?;
             let (preview_media_type, preview_bytes) = make_preview(&bytes, &media_type)?;
             Ok(ProblemAssetPreview {
                 id,
@@ -286,7 +291,7 @@ pub(super) fn get_problem_detail(
 
 fn read_decrypted_asset(
     blob_root: &Path,
-    key: &[u8; 32],
+    asset_decryptor: &dyn AssetDecryptor,
     encrypted_path: &str,
 ) -> Result<Vec<u8>, ProblemUseCaseError> {
     let relative = Path::new(encrypted_path);
@@ -304,7 +309,9 @@ fn read_decrypted_asset(
     if u64::try_from(encrypted.len()).unwrap_or(u64::MAX) > MAX_ENCRYPTED_ASSET_BYTES {
         return Err(ProblemUseCaseError::AssetTooLarge);
     }
-    decrypt_asset(&encrypted, key).map_err(ProblemUseCaseError::Crypto)
+    asset_decryptor
+        .decrypt(&encrypted)
+        .map_err(|_| ProblemUseCaseError::Crypto)
 }
 
 fn make_preview(

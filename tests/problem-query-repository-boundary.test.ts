@@ -78,7 +78,9 @@ describe('problem query repository boundary', () => {
     }
 
     expect(repository).toContain('use base64::')
-    expect(repository).toContain('decrypt_asset')
+    expect(repository).toContain('AssetDecryptor')
+    expect(repository).toContain('.decrypt(&encrypted)')
+    expect(repository).not.toContain('infrastructure::assets')
     expect(repository).toContain(".replace('%', \"\\\\%\")")
     expect(repository).toContain('FROM problems p')
     expect(repository).toContain('FROM problem_assets pa')

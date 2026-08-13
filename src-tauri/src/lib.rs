@@ -47,6 +47,7 @@ pub fn run() -> tauri::Result<()> {
         .invoke_handler(specta.invoke_handler())
         .setup(move |app| {
             let control_root = app.path().app_data_dir()?;
+            infrastructure::storage_location::prepare_control_root(&control_root)?;
             let resource_root = app.path().resource_dir()?;
             let private_recognition_temp = control_root.join("recognition-private-temp");
             if private_recognition_temp.exists()
@@ -57,6 +58,8 @@ pub fn run() -> tauri::Result<()> {
             let secrets = infrastructure::runtime::KeyringSecretStore::new(
                 "com.mistaketrainer.next.local-library",
             );
+            let automatic_backup_coordinator =
+                modules::automatic_backup::AutomaticBackupPolicyCoordinator::default();
             let access_gate =
                 match application::startup::initialize_configured_application_library_if_accessible(
                     &control_root,
@@ -83,8 +86,9 @@ pub fn run() -> tauri::Result<()> {
                         let automatic_blob_root = runtime.blob_root.clone();
                         let automatic_database_key = runtime.database_key().to_owned();
                         let automatic_account_id = runtime.account_id().to_owned();
+                        let automatic_coordinator = automatic_backup_coordinator.clone();
                         tauri::async_runtime::spawn_blocking(move || {
-                            if let Err(error) = modules::automatic_backup::run_due_automatic_backup(
+                            if let Err(error) = automatic_coordinator.run_due(
                                 &automatic_control_root,
                                 automatic_connection.as_ref(),
                                 &automatic_blob_root,
@@ -130,6 +134,7 @@ pub fn run() -> tauri::Result<()> {
                     &private_recognition_temp,
                 );
             app.manage(commands::storage::ApplicationControlRoot(control_root));
+            app.manage(automatic_backup_coordinator);
             app.manage(access_gate);
             app.manage(modules::auth_sync::AuthSyncManager::default());
             app.manage(modules::auth_sync::CloudAuthRuntime::from_build_environment());

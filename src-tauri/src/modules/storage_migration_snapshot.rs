@@ -30,23 +30,20 @@ struct AssetRecord {
 }
 
 pub(super) fn stage_library_snapshot(
+    connection: &Connection,
     source: &StorageMigrationSource,
     stage_library_root: &Path,
     stage_product_root: &Path,
     migration_id: &str,
 ) -> Result<(usize, u64), StorageMigrationError> {
-    let connection = source
-        .connection
-        .lock()
-        .map_err(|_| StorageMigrationError::Lock)?;
-    validate_account_boundary(&connection, source.account_id())?;
-    ensure_database_budget(&connection)?;
+    validate_account_boundary(connection, source.account_id())?;
+    ensure_database_budget(connection)?;
     create_database_snapshot(
-        &connection,
+        connection,
         &stage_library_root.join(DATABASE_FILE),
         source.database_key(),
     )?;
-    let assets = query_assets(&connection, source.account_id())?;
+    let assets = query_assets(connection, source.account_id())?;
     let copied_bytes = copy_referenced_assets(&source.blob_root, stage_library_root, &assets)?;
     validate_library_tree(
         stage_library_root,

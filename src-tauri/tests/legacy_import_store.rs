@@ -3,7 +3,7 @@ use std::{fs, io::Cursor};
 use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
 use mistake_trainer_next_lib::{
     infrastructure::{
-        assets::{decrypt_asset, encrypt_asset, plaintext_sha256},
+        assets::{KeyedAssetEncryptor, decrypt_asset, encrypt_asset, plaintext_sha256},
         database::{open_encrypted_database, run_migrations},
     },
     modules::legacy::{
@@ -100,7 +100,7 @@ fn import_is_atomic_encrypted_deduplicated_auditable_and_reversible() {
     let receipt = import_legacy_plan(
         &mut fixture.connection,
         &fixture.blob_root,
-        &KEY,
+        &KeyedAssetEncryptor::new(&KEY),
         ACCOUNT,
         "candidate-happy",
         plan,
@@ -182,7 +182,7 @@ fn import_is_atomic_encrypted_deduplicated_auditable_and_reversible() {
     let duplicate = import_legacy_plan(
         &mut fixture.connection,
         &fixture.blob_root,
-        &KEY,
+        &KeyedAssetEncryptor::new(&KEY),
         ACCOUNT,
         "candidate-duplicate",
         build_legacy_import_plan(fixture.source.path()).unwrap(),
@@ -241,7 +241,7 @@ fn rollback_preserves_a_changed_problem_with_its_imported_and_new_review_history
     let receipt = import_legacy_plan(
         &mut fixture.connection,
         &fixture.blob_root,
-        &KEY,
+        &KeyedAssetEncryptor::new(&KEY),
         ACCOUNT,
         "candidate-preserve",
         build_legacy_import_plan(fixture.source.path()).unwrap(),
@@ -322,7 +322,7 @@ fn failed_final_blob_move_leaves_no_database_rows_or_temporary_assets() {
     let result = import_legacy_plan(
         &mut fixture.connection,
         &fixture.blob_root,
-        &KEY,
+        &KeyedAssetEncryptor::new(&KEY),
         ACCOUNT,
         "candidate-failure",
         plan,
@@ -350,7 +350,7 @@ fn corrupt_image_aborts_without_importing_rows_or_leaving_staging_files() {
     let result = import_legacy_plan(
         &mut fixture.connection,
         &fixture.blob_root,
-        &KEY,
+        &KeyedAssetEncryptor::new(&KEY),
         ACCOUNT,
         "candidate-corrupt-image",
         plan,

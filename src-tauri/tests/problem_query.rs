@@ -2,7 +2,10 @@ use std::io::Cursor;
 
 use image::{DynamicImage, ImageBuffer, ImageFormat, Rgba};
 use mistake_trainer_next_lib::{
-    infrastructure::database::{open_encrypted_database, run_migrations},
+    infrastructure::{
+        assets::KeyedAssetDecryptor,
+        database::{open_encrypted_database, run_migrations},
+    },
     modules::{
         problems::{
             AssetRole, CaptureAsset, CreateProblem, ProblemAnswerState, ProblemListInput,
@@ -494,6 +497,8 @@ fn list_with_previews_returns_a_small_question_thumbnail() {
         open_encrypted_database(&directory.path().join("library.db"), "problem-preview-key")
             .expect("open database");
     run_migrations(&mut connection).expect("migrate database");
+    let asset_key = [61_u8; 32];
+    let asset_decryptor = KeyedAssetDecryptor::new(&asset_key);
     let profile = create_profile(
         &mut connection,
         CreateProfile {
@@ -510,7 +515,7 @@ fn list_with_previews_returns_a_small_question_thumbnail() {
     create_problem(
         &mut connection,
         &directory.path().join("assets"),
-        &[61_u8; 32],
+        &asset_key,
         CreateProblem {
             account_id: "account-1".to_owned(),
             profile_id: profile.id.clone(),
@@ -536,7 +541,7 @@ fn list_with_previews_returns_a_small_question_thumbnail() {
     let summaries = list_problem_summaries_with_previews(
         &connection,
         &directory.path().join("assets"),
-        &[61_u8; 32],
+        &asset_decryptor,
         basic_query("account-1", profile.id, ProblemStatusFilter::Active, None),
     )
     .expect("list previews");

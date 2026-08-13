@@ -10,7 +10,10 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use uuid::Uuid;
 
-use crate::infrastructure::assets::{decrypt_asset, encrypt_asset, plaintext_sha256};
+use crate::{
+    application::ports::assets::{AssetCipher, AssetDecryptor},
+    domain::assets::plaintext_sha256,
+};
 
 use super::capture_inbox_transaction_support::{
     delete_asset_row_if_orphan, invalidate_active_pairs_for_item, repack_link_positions,
@@ -109,7 +112,7 @@ pub struct CaptureCropApplyReport {
 pub fn get_capture_item_preview(
     connection: &Connection,
     blob_root: &Path,
-    key: &[u8; 32],
+    asset_decryptor: &dyn AssetDecryptor,
     account_id: &str,
     profile_id: &str,
     batch_id: &str,
@@ -127,7 +130,9 @@ pub fn get_capture_item_preview(
         .optional()?
         .ok_or(CaptureInboxError::ItemNotFound)?;
     let encrypted = read_encrypted_blob(blob_root, &encrypted_path)?;
-    let plaintext = decrypt_asset(&encrypted, key).map_err(|_| CaptureInboxError::Crypto)?;
+    let plaintext = asset_decryptor
+        .decrypt(&encrypted)
+        .map_err(|_| CaptureInboxError::Crypto)?;
     let format = image_format_for_media_type(&media_type)?;
     let image = image::load_from_memory_with_format(&plaintext, format)
         .map_err(|_| CaptureInboxError::InvalidImage)?;
@@ -149,7 +154,7 @@ pub fn get_capture_item_preview(
 pub fn get_capture_crop_source_preview(
     connection: &Connection,
     blob_root: &Path,
-    key: &[u8; 32],
+    asset_decryptor: &dyn AssetDecryptor,
     account_id: &str,
     profile_id: &str,
     batch_id: &str,
@@ -167,7 +172,8 @@ pub fn get_capture_crop_source_preview(
         )
         .optional()?
         .ok_or(CaptureInboxError::ItemNotFound)?;
-    let plaintext = decrypt_asset(&read_encrypted_blob(blob_root, &encrypted_path)?, key)
+    let plaintext = asset_decryptor
+        .decrypt(&read_encrypted_blob(blob_root, &encrypted_path)?)
         .map_err(|_| CaptureInboxError::Crypto)?;
     let image =
         image::load_from_memory_with_format(&plaintext, image_format_for_media_type(&media_type)?)
@@ -420,7 +426,7 @@ fn bilinear_sample(image: &image::RgbaImage, x: f64, y: f64) -> image::Rgba<u8> 
 pub fn apply_capture_crop(
     connection: &mut Connection,
     blob_root: &Path,
-    asset_key: &[u8; 32],
+    asset_cipher: &dyn AssetCipher,
     input: ApplyCaptureCrop,
 ) -> Result<CaptureCropApplyReport, CaptureInboxError> {
     if input.recipes.is_empty() || input.recipes.len() > MAX_CROP_REGIONS {
@@ -457,11 +463,9 @@ pub fn apply_capture_crop(
         )
         .optional()?
         .ok_or(CaptureInboxError::ItemNotFound)?;
-    let plaintext = decrypt_asset(
-        &read_encrypted_blob(blob_root, &source.encrypted_path)?,
-        asset_key,
-    )
-    .map_err(|_| CaptureInboxError::Crypto)?;
+    let plaintext = asset_cipher
+        .decrypt(&read_encrypted_blob(blob_root, &source.encrypted_path)?)
+        .map_err(|_| CaptureInboxError::Crypto)?;
     let source_image = image::load_from_memory_with_format(
         &plaintext,
         image_format_for_media_type(&source.media_type)?,
@@ -519,8 +523,9 @@ pub fn apply_capture_crop(
                 .join(format!("{asset_id}.mtb"));
             let staged_path = staging_root.join(format!("{asset_id}.crop.tmp"));
             let final_path = blob_root.join(&relative_path);
-            let encrypted =
-                encrypt_asset(&crop.bytes, asset_key).map_err(|_| CaptureInboxError::Crypto)?;
+            let encrypted = asset_cipher
+                .encrypt(&crop.bytes)
+                .map_err(|_| CaptureInboxError::Crypto)?;
             if let Err(error) = std::fs::write(&staged_path, encrypted) {
                 let _ = std::fs::remove_file(&staged_path);
                 return Err(error.into());

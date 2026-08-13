@@ -6,8 +6,9 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
+    application::ports::assets::{AssetBlobRemover, AssetEncryptor},
     application::ports::sync::{CloudError, CloudPullTransport, DownloadedRemoteAsset},
-    infrastructure::assets::{encrypt_asset, plaintext_sha256},
+    domain::assets::plaintext_sha256,
     modules::{
         review::ReviewUseCaseError,
         sync_conflicts::SyncConflictError,
@@ -91,7 +92,8 @@ pub async fn pull_until_current<T: CloudPullTransport>(
     remote_user_id: &str,
     access_token: &str,
     blob_root: &Path,
-    asset_key: &[u8; 32],
+    asset_encryptor: &dyn AssetEncryptor,
+    asset_blob_remover: &dyn AssetBlobRemover,
     now_utc_ms: i64,
 ) -> Result<PullReport, SyncPullError> {
     validate_uuid(account_id)?;
@@ -124,7 +126,7 @@ pub async fn pull_until_current<T: CloudPullTransport>(
                     transport,
                     access_token,
                     blob_root,
-                    asset_key,
+                    asset_encryptor,
                     asset,
                     &format!("{page_cursor}-{}", report.applied_count),
                 )
@@ -144,6 +146,7 @@ pub async fn pull_until_current<T: CloudPullTransport>(
             &decoded,
             &mut staged_assets,
             blob_root,
+            asset_blob_remover,
             page_cursor,
             now_utc_ms,
         ) {
@@ -173,7 +176,7 @@ async fn stage_remote_asset<T: CloudPullTransport>(
     transport: &T,
     access_token: &str,
     blob_root: &Path,
-    asset_key: &[u8; 32],
+    asset_encryptor: &dyn AssetEncryptor,
     asset: &WireAsset,
     page_id: &str,
 ) -> Result<StagedAsset, SyncPullError> {
@@ -181,8 +184,9 @@ async fn stage_remote_asset<T: CloudPullTransport>(
         .download_object(access_token, &asset.storage_object)
         .await?;
     validate_download(asset, &downloaded)?;
-    let encrypted =
-        encrypt_asset(&downloaded.bytes, asset_key).map_err(|_| SyncPullError::Encryption)?;
+    let encrypted = asset_encryptor
+        .encrypt(&downloaded.bytes)
+        .map_err(|_| SyncPullError::Encryption)?;
     stage_encrypted_asset(blob_root, asset, page_id, &encrypted)
 }
 

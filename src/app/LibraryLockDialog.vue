@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { CloudOff, DatabaseZap, LockKeyhole, RadioTower, RefreshCw, ShieldCheck, X } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { acquireDialogDocumentBoundary } from './dialog-document-boundary'
-import { trapDialogFocus } from './dialog-focus'
+import { acquireDialogDocumentBoundary } from '@/shared/ui/dialog-document-boundary'
+import { trapDialogFocus } from '@/shared/ui/dialog-focus'
 
 const props = defineProps<{
   mode: 'lock' | 'sign-out'
