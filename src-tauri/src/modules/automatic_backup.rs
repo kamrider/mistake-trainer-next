@@ -195,15 +195,50 @@ fn write_policy(
             if !metadata.is_file() || metadata.file_type().is_symlink() {
                 return Err(BackupError::InvalidPackage);
             }
-            fs::remove_file(&target)?;
         }
-        fs::rename(&temporary, &target)?;
+        replace_file_atomically(&temporary, &target)?;
         Ok(())
     })();
     if result.is_err() && temporary.parent() == Some(control_root) {
         let _ = fs::remove_file(temporary);
     }
     result
+}
+
+#[cfg(windows)]
+fn replace_file_atomically(source: &Path, target: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt as _;
+
+    use windows::{
+        Win32::Storage::FileSystem::{
+            MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+        },
+        core::PCWSTR,
+    };
+
+    let source = source
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let target = target
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    unsafe {
+        MoveFileExW(
+            PCWSTR::from_raw(source.as_ptr()),
+            PCWSTR::from_raw(target.as_ptr()),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+        .map_err(|error| std::io::Error::other(error.to_string()))
+    }
+}
+
+#[cfg(not(windows))]
+fn replace_file_atomically(source: &Path, target: &Path) -> std::io::Result<()> {
+    fs::rename(source, target)
 }
 
 fn prune_owned_packages(destination: &Path, retention_count: u32) -> Result<(), BackupError> {
@@ -365,6 +400,20 @@ mod tests {
                 .unwrap()
                 .last_success_at_utc_ms,
             None
+        );
+    }
+
+    #[test]
+    fn failed_policy_replacement_preserves_the_previous_policy() {
+        let root = tempfile::tempdir().expect("policy root");
+        let target = root.path().join(POLICY_FILE);
+        let missing_source = root.path().join("missing-policy.tmp");
+        fs::write(&target, b"previous policy").expect("seed policy");
+
+        assert!(replace_file_atomically(&missing_source, &target).is_err());
+        assert_eq!(
+            fs::read(&target).expect("previous policy remains"),
+            b"previous policy"
         );
     }
 }

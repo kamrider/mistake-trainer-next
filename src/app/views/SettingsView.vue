@@ -52,6 +52,7 @@ const {
   portableReceipt,
   candidate: restoreCandidate,
   message: backupMessage,
+  clearMessage: clearBackupMessage,
   createBackup: runCreateBackup,
   createPortableBackup: runCreatePortableBackup,
   clearPortableReceipt,
@@ -465,6 +466,7 @@ async function loadAutomaticBackupStatus() {
 async function configureAutomaticBackup(intervalDays: number, retentionCount: number) {
   if (automaticBackupBusy.value) return
   automaticBackupBusy.value = true
+  clearBackupMessage()
   try {
     const invocation = await commands.backupAutomaticConfigure(intervalDays, retentionCount)
     if (invocation.status === 'error') throw new Error('automatic backup command rejected')
@@ -483,6 +485,7 @@ async function configureAutomaticBackup(intervalDays: number, retentionCount: nu
 async function disableAutomaticBackup() {
   if (automaticBackupBusy.value) return
   automaticBackupBusy.value = true
+  clearBackupMessage()
   try {
     const result = normalizeAppResult(await commands.backupAutomaticDisable())
     if (!result.ok) backupMessage.value = result.error.userMessage

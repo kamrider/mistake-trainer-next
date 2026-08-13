@@ -24,4 +24,25 @@ describe('loadSystemStatus', () => {
     })
     expect(invoke).toHaveBeenCalledOnce()
   })
+
+  it('normalizes a generated command failure without exposing transport details', async () => {
+    const invoke = vi.fn().mockResolvedValue({
+      error: {
+        code: 'system_status_failed',
+        userMessage: '资料库状态暂时无法读取。',
+        retryable: true,
+        diagnosticId: 'status-test',
+      },
+    })
+
+    await expect(loadSystemStatus(() => true, invoke)).resolves.toEqual({
+      ok: false,
+      error: {
+        code: 'system_status_failed',
+        userMessage: '资料库状态暂时无法读取。',
+        retryable: true,
+        diagnosticId: 'status-test',
+      },
+    })
+  })
 })

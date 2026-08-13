@@ -1206,6 +1206,37 @@ describe('SettingsView', () => {
     expect(await screen.findByText('正在准备重启…')).toBeVisible()
   })
 
+  it('clears a stale automatic-backup error after a successful retry', async () => {
+    api.settingsOverview.mockResolvedValue({ ok: true, data: {
+      activeProblemCount: 0, archivedProblemCount: 0, trashedProblemCount: 0,
+      pendingOperationCount: 0, failedOperationCount: 0, unresolvedConflictCount: 0,
+      localEncryptionReady: true, cloudSyncConfigured: false,
+    } })
+    api.backupAutomaticConfigure
+      .mockResolvedValueOnce({ status: 'ok', data: { ok: false, error: {
+        code: 'backup_automatic_configure_failed',
+        userMessage: '自动备份目录不可写。',
+        retryable: true,
+        diagnosticId: 'automatic-backup-test',
+      } } })
+      .mockResolvedValueOnce({ status: 'ok', data: { ok: true, data: {
+        enabled: true,
+        intervalDays: 7,
+        retentionCount: 5,
+        destinationLabel: 'StudyDisk / Mistake Trainer Automatic Backups',
+        lastSuccessAtUtcMs: null,
+      } } })
+    render(SettingsView)
+
+    await userEvent.click(await screen.findByRole('button', { name: '选择目录并启用' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('自动备份目录不可写。')
+
+    await userEvent.click(screen.getByRole('button', { name: '选择目录并启用' }))
+
+    expect(await screen.findByText(/已启用 · StudyDisk/)).toBeVisible()
+    expect(screen.queryByText('自动备份目录不可写。')).not.toBeInTheDocument()
+  })
+
   it('admits only one native backup operation before disabled state renders', async () => {
     const creation = deferred()
     api.backupCreate.mockReturnValue(creation.promise)

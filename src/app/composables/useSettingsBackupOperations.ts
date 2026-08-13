@@ -164,6 +164,7 @@ export function useSettingsBackupOperations(operations: SettingsBackupOperations
     candidate,
     portableReceipt,
     message,
+    clearMessage: () => { message.value = '' },
     createBackup,
     createPortableBackup,
     clearPortableReceipt: () => { portableReceipt.value = undefined },
