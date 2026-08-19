@@ -131,6 +131,7 @@ pub struct ProblemListInput {
     pub tags: Vec<String>,
     pub review_state: ProblemReviewState,
     pub answer_state: ProblemAnswerState,
+    pub cursor: Option<String>,
 }
 
 impl ProblemListInput {
@@ -147,6 +148,13 @@ impl ProblemListInput {
         };
         self.subjects = validate_query_values(self.subjects)?;
         self.tags = validate_query_values(self.tags)?;
+        if self
+            .cursor
+            .as_ref()
+            .is_some_and(|cursor| cursor.len() > 512)
+        {
+            return Err(ProblemUseCaseError::InvalidQuery);
+        }
         Ok(self)
     }
 }
@@ -183,6 +191,20 @@ pub struct ProblemListQuery {
     pub input: ProblemListInput,
 }
 
+#[derive(Clone, Debug)]
+pub struct ProblemFilterOptionsQuery {
+    pub account_id: String,
+    pub profile_id: String,
+    pub status: ProblemStatusFilter,
+}
+
+#[derive(Clone, Debug, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ProblemFilterOptions {
+    pub subjects: Vec<String>,
+    pub tags: Vec<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct ProblemSummary {
@@ -195,6 +217,21 @@ pub struct ProblemSummary {
     pub answer_asset_count: i32,
     pub question_preview_data_url: Option<String>,
     pub updated_at_utc_ms: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ProblemListPage {
+    pub items: Vec<ProblemSummary>,
+    pub next_cursor: Option<String>,
+}
+
+impl std::ops::Deref for ProblemListPage {
+    type Target = [ProblemSummary];
+
+    fn deref(&self) -> &Self::Target {
+        &self.items
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -291,7 +328,7 @@ pub enum ProblemUseCaseError {
 pub fn list_problem_summaries(
     connection: &Connection,
     query: ProblemListQuery,
-) -> Result<Vec<ProblemSummary>, ProblemUseCaseError> {
+) -> Result<ProblemListPage, ProblemUseCaseError> {
     query_repository::list_problem_summaries(connection, query)
 }
 
@@ -300,13 +337,20 @@ pub fn list_problem_summaries_with_previews(
     blob_root: &Path,
     asset_decryptor: &dyn AssetDecryptor,
     query: ProblemListQuery,
-) -> Result<Vec<ProblemSummary>, ProblemUseCaseError> {
+) -> Result<ProblemListPage, ProblemUseCaseError> {
     query_repository::list_problem_summaries_with_previews(
         connection,
         blob_root,
         asset_decryptor,
         query,
     )
+}
+
+pub fn list_problem_filter_options(
+    connection: &Connection,
+    query: ProblemFilterOptionsQuery,
+) -> Result<ProblemFilterOptions, ProblemUseCaseError> {
+    query_repository::list_problem_filter_options(connection, query)
 }
 
 pub fn get_problem_detail(

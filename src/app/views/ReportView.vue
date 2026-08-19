@@ -177,7 +177,7 @@ function loadDevelopmentPreview() {
 }
 
 function dayLabel(value: number | null) {
-  return value == null ? '—' : new Date(value).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric', timeZone: 'UTC' })
+  return value == null ? '—' : new Date(value).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
 }
 
 async function load() {
@@ -301,7 +301,7 @@ onMounted(load)
           <Flame
             :size="14"
             aria-hidden="true"
-          />按 UTC 训练日计算
+          />按本地训练日计算
         </p>
       </article>
       <article>

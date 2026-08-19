@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Mutex};
 
 use mistake_trainer_next_lib::{
     commands::{
-        library::{library_context_for, problem_list_for},
+        library::{library_context_for, problem_filter_options_for, problem_list_for},
         review::review_current_problem_for,
     },
     infrastructure::runtime::{SecretStore, initialize_local_library},
@@ -129,17 +129,26 @@ fn commands_use_runtime_identity_instead_of_accepting_account_or_profile_ids() {
             tags: vec![],
             review_state: ProblemReviewState::Any,
             answer_state: ProblemAnswerState::Any,
+            cursor: None,
         },
         300,
     ))
     .expect("problem list json");
+    let filter_options = serde_json::to_value(problem_filter_options_for(
+        &runtime,
+        ProblemStatusFilter::Active,
+    ))
+    .expect("filter options json");
 
     assert_eq!(context["ok"], true);
     assert_eq!(context["data"]["profileName"], "本机学习档案");
     assert_eq!(context["data"]["storage"], "ready");
     assert_eq!(problems["ok"], true);
-    assert_eq!(problems["data"][0]["subject"], "数学");
-    assert_eq!(problems["data"][0]["questionAssetCount"], 1);
+    assert_eq!(problems["data"]["items"][0]["subject"], "数学");
+    assert_eq!(problems["data"]["items"][0]["questionAssetCount"], 1);
+    assert_eq!(problems["data"]["nextCursor"], serde_json::Value::Null);
+    assert_eq!(filter_options["ok"], true);
+    assert_eq!(filter_options["data"]["subjects"][0], "数学");
 }
 
 #[test]
@@ -157,6 +166,7 @@ fn problem_list_reports_invalid_filters_as_non_retryable() {
             tags: vec![],
             review_state: ProblemReviewState::Any,
             answer_state: ProblemAnswerState::Any,
+            cursor: None,
         },
         300,
     ))

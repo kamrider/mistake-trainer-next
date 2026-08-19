@@ -103,6 +103,8 @@ describe('ReportView', () => {
     expect(screen.getByRole('region', { name: '保存配置并生成学习材料' })).toHaveAttribute('id', 'export-center')
     expect(screen.getByRole('complementary', { name: '先保存方案，再生成文件' })).toBeVisible()
     expect(await screen.findByText('75')).toBeVisible()
+    expect(screen.getByText('按本地训练日计算')).toBeVisible()
+    expect(screen.queryByText('按 UTC 训练日计算')).not.toBeInTheDocument()
     expect(screen.getAllByText('数学').length).toBeGreaterThanOrEqual(1)
     const title = screen.getByRole('textbox', { name: '快照名称' })
     await user.clear(title)

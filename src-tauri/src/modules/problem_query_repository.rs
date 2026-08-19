@@ -3,13 +3,17 @@ use std::{
     path::{Component, Path},
 };
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use base64::{
+    Engine as _,
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::{application::ports::assets::AssetDecryptor, modules::capture::MAX_CAPTURE_FILE_BYTES};
 
 use super::{
-    ProblemAssetPreview, ProblemDetail, ProblemDetailQuery, ProblemListQuery, ProblemSummary,
+    ProblemAssetPreview, ProblemDetail, ProblemDetailQuery, ProblemFilterOptions,
+    ProblemFilterOptionsQuery, ProblemListPage, ProblemListQuery, ProblemSummary,
     ProblemUseCaseError,
 };
 
@@ -18,11 +22,12 @@ const PREVIEW_MAX_DIMENSION: u32 = 1_600;
 const LIST_PREVIEW_MAX_DIMENSION: u32 = 480;
 const MAX_SOURCE_DIMENSION: u32 = 12_000;
 const MAX_SOURCE_PIXELS: u64 = 80_000_000;
+pub const PROBLEM_LIST_PAGE_SIZE: usize = 40;
 
 pub(super) fn list_problem_summaries(
     connection: &Connection,
     query: ProblemListQuery,
-) -> Result<Vec<ProblemSummary>, ProblemUseCaseError> {
+) -> Result<ProblemListPage, ProblemUseCaseError> {
     list_problem_summaries_internal(connection, None, query)
 }
 
@@ -31,15 +36,51 @@ pub(super) fn list_problem_summaries_with_previews(
     blob_root: &Path,
     asset_decryptor: &dyn AssetDecryptor,
     query: ProblemListQuery,
-) -> Result<Vec<ProblemSummary>, ProblemUseCaseError> {
+) -> Result<ProblemListPage, ProblemUseCaseError> {
     list_problem_summaries_internal(connection, Some((blob_root, asset_decryptor)), query)
+}
+
+pub(super) fn list_problem_filter_options(
+    connection: &Connection,
+    query: ProblemFilterOptionsQuery,
+) -> Result<ProblemFilterOptions, ProblemUseCaseError> {
+    let mut subject_statement = connection.prepare(
+        "SELECT DISTINCT trim(subject) AS subject_name
+         FROM problems
+         WHERE account_id = ?1 AND profile_id = ?2 AND status = ?3
+           AND trim(subject) != ''
+         ORDER BY subject_name COLLATE NOCASE, subject_name",
+    )?;
+    let subjects = subject_statement
+        .query_map(
+            params![query.account_id, query.profile_id, query.status.as_str()],
+            |row| row.get::<_, String>(0),
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut tag_statement = connection.prepare(
+        "SELECT DISTINCT trim(CAST(tag.value AS TEXT)) AS tag_name
+         FROM problems p
+         JOIN json_each(p.tags_json) tag
+         WHERE p.account_id = ?1 AND p.profile_id = ?2 AND p.status = ?3
+           AND trim(CAST(tag.value AS TEXT)) != ''
+         ORDER BY tag_name COLLATE NOCASE, tag_name",
+    )?;
+    let tags = tag_statement
+        .query_map(
+            params![query.account_id, query.profile_id, query.status.as_str()],
+            |row| row.get::<_, String>(0),
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(ProblemFilterOptions { subjects, tags })
 }
 
 fn list_problem_summaries_internal(
     connection: &Connection,
     preview_store: Option<(&Path, &dyn AssetDecryptor)>,
     query: ProblemListQuery,
-) -> Result<Vec<ProblemSummary>, ProblemUseCaseError> {
+) -> Result<ProblemListPage, ProblemUseCaseError> {
     struct ProblemSummaryRow {
         id: String,
         subject: String,
@@ -48,7 +89,7 @@ fn list_problem_summaries_internal(
         status: String,
         question_asset_count: i32,
         answer_asset_count: i32,
-        updated_at_utc_ms: f64,
+        updated_at_utc_ms: i64,
         question_asset_path: Option<String>,
         question_asset_media_type: Option<String>,
     }
@@ -56,6 +97,11 @@ fn list_problem_summaries_internal(
     let profile_id = query.profile_id;
     let now_utc_ms = query.now_utc_ms;
     let input = query.input.validated()?;
+    let cursor = input
+        .cursor
+        .as_deref()
+        .map(decode_list_cursor)
+        .transpose()?;
     let search = input
         .search
         .unwrap_or_default()
@@ -145,8 +191,11 @@ fn list_problem_summaries_internal(
                     WHERE answer_asset.problem_id = p.id AND answer_asset.role = 'answer'
                 ))
            )
+           AND (?11 IS NULL OR p.updated_at_utc_ms < ?11
+                OR (p.updated_at_utc_ms = ?11 AND p.id < ?12))
          GROUP BY p.id
-         ORDER BY p.updated_at_utc_ms DESC, p.id DESC",
+         ORDER BY p.updated_at_utc_ms DESC, p.id DESC
+         LIMIT ?13",
     )?;
     let rows = statement.query_map(
         params![
@@ -160,6 +209,9 @@ fn list_problem_summaries_internal(
             input.answer_state.as_str(),
             now_utc_ms,
             recently_forgotten_after_utc_ms,
+            cursor.as_ref().map(|cursor| cursor.0),
+            cursor.as_ref().map(|cursor| cursor.1.as_str()),
+            i64::try_from(PROBLEM_LIST_PAGE_SIZE + 1).expect("page size fits in i64"),
         ],
         |row| {
             Ok(ProblemSummaryRow {
@@ -177,7 +229,17 @@ fn list_problem_summaries_internal(
         },
     )?;
 
-    rows.collect::<Result<Vec<_>, _>>()?
+    let mut rows = rows.collect::<Result<Vec<_>, _>>()?;
+    let has_next_page = rows.len() > PROBLEM_LIST_PAGE_SIZE;
+    rows.truncate(PROBLEM_LIST_PAGE_SIZE);
+    let next_cursor = if has_next_page {
+        rows.last()
+            .map(|row| encode_list_cursor(row.updated_at_utc_ms, &row.id))
+            .transpose()?
+    } else {
+        None
+    };
+    let items = rows
         .into_iter()
         .map(|row| {
             let tags = serde_json::from_str::<Vec<String>>(&row.tags_json)?;
@@ -207,10 +269,30 @@ fn list_problem_summaries_internal(
                 question_asset_count: row.question_asset_count,
                 answer_asset_count: row.answer_asset_count,
                 question_preview_data_url,
-                updated_at_utc_ms: row.updated_at_utc_ms,
+                updated_at_utc_ms: row.updated_at_utc_ms as f64,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, ProblemUseCaseError>>()?;
+    Ok(ProblemListPage { items, next_cursor })
+}
+
+fn encode_list_cursor(updated_at_utc_ms: i64, id: &str) -> Result<String, ProblemUseCaseError> {
+    Ok(URL_SAFE_NO_PAD.encode(serde_json::to_vec(&(updated_at_utc_ms, id))?))
+}
+
+fn decode_list_cursor(cursor: &str) -> Result<(i64, String), ProblemUseCaseError> {
+    let bytes = URL_SAFE_NO_PAD
+        .decode(cursor)
+        .map_err(|_| ProblemUseCaseError::InvalidQuery)?;
+    if bytes.len() > 256 {
+        return Err(ProblemUseCaseError::InvalidQuery);
+    }
+    let (updated_at_utc_ms, id): (i64, String) =
+        serde_json::from_slice(&bytes).map_err(|_| ProblemUseCaseError::InvalidQuery)?;
+    if id.is_empty() || id.len() > 128 {
+        return Err(ProblemUseCaseError::InvalidQuery);
+    }
+    Ok((updated_at_utc_ms, id))
 }
 
 pub(super) fn get_problem_detail(

@@ -90,6 +90,161 @@ fn report_and_settings_are_profile_scoped_and_derived_from_real_events() {
 }
 
 #[test]
+fn report_uses_local_calendar_days_for_activity_and_streaks() {
+    const DAY_MS: i64 = 86_400_000;
+    const HOUR_MS: i64 = 3_600_000;
+    const MINUTE_MS: i64 = 60_000;
+
+    let directory = tempdir().unwrap();
+    let mut connection =
+        open_encrypted_database(&directory.path().join("library.db"), "local-day-key").unwrap();
+    run_migrations(&mut connection).unwrap();
+    let profile = create_profile(
+        &mut connection,
+        CreateProfile {
+            account_id: "account-1".to_owned(),
+            name: "小树".to_owned(),
+            now_utc_ms: 10,
+        },
+    )
+    .unwrap();
+    let problem = create_problem(
+        &mut connection,
+        &directory.path().join("assets"),
+        &[9_u8; 32],
+        CreateProblem {
+            account_id: "account-1".to_owned(),
+            profile_id: profile.id.clone(),
+            subject: "数学".to_owned(),
+            note: String::new(),
+            assets: vec![CaptureAsset {
+                role: AssetRole::Question,
+                media_type: "image/png".to_owned(),
+                bytes: b"local-day-question".to_vec(),
+            }],
+            now_utc_ms: 20,
+        },
+    )
+    .unwrap();
+
+    // UTC-08:00: both events are on the same UTC date, but they sit on
+    // opposite sides of local midnight and therefore form a two-day streak.
+    let offset_minutes = -8 * 60;
+    let now_utc_ms = 2 * DAY_MS + 9 * HOUR_MS;
+    for (id, occurred_at_utc_ms) in [
+        ("local-today", now_utc_ms - 30 * MINUTE_MS),
+        ("local-yesterday", now_utc_ms - 90 * MINUTE_MS),
+    ] {
+        connection
+            .execute(
+                "INSERT INTO review_events(id, account_id, profile_id, problem_id, device_id, rating, duration_ms, occurred_at_utc_ms, algorithm_version, parameter_version)
+                 VALUES(?1, 'account-1', ?2, ?3, 'device', 'good', 1000, ?4, 'fsrs-6', 'default')",
+                params![id, profile.id, problem.id, occurred_at_utc_ms],
+            )
+            .unwrap();
+    }
+
+    let report = report_summary(
+        &connection,
+        "account-1",
+        &profile.id,
+        now_utc_ms,
+        offset_minutes,
+    )
+    .unwrap();
+
+    assert_eq!(report.current_streak_days, 2);
+    assert_eq!(
+        report
+            .daily_activity
+            .iter()
+            .rev()
+            .take(2)
+            .map(|day| (day.day_start_utc_ms, day.review_count))
+            .collect::<Vec<_>>(),
+        vec![
+            ((2 * DAY_MS + 8 * HOUR_MS) as f64, 1),
+            ((DAY_MS + 8 * HOUR_MS) as f64, 1),
+        ]
+    );
+}
+
+#[test]
+fn report_and_dashboard_share_the_full_positive_offset_streak() {
+    const DAY_MS: i64 = 86_400_000;
+    const HOUR_MS: i64 = 3_600_000;
+    const MINUTE_MS: i64 = 60_000;
+
+    let directory = tempdir().unwrap();
+    let mut connection =
+        open_encrypted_database(&directory.path().join("library.db"), "long-streak-key").unwrap();
+    run_migrations(&mut connection).unwrap();
+    let profile = create_profile(
+        &mut connection,
+        CreateProfile {
+            account_id: "account-1".to_owned(),
+            name: "小树".to_owned(),
+            now_utc_ms: 10,
+        },
+    )
+    .unwrap();
+    let problem = create_problem(
+        &mut connection,
+        &directory.path().join("assets"),
+        &[9_u8; 32],
+        CreateProblem {
+            account_id: "account-1".to_owned(),
+            profile_id: profile.id.clone(),
+            subject: "数学".to_owned(),
+            note: String::new(),
+            assets: vec![CaptureAsset {
+                role: AssetRole::Question,
+                media_type: "image/png".to_owned(),
+                bytes: b"long-streak-question".to_vec(),
+            }],
+            now_utc_ms: 20,
+        },
+    )
+    .unwrap();
+
+    let offset_minutes = 5 * 60 + 30;
+    let offset_ms = i64::from(offset_minutes) * MINUTE_MS;
+    let today_bucket = 40_i64;
+    let now_utc_ms = today_bucket * DAY_MS - offset_ms + 12 * HOUR_MS;
+    for day_index in 0..16_i64 {
+        let occurred_at_utc_ms = (today_bucket - day_index) * DAY_MS - offset_ms + 30 * MINUTE_MS;
+        connection
+            .execute(
+                "INSERT INTO review_events(id, account_id, profile_id, problem_id, device_id, rating, duration_ms, occurred_at_utc_ms, algorithm_version, parameter_version)
+                 VALUES(?1, 'account-1', ?2, ?3, 'device', 'good', 1000, ?4, 'fsrs-6', 'default')",
+                params![format!("long-streak-{day_index}"), profile.id, problem.id, occurred_at_utc_ms],
+            )
+            .unwrap();
+    }
+
+    let report = report_summary(
+        &connection,
+        "account-1",
+        &profile.id,
+        now_utc_ms,
+        offset_minutes,
+    )
+    .unwrap();
+    let dashboard = dashboard_overview(
+        &connection,
+        "account-1",
+        &profile.id,
+        now_utc_ms,
+        offset_minutes,
+    )
+    .unwrap();
+
+    assert_eq!(report.daily_activity.len(), 14);
+    assert_eq!(report.current_streak_days, 16);
+    assert_eq!(dashboard.current_streak_days, 16);
+}
+
+#[test]
 fn dashboard_is_profile_scoped_uses_local_days_and_real_capture_backlog() {
     const DAY_MS: i64 = 86_400_000;
     const HOUR_MS: i64 = 3_600_000;

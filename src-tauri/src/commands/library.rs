@@ -11,10 +11,10 @@ use crate::{
             ProblemBulkMetadata, ProblemBulkMetadataReport, update_problem_bulk_metadata,
         },
         problems::{
-            ChangeProblemStatus, ProblemDetail, ProblemDetailQuery, ProblemListInput,
-            ProblemListQuery, ProblemStatusFilter, ProblemSummary, UpdateProblem,
-            change_problem_status, get_problem_detail, list_problem_summaries_with_previews,
-            update_problem,
+            ChangeProblemStatus, ProblemDetail, ProblemDetailQuery, ProblemFilterOptions,
+            ProblemFilterOptionsQuery, ProblemListInput, ProblemListPage, ProblemListQuery,
+            ProblemStatusFilter, UpdateProblem, change_problem_status, get_problem_detail,
+            list_problem_filter_options, list_problem_summaries_with_previews, update_problem,
         },
     },
 };
@@ -66,7 +66,7 @@ pub fn problem_list_for(
     runtime: &LibraryRuntime,
     input: ProblemListInput,
     now_utc_ms: i64,
-) -> AppResult<Vec<ProblemSummary>> {
+) -> AppResult<ProblemListPage> {
     let profile = runtime.active_profile();
     let connection = match runtime.connection.lock() {
         Ok(connection) => connection,
@@ -91,6 +91,28 @@ pub fn problem_list_for(
             Uuid::now_v7().to_string(),
         ),
         Err(_) => internal_library_error("problem_list_failed"),
+    }
+}
+
+pub fn problem_filter_options_for(
+    runtime: &LibraryRuntime,
+    status: ProblemStatusFilter,
+) -> AppResult<ProblemFilterOptions> {
+    let profile = runtime.active_profile();
+    let connection = match runtime.connection.lock() {
+        Ok(connection) => connection,
+        Err(_) => return internal_library_error("library_lock_poisoned"),
+    };
+    match list_problem_filter_options(
+        &connection,
+        ProblemFilterOptionsQuery {
+            account_id: runtime.account_id().to_owned(),
+            profile_id: profile.id,
+            status,
+        },
+    ) {
+        Ok(options) => AppResult::success(options),
+        Err(_) => internal_library_error("problem_filter_options_failed"),
     }
 }
 
@@ -241,8 +263,17 @@ pub fn library_context(state: State<'_, LibraryRuntime>) -> AppResult<LibraryCon
 pub fn problem_list(
     state: State<'_, LibraryRuntime>,
     input: ProblemListInput,
-) -> AppResult<Vec<ProblemSummary>> {
+) -> AppResult<ProblemListPage> {
     problem_list_for(&state, input, current_utc_millis())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn problem_filter_options(
+    state: State<'_, LibraryRuntime>,
+    status: ProblemStatusFilter,
+) -> AppResult<ProblemFilterOptions> {
+    problem_filter_options_for(&state, status)
 }
 
 #[tauri::command]

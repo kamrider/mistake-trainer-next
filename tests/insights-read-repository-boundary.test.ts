@@ -52,7 +52,7 @@ describe('insights read repository boundary', () => {
       'const DAY_MS',
       'const REPORT_DAYS',
       'fn scalar(',
-      'fn current_streak(',
+      'fn review_day_buckets(',
       'fn current_streak_from_buckets(',
       'fn bounded_i32(',
       'SELECT name FROM learner_profiles',
