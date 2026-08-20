@@ -2907,7 +2907,7 @@ dependencies = [
  "docx-rs",
  "fsrs",
  "futures-util",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "if-addrs",
  "image",
  "keyring",
