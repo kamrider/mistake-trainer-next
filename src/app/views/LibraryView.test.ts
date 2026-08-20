@@ -9,9 +9,11 @@ import {
   workspaceTransitionGuardKey,
 } from '../workspace-transition-guard'
 import LibraryView from './LibraryView.vue'
+import type { ProblemSummary } from '../../shared/api/bindings'
 
 const api = vi.hoisted(() => ({
   libraryContext: vi.fn(),
+  problemFilterOptions: vi.fn(),
   problemList: vi.fn(),
   problemDetail: vi.fn(),
   problemChangeStatus: vi.fn(),
@@ -24,13 +26,15 @@ const api = vi.hoisted(() => ({
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => true }))
 vi.mock('../../shared/api/bindings', () => ({ commands: api }))
 
-const problems = [
+const problems: ProblemSummary[] = [
   {
     id: 'problem-1', subject: '数学', note: '先看定义域。', status: 'active',
+    tags: [],
     questionAssetCount: 1, answerAssetCount: 1, questionPreviewDataUrl: null, updatedAtUtcMs: 1,
   },
   {
     id: 'problem-2', subject: '物理', note: '画出受力图。', status: 'active',
+    tags: [],
     questionAssetCount: 1, answerAssetCount: 1, questionPreviewDataUrl: null, updatedAtUtcMs: 2,
   },
 ]
@@ -42,6 +46,16 @@ const syncController = {
   run: vi.fn(),
   scheduleMutation: vi.fn(),
   dispose: vi.fn(),
+}
+
+function problemPage(items: ProblemSummary[] = problems, nextCursor: string | null = null) {
+  return { items, nextCursor }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(finish => { resolve = finish })
+  return { promise, resolve }
 }
 
 async function renderView() {
@@ -96,8 +110,15 @@ async function renderGuardedRoutedView() {
 describe('LibraryView manual review deck', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    api.libraryContext.mockResolvedValue({ ok: true, data: { profileName: '本机学习档案' } })
-    api.problemList.mockResolvedValue({ ok: true, data: problems })
+    api.libraryContext.mockResolvedValue({
+      ok: true,
+      data: { profileId: 'profile-1', profileName: '本机学习档案', storage: 'ready' },
+    })
+    api.problemFilterOptions.mockResolvedValue({
+      ok: true,
+      data: { subjects: ['数学', '物理'], tags: [] },
+    })
+    api.problemList.mockResolvedValue({ ok: true, data: problemPage() })
     api.reviewManualStart.mockResolvedValue({
       ok: true,
       data: {
@@ -327,8 +348,9 @@ describe('LibraryView manual review deck', () => {
     await waitFor(() => expect(api.problemList).toHaveBeenCalledTimes(2))
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: '正在移入回收站…' })).not.toBeInTheDocument())
+    await waitFor(async () =>
+      expect(await workspaceTransitionGuard.attempt()).toBe(true))
     expect(screen.queryByText('题库操作正在进行，请等待完成后再离开。')).not.toBeInTheDocument()
-    await expect(workspaceTransitionGuard.attempt()).resolves.toBe(true)
     const idleUnload = new Event('beforeunload', { cancelable: true })
     window.dispatchEvent(idleUnload)
     expect(idleUnload.defaultPrevented).toBe(false)
@@ -445,10 +467,12 @@ describe('LibraryView manual review deck', () => {
       tags: [],
       reviewState: 'any',
       answerState: 'any',
+      cursor: null,
     }))
     await user.click(screen.getByRole('button', { name: '打开 数学 错题详情' }))
     await user.click(await screen.findByRole('button', { name: '关闭题目详情' }))
     expect(screen.getByRole('button', { name: '移除科目 数学' })).toBeVisible()
+    expect(api.problemFilterOptions).toHaveBeenCalledTimes(1)
   })
 
   it('persists one normalized bulk metadata command before refresh and sync', async () => {
@@ -490,7 +514,201 @@ describe('LibraryView manual review deck', () => {
       tags: ['错因·计算失误'],
       reviewState: 'any',
       answerState: 'any',
+      cursor: null,
     })
     expect(screen.getByRole('button', { name: '移除标签 错因·计算失误' })).toBeVisible()
+  })
+
+  it('offers subjects and tags that are outside the first paginated page', async () => {
+    const firstPage = Array.from({ length: 40 }, (_, index) => ({
+      id: `problem-${index}`,
+      subject: '数学',
+      note: `第 ${index + 1} 道`,
+      tags: ['基础'],
+      status: 'active',
+      questionAssetCount: 1,
+      answerAssetCount: 1,
+      questionPreviewDataUrl: null,
+      updatedAtUtcMs: 100 - index,
+    }))
+    api.problemList.mockResolvedValue({ ok: true, data: problemPage(firstPage, 'page-2') })
+    api.problemFilterOptions.mockResolvedValue({
+      ok: true,
+      data: { subjects: ['数学', '化学'], tags: ['基础', '压轴'] },
+    })
+
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/library')
+    await router.isReady()
+    render(LibraryView, {
+      global: { plugins: [router], provide: { [syncControllerKey as symbol]: syncController } },
+    })
+
+    expect(await screen.findAllByRole('article')).toHaveLength(40)
+    await userEvent.click(screen.getByRole('button', { name: '更多筛选' }))
+    expect(screen.getByRole('checkbox', { name: '化学' })).toBeVisible()
+    expect(screen.getByRole('checkbox', { name: '压轴' })).toBeVisible()
+    expect(api.problemFilterOptions).toHaveBeenCalledWith('active')
+  })
+
+  it('does not reuse another status options when the requested facets fail', async () => {
+    api.problemFilterOptions.mockReset()
+      .mockResolvedValueOnce({
+        ok: true,
+        data: { subjects: ['数学'], tags: ['基础'] },
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        error: {
+          code: 'problem_filter_options_failed',
+          userMessage: '筛选选项暂时无法读取。',
+          retryable: true,
+          diagnosticId: 'filter-options',
+        },
+      })
+
+    await renderView()
+    await userEvent.click(screen.getByRole('button', { name: '已归档' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('筛选选项暂时无法读取。')
+    await userEvent.click(screen.getByRole('button', { name: '更多筛选' }))
+    expect(screen.queryByRole('checkbox', { name: '数学' })).not.toBeInTheDocument()
+    expect(api.problemFilterOptions).toHaveBeenNthCalledWith(1, 'active')
+    expect(api.problemFilterOptions).toHaveBeenNthCalledWith(2, 'archived')
+  })
+
+  it('ignores an old profile facet response after the new profile is visible', async () => {
+    const oldProfileOptions = deferred<unknown>()
+    api.libraryContext.mockReset()
+      .mockResolvedValueOnce({
+        ok: true,
+        data: { profileId: 'profile-a', profileName: '档案 A', storage: 'ready' },
+      })
+      .mockResolvedValue({
+        ok: true,
+        data: { profileId: 'profile-b', profileName: '档案 B', storage: 'ready' },
+      })
+    api.problemFilterOptions.mockReset()
+      .mockReturnValueOnce(oldProfileOptions.promise)
+      .mockResolvedValue({
+        ok: true,
+        data: { subjects: ['生物'], tags: ['新档案'] },
+      })
+
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/library')
+    await router.isReady()
+    render(LibraryView, {
+      global: { plugins: [router], provide: { [syncControllerKey as symbol]: syncController } },
+    })
+    await waitFor(() => expect(api.problemFilterOptions).toHaveBeenCalledTimes(1))
+    await userEvent.type(screen.getByRole('searchbox', { name: '搜索题库' }), '函数')
+    await screen.findByText('先看定义域。')
+    await userEvent.click(screen.getByRole('button', { name: '更多筛选' }))
+    expect(screen.getByRole('checkbox', { name: '生物' })).toBeVisible()
+
+    oldProfileOptions.resolve({
+      ok: true,
+      data: { subjects: ['数学'], tags: ['旧档案'] },
+    })
+    await new Promise(resolve => window.setTimeout(resolve, 0))
+
+    expect(screen.getByRole('checkbox', { name: '生物' })).toBeVisible()
+    expect(screen.queryByRole('checkbox', { name: '数学' })).not.toBeInTheDocument()
+  })
+
+  it('appends one server page and admits only one concurrent load-more request', async () => {
+    const firstPage = Array.from({ length: 40 }, (_, index) => ({
+      id: `problem-${index}`,
+      subject: index === 0 ? '数学' : `科目${index}`,
+      note: `第 ${index + 1} 道`,
+      tags: [],
+      status: 'active',
+      questionAssetCount: 1,
+      answerAssetCount: 1,
+      questionPreviewDataUrl: null,
+      updatedAtUtcMs: 100 - index,
+    }))
+    const append = deferred<unknown>()
+    api.problemList.mockReset()
+      .mockResolvedValueOnce({ ok: true, data: problemPage(firstPage, 'page-2') })
+      .mockReturnValueOnce(append.promise)
+
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/library')
+    await router.isReady()
+    render(LibraryView, { global: { plugins: [router], provide: { [syncControllerKey as symbol]: syncController } } })
+
+    expect(await screen.findAllByRole('article')).toHaveLength(40)
+    const loadMore = screen.getByRole('button', { name: '加载更多' })
+    loadMore.click()
+    loadMore.click()
+    await waitFor(() => expect(api.problemList).toHaveBeenCalledTimes(2))
+    expect(api.problemList).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: 'page-2' }))
+
+    append.resolve({ ok: true, data: problemPage([{
+      id: 'problem-40', subject: '英语', note: '第 41 道', tags: [], status: 'active',
+      questionAssetCount: 1, answerAssetCount: 1, questionPreviewDataUrl: null, updatedAtUtcMs: 60,
+    }]) })
+    expect(await screen.findByText('第 41 道')).toBeVisible()
+    expect(screen.getAllByRole('article')).toHaveLength(41)
+    expect(screen.queryByRole('button', { name: '加载更多' })).not.toBeInTheDocument()
+  })
+
+  it('keeps visible cards and selection after an append failure and allows retry', async () => {
+    api.problemList.mockReset()
+      .mockResolvedValueOnce({ ok: true, data: problemPage(problems, 'retry-page') })
+      .mockResolvedValueOnce({
+        ok: false,
+        error: { code: 'problem_list_failed', userMessage: '后续题目加载失败。', retryable: true, diagnosticId: 'page-failure' },
+      })
+      .mockResolvedValueOnce({ ok: true, data: problemPage([{
+        id: 'problem-3', subject: '化学', note: '重试加载的题目', tags: [], status: 'active',
+        questionAssetCount: 1, answerAssetCount: 1, questionPreviewDataUrl: null, updatedAtUtcMs: 0,
+      }]) })
+
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/library')
+    await router.isReady()
+    render(LibraryView, { global: { plugins: [router], provide: { [syncControllerKey as symbol]: syncController } } })
+    await screen.findByText('先看定义域。')
+    await userEvent.click(screen.getByRole('button', { name: '批量管理' }))
+    await userEvent.click(screen.getByRole('checkbox', { name: '选择 数学 错题' }))
+    await userEvent.click(screen.getByRole('button', { name: '加载更多' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('后续题目加载失败。')
+    expect(screen.getByText('先看定义域。')).toBeVisible()
+    expect(screen.getByRole('checkbox', { name: '选择 数学 错题' })).toBeChecked()
+    await userEvent.click(screen.getByRole('button', { name: '加载更多' }))
+    expect(await screen.findByText('重试加载的题目')).toBeVisible()
+    expect(screen.queryByText('后续题目加载失败。')).not.toBeInTheDocument()
+  })
+
+  it('ignores a stale continuation response after the search filter changes', async () => {
+    const append = deferred<unknown>()
+    api.problemList.mockReset()
+      .mockResolvedValueOnce({ ok: true, data: problemPage(problems, 'old-page') })
+      .mockReturnValueOnce(append.promise)
+      .mockResolvedValueOnce({ ok: true, data: problemPage([{
+        id: 'filtered', subject: '化学', note: '筛选后结果', tags: [], status: 'active',
+        questionAssetCount: 1, answerAssetCount: 1, questionPreviewDataUrl: null, updatedAtUtcMs: 3,
+      }]) })
+
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/library')
+    await router.isReady()
+    render(LibraryView, { global: { plugins: [router], provide: { [syncControllerKey as symbol]: syncController } } })
+    await screen.findByText('先看定义域。')
+    screen.getByRole('button', { name: '加载更多' }).click()
+    await userEvent.type(screen.getByRole('searchbox', { name: '搜索题库' }), '化学')
+
+    expect(await screen.findByText('筛选后结果')).toBeVisible()
+    expect(api.problemFilterOptions).toHaveBeenCalledTimes(1)
+    append.resolve({ ok: true, data: problemPage([{
+      id: 'stale', subject: '物理', note: '旧分页结果', tags: [], status: 'active',
+      questionAssetCount: 1, answerAssetCount: 1, questionPreviewDataUrl: null, updatedAtUtcMs: 0,
+    }]) })
+    await Promise.resolve()
+    expect(screen.queryByText('旧分页结果')).not.toBeInTheDocument()
+    expect(screen.getByText('筛选后结果')).toBeVisible()
   })
 })

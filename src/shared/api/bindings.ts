@@ -41,7 +41,8 @@ export const commands = {
 	problemDetail: (problemId: string) => __TAURI_INVOKE<AppResult<ProblemDetail>>("problem_detail", { problemId }),
 	problemBulkMetadata: (input: ProblemBulkMetadataInput) => __TAURI_INVOKE<AppResult<ProblemBulkMetadataReport>>("problem_bulk_metadata", { input }),
 	problemChangeStatus: (input: ProblemStatusInput) => __TAURI_INVOKE<AppResult<number>>("problem_change_status", { input }),
-	problemList: (input: ProblemListInput) => __TAURI_INVOKE<AppResult<ProblemSummary[]>>("problem_list", { input }),
+	problemFilterOptions: (status: ProblemStatusFilter) => __TAURI_INVOKE<AppResult<ProblemFilterOptions>>("problem_filter_options", { status }),
+	problemList: (input: ProblemListInput) => __TAURI_INVOKE<AppResult<ProblemListPage>>("problem_list", { input }),
 	problemUpdate: (input: ProblemUpdateInput) => __TAURI_INVOKE<AppResult<boolean>>("problem_update", { input }),
 	legacyScan: () => typedError<AppResult<LegacyImportCandidate | null>, null>(__TAURI_INVOKE("legacy_scan")),
 	legacyImport: (candidateId: string) => typedError<AppResult<LegacyImportReceipt>, null>(__TAURI_INVOKE("legacy_import", { candidateId })),
@@ -793,6 +794,11 @@ export type ProblemDetail = {
 	assets: ProblemAssetPreview[],
 };
 
+export type ProblemFilterOptions = {
+	subjects: string[],
+	tags: string[],
+};
+
 export type ProblemListInput = {
 	status: ProblemStatusFilter,
 	search: string | null,
@@ -800,6 +806,12 @@ export type ProblemListInput = {
 	tags: string[],
 	reviewState: ProblemReviewState,
 	answerState: ProblemAnswerState,
+	cursor: string | null,
+};
+
+export type ProblemListPage = {
+	items: ProblemSummary[],
+	nextCursor: string | null,
 };
 
 export type ProblemReviewState = "any" | "never_reviewed" | "due" | "recently_forgotten";

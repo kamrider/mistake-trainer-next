@@ -27,27 +27,33 @@ describe('repository quality gates', () => {
 
   it('runs the product gates in the Windows release workflow', () => {
     const workflow = readFileSync(resolve('.github/workflows/ci.yml'), 'utf8')
+    const rustRunner = readFileSync(resolve('scripts/windows-rust-test.ps1'), 'utf8')
 
     for (const command of [
       'pnpm lint',
       'pnpm typecheck',
       'pnpm test',
       'pnpm contract:rust-boundaries',
-      'cargo test --all-targets',
+      '.\\scripts\\windows-rust-test.tests.ps1',
+      '.\\scripts\\windows-rust-test.ps1 -TimeoutSeconds 3600',
       'supabase test db',
       'pnpm tauri build',
     ]) {
       expect(workflow).toContain(command)
     }
+    expect(rustRunner).toContain("@('test', '--all-targets', '--manifest-path', 'src-tauri/Cargo.toml')")
   })
 
   it('builds the frontend before compiling Tauri test targets', () => {
     const workflow = readFileSync(resolve('.github/workflows/ci.yml'), 'utf8')
     const frontendBuild = workflow.indexOf('- run: pnpm build')
-    const rustTests = workflow.indexOf('cargo test --all-targets')
+    const runnerContract = workflow.indexOf('.\\scripts\\windows-rust-test.tests.ps1')
+    const rustTests = workflow.indexOf('.\\scripts\\windows-rust-test.ps1 -TimeoutSeconds 3600')
 
     expect(frontendBuild).toBeGreaterThan(-1)
+    expect(runnerContract).toBeGreaterThan(frontendBuild)
     expect(rustTests).toBeGreaterThan(frontendBuild)
+    expect(rustTests).toBeGreaterThan(runnerContract)
   })
 
   it('routes desktop commands through the reproducible MSVC toolchain wrapper', () => {

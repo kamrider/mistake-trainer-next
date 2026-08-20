@@ -10,6 +10,8 @@ const props = defineProps<{
   status: ProblemStatusFilter
   search: string
   loading: boolean
+  loadingMore?: boolean
+  hasMore?: boolean
   problems: ProblemSummary[]
   errorMessage?: string
   selectedProblemIds?: string[]
@@ -34,6 +36,7 @@ const emit = defineEmits<{
   clearSelection: []
   filtersChange: [filters: LibraryAdvancedFilters]
   bulkMetadata: []
+  loadMore: []
 }>()
 
 const filters: Array<{ value: ProblemStatusFilter; label: string }> = [
@@ -322,80 +325,102 @@ function toggleBatchManagement() {
       <p>正在打开加密题库…</p>
     </section>
 
-    <section
+    <div
       v-else-if="problems.length > 0"
-      class="problem-grid"
-      aria-label="错题列表"
+      class="problem-list-state"
     >
-      <article
-        v-for="problem in problems"
-        :key="problem.id"
-        class="problem-card"
-        :class="{ selected: selectedProblemIds?.includes(problem.id) }"
+      <section
+        class="problem-grid"
+        aria-label="错题列表"
       >
-        <div class="problem-card__topline">
-          <label
-            v-if="isSelecting"
-            class="select-problem"
-          >
-            <input
-              type="checkbox"
-              :checked="selectedProblemIds?.includes(problem.id)"
-              :disabled="batchInteractionBusy"
-              :aria-label="`选择 ${problem.subject || '未分类'} 错题`"
-              @change="$emit('toggleSelection', problem.id)"
+        <article
+          v-for="problem in problems"
+          :key="problem.id"
+          class="problem-card"
+          :class="{ selected: selectedProblemIds?.includes(problem.id) }"
+        >
+          <div class="problem-card__topline">
+            <label
+              v-if="isSelecting"
+              class="select-problem"
             >
-            <span class="sr-only">选择这道题</span>
-          </label>
-          <span class="subject">{{ problem.subject || '未分类' }}</span>
-          <span class="status-dot">{{ problem.status === 'active' ? '学习中' : problem.status }}</span>
-        </div>
-        <button
-          class="problem-preview"
-          type="button"
-          :disabled="batchInteractionBusy"
-          :aria-label="`打开 ${problem.subject || '未分类'} 错题详情`"
-          @click="$emit('openDetail', problem.id)"
-        >
-          <img
-            v-if="problem.questionPreviewDataUrl"
-            :src="problem.questionPreviewDataUrl"
-            :alt="`${problem.subject || '未分类'} 题图预览`"
-            loading="lazy"
+              <input
+                type="checkbox"
+                :checked="selectedProblemIds?.includes(problem.id)"
+                :disabled="batchInteractionBusy"
+                :aria-label="`选择 ${problem.subject || '未分类'} 错题`"
+                @change="$emit('toggleSelection', problem.id)"
+              >
+              <span class="sr-only">选择这道题</span>
+            </label>
+            <span class="subject">{{ problem.subject || '未分类' }}</span>
+            <span class="status-dot">{{ problem.status === 'active' ? '学习中' : problem.status }}</span>
+          </div>
+          <button
+            class="problem-preview"
+            type="button"
+            :disabled="batchInteractionBusy"
+            :aria-label="`打开 ${problem.subject || '未分类'} 错题详情`"
+            @click="$emit('openDetail', problem.id)"
           >
-          <span v-else>
-            <Image
-              :size="23"
+            <img
+              v-if="problem.questionPreviewDataUrl"
+              :src="problem.questionPreviewDataUrl"
+              :alt="`${problem.subject || '未分类'} 题图预览`"
+              loading="lazy"
+            >
+            <span v-else>
+              <Image
+                :size="23"
+                aria-hidden="true"
+              />
+              题图预览暂不可用
+            </span>
+            <small>点击题图进入题卡</small>
+          </button>
+          <div
+            v-if="problem.tags?.length"
+            class="problem-tags"
+            :aria-label="`${problem.subject || '未分类'} 标签`"
+          >
+            <span
+              v-for="tag in (problem.tags ?? []).slice(0, 3)"
+              :key="tag"
+            >{{ tag }}</span>
+            <span v-if="(problem.tags?.length ?? 0) > 3">+{{ (problem.tags?.length ?? 0) - 3 }}</span>
+          </div>
+          <p class="problem-note">
+            {{ problem.note || '这道题还没有补充笔记。' }}
+          </p>
+          <div class="asset-counts">
+            <span><Image
+              :size="15"
               aria-hidden="true"
-            />
-            题图预览暂不可用
-          </span>
-          <small>点击题图进入题卡</small>
-        </button>
-        <div
-          v-if="problem.tags?.length"
-          class="problem-tags"
-          :aria-label="`${problem.subject || '未分类'} 标签`"
+            />{{ problem.questionAssetCount }} 张题图</span>
+            <span>·</span>
+            <span>{{ problem.answerAssetCount }} 张答案</span>
+          </div>
+        </article>
+      </section>
+      <div
+        v-if="hasMore"
+        class="load-more-row"
+      >
+        <button
+          type="button"
+          :disabled="loadingMore || batchInteractionBusy"
+          @click="$emit('loadMore')"
         >
-          <span
-            v-for="tag in (problem.tags ?? []).slice(0, 3)"
-            :key="tag"
-          >{{ tag }}</span>
-          <span v-if="(problem.tags?.length ?? 0) > 3">+{{ (problem.tags?.length ?? 0) - 3 }}</span>
-        </div>
-        <p class="problem-note">
-          {{ problem.note || '这道题还没有补充笔记。' }}
-        </p>
-        <div class="asset-counts">
-          <span><Image
-            :size="15"
+          <LoaderCircle
+            v-if="loadingMore"
+            class="spin"
+            :size="17"
             aria-hidden="true"
-          />{{ problem.questionAssetCount }} 张题图</span>
-          <span>·</span>
-          <span>{{ problem.answerAssetCount }} 张答案</span>
-        </div>
-      </article>
-    </section>
+          />
+          {{ loadingMore ? '正在加载更多…' : '加载更多' }}
+        </button>
+      </div>
+    </div>
 
     <section
       v-else-if="search"
@@ -478,6 +503,9 @@ h1 { margin: 0; font-size: clamp(42px,5vw,64px); letter-spacing: -.055em; line-h
 .search-field input { width: 100%; min-height: 44px; border: 0; outline: 0; background: transparent; }
 .search-field:focus-within { border-color: var(--green-deep); box-shadow: 0 0 0 3px rgba(33,51,45,.1); }
 .error-banner { margin: 20px 0 0; padding: 12px 15px; color: #7f3829; border: 1px solid rgba(185,88,63,.28); border-radius: 10px; background: rgba(185,88,63,.08); }
+.load-more-row { display: flex; justify-content: center; margin-top: 24px; }
+.load-more-row button { display: inline-flex; gap: 8px; align-items: center; justify-content: center; min-width: 148px; min-height: 44px; padding: 0 18px; color: var(--green-deep); border: 1px solid var(--line); border-radius: 999px; background: rgba(255,253,247,.72); cursor: pointer; }
+.load-more-row button:disabled { opacity: .58; cursor: wait; }
 .loading-state { display: grid; gap: 12px; padding: 42px 0; }
 .loading-state span { display: block; width: 100%; height: 72px; border-radius: 14px; background: rgba(232,221,199,.55); animation: pulse 1.2s ease-in-out infinite alternate; }
 .loading-state p { color: var(--ink-muted); }

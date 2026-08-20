@@ -2,6 +2,28 @@
 
 All notable product changes are recorded in this file. Versions follow Semantic Versioning.
 
+## 0.1.4 — 2026-08-19
+
+Improves release stability, report accuracy, and large-library usability without changing the
+encrypted library format or updater trust model.
+
+### Changed
+
+- Updated report date bucketing to use the local calendar day and aligned streak calculations with
+  the full history rather than the visible chart window.
+- Added stable keyset pagination and complete, profile/status-scoped filter metadata for the
+  problem library, including single-flight loading and stale-response protection.
+- Hardened the Windows Rust test runner with bounded timeouts, process-tree cleanup, and concise
+  failure summaries for CI diagnostics.
+
+### Fixed
+
+- Prevented library pagination, filter changes, and profile switches from losing selections or
+  applying stale responses to the active view.
+- Raised the `nanoid` security override to `3.3.18` and verified the production dependency audit.
+- Added release contracts for generated bindings, architecture boundaries, and Windows runner
+  behavior.
+
 ## 0.1.3 — 2026-08-13
 
 Strengthens application boundaries and release reliability without changing the encrypted library

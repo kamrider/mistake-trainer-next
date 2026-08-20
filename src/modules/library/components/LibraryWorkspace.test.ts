@@ -63,6 +63,28 @@ describe('LibraryWorkspace', () => {
     expect(screen.getByRole('button', { name: '添加第一份素材' })).toBeVisible()
   })
 
+  it('exposes a single load-more action and its busy state', async () => {
+    const user = userEvent.setup()
+    const view = render(LibraryWorkspace, {
+      props: {
+        profileName: '本机学习档案',
+        status: 'active',
+        search: '',
+        loading: false,
+        hasMore: true,
+        problems: [{
+          id: 'problem-1', subject: '数学', note: '', tags: [], status: 'active',
+          questionAssetCount: 1, answerAssetCount: 1, questionPreviewDataUrl: null, updatedAtUtcMs: 1,
+        }],
+      },
+    })
+
+    await user.click(screen.getByRole('button', { name: '加载更多' }))
+    expect(view.emitted('loadMore')).toHaveLength(1)
+    await view.rerender({ loadingMore: true })
+    expect(screen.getByRole('button', { name: '正在加载更多…' })).toBeDisabled()
+  })
+
   it('emits searchable text and explains an empty search result', async () => {
     const user = userEvent.setup()
     const view = render(LibraryWorkspace, {

@@ -228,12 +228,13 @@ fn lock_cycle_reopens_the_same_profile_problem_and_encrypted_assets() {
             tags: vec![],
             review_state: ProblemReviewState::Any,
             answer_state: ProblemAnswerState::Any,
+            cursor: None,
         },
         500,
     );
     let serialized = serde_json::to_value(problems).expect("serialize problem list");
     assert_eq!(serialized["ok"], true);
-    assert_eq!(serialized["data"][0]["id"], created.id);
-    assert_eq!(serialized["data"][0]["questionAssetCount"], 1);
-    assert_eq!(serialized["data"][0]["answerAssetCount"], 1);
+    assert_eq!(serialized["data"]["items"][0]["id"], created.id);
+    assert_eq!(serialized["data"]["items"][0]["questionAssetCount"], 1);
+    assert_eq!(serialized["data"]["items"][0]["answerAssetCount"], 1);
 }

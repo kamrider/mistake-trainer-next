@@ -258,6 +258,7 @@ fn run_product_checks(
                     tags: vec![],
                     review_state: ProblemReviewState::Any,
                     answer_state: ProblemAnswerState::Any,
+                    cursor: None,
                 },
             },
         )

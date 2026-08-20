@@ -12,7 +12,13 @@ import {
   useLibraryReviewLaunch,
   type LibraryAdvancedFilters,
 } from '@/modules/library'
-import { commands, type ProblemDetail, type ProblemStatusFilter, type ProblemSummary } from '../../shared/api/bindings'
+import {
+  commands,
+  type ProblemDetail,
+  type ProblemFilterOptions,
+  type ProblemStatusFilter,
+  type ProblemSummary,
+} from '../../shared/api/bindings'
 import { normalizeAppResult } from '../../shared/api/normalize-result'
 import { useDurableActionGuard } from '../composables/useDurableActionGuard'
 import type { NavigationAttempt } from '@/shared/ui/composables/useUnsavedChangesGuard'
@@ -27,8 +33,10 @@ const profileName = ref('本机学习档案')
 const status = ref<ProblemStatusFilter>('active')
 const search = ref('')
 const problems = ref<ProblemSummary[]>([])
+const nextCursor = ref<string | null>(null)
 const selectedProblemIds = ref<string[]>([])
 const loading = ref(true)
+const loadingMore = ref(false)
 const errorMessage = ref('')
 const startingExperience = ref<'review' | 'exam' | null>(null)
 const changingBatchStatus = ref<ProblemStatusFilter | null>(null)
@@ -41,6 +49,13 @@ const advancedFilters = ref<LibraryAdvancedFilters>({
 })
 const knownSubjects = ref<string[]>([])
 const knownTags = ref<string[]>([])
+const activeProfileId = ref<string | null>(null)
+const filterOptionsCache = new Map<string, ProblemFilterOptions>()
+const filterOptionsVersions = new Map<string, number>()
+const filterOptionsLoads = new Map<string, {
+  version: number
+  promise: Promise<string | null>
+}>()
 let refreshSequence = 0
 let searchTimer: number | undefined
 let detailSequence = 0
@@ -94,11 +109,101 @@ function loadDevelopmentPreview() {
     { id: 'preview-chemistry', subject: '化学', note: '平衡移动方向与转化率变化需要分开判断。', tags: ['化学平衡'], status: 'active', questionAssetCount: 1, answerAssetCount: 1, questionPreviewDataUrl: null, updatedAtUtcMs: Date.now() - 2 },
     { id: 'preview-english', subject: '英语', note: '长难句先切分从句，再确认非谓语逻辑主语。', tags: ['长难句'], status: 'active', questionAssetCount: 2, answerAssetCount: 2, questionPreviewDataUrl: null, updatedAtUtcMs: Date.now() - 3 },
   ]
+  knownSubjects.value = [...new Set(problems.value.map(problem => problem.subject))]
+    .sort((left, right) => left.localeCompare(right, 'zh-CN'))
+  knownTags.value = [...new Set(problems.value.flatMap(problem => problem.tags ?? []))]
+    .sort((left, right) => left.localeCompare(right, 'zh-CN'))
+  nextCursor.value = null
+}
+
+function problemListInput(cursor: string | null) {
+  return {
+    status: status.value,
+    search: search.value.trim() || null,
+    subjects: advancedFilters.value.subjects,
+    tags: advancedFilters.value.tags,
+    reviewState: advancedFilters.value.reviewState,
+    answerState: advancedFilters.value.answerState,
+    cursor,
+  }
+}
+
+function sortFilterOptions(options: ProblemFilterOptions): ProblemFilterOptions {
+  return {
+    subjects: [...options.subjects].sort((left, right) => left.localeCompare(right, 'zh-CN')),
+    tags: [...options.tags].sort((left, right) => left.localeCompare(right, 'zh-CN')),
+  }
+}
+
+const filterOptionsKey = (profileId: string, requestedStatus: ProblemStatusFilter) =>
+  `${profileId}:${requestedStatus}`
+
+function showFilterOptions(profileId: string, requestedStatus: ProblemStatusFilter) {
+  if (activeProfileId.value !== profileId || status.value !== requestedStatus) return
+  const options = filterOptionsCache.get(filterOptionsKey(profileId, requestedStatus))
+  knownSubjects.value = options?.subjects ?? []
+  knownTags.value = options?.tags ?? []
+}
+
+function invalidateFilterOptions(...statuses: ProblemStatusFilter[]) {
+  const profileId = activeProfileId.value
+  if (!profileId) return
+  for (const invalidatedStatus of new Set(statuses)) {
+    const key = filterOptionsKey(profileId, invalidatedStatus)
+    filterOptionsCache.delete(key)
+    filterOptionsLoads.delete(key)
+    filterOptionsVersions.set(
+      key,
+      (filterOptionsVersions.get(key) ?? 0) + 1,
+    )
+  }
+}
+
+async function ensureFilterOptions(
+  profileId: string,
+  requestedStatus: ProblemStatusFilter,
+): Promise<string | null> {
+  const key = filterOptionsKey(profileId, requestedStatus)
+  if (filterOptionsCache.has(key)) {
+    showFilterOptions(profileId, requestedStatus)
+    return null
+  }
+
+  const version = filterOptionsVersions.get(key) ?? 0
+  let pending = filterOptionsLoads.get(key)
+  if (!pending || pending.version !== version) {
+    const promise = (async () => {
+      try {
+        const result = normalizeAppResult(await commands.problemFilterOptions(requestedStatus))
+        if (!result.ok) return result.error.userMessage
+        if ((filterOptionsVersions.get(key) ?? 0) === version) {
+          filterOptionsCache.set(key, sortFilterOptions(result.data))
+        }
+        return null
+      }
+      catch {
+        return '筛选选项加载失败，请稍后重试。'
+      }
+    })()
+    pending = { version, promise }
+    filterOptionsLoads.set(key, pending)
+    void promise.finally(() => {
+      if (filterOptionsLoads.get(key)?.promise === promise) {
+        filterOptionsLoads.delete(key)
+      }
+    })
+  }
+
+  const error = await pending.promise
+  showFilterOptions(profileId, requestedStatus)
+  return error
 }
 
 async function refresh() {
   const sequence = ++refreshSequence
   loading.value = true
+  loadingMore.value = false
+  nextCursor.value = null
   errorMessage.value = ''
   try {
     if (!isTauri()) {
@@ -107,35 +212,35 @@ async function refresh() {
       return
     }
 
+    const contextResult = normalizeAppResult(await commands.libraryContext())
+    if (sequence !== refreshSequence) return
+    if (!contextResult.ok) {
+      errorMessage.value = contextResult.error.userMessage
+      return
+    }
+    profileName.value = contextResult.data.profileName
+    if (activeProfileId.value && activeProfileId.value !== contextResult.data.profileId) {
+      for (const [key, load] of filterOptionsLoads) {
+        filterOptionsVersions.set(key, load.version + 1)
+      }
+      filterOptionsCache.clear()
+      filterOptionsLoads.clear()
+    }
+    activeProfileId.value = contextResult.data.profileId
     const requestedStatus = status.value
-    const requestedSearch = search.value.trim()
-    const [contextResult, problemResult] = await Promise.all([
-      commands.libraryContext(),
-      commands.problemList({
-        status: requestedStatus,
-        search: requestedSearch || null,
-        subjects: advancedFilters.value.subjects,
-        tags: advancedFilters.value.tags,
-        reviewState: advancedFilters.value.reviewState,
-        answerState: advancedFilters.value.answerState,
-      }),
+    showFilterOptions(contextResult.data.profileId, requestedStatus)
+    const [filterOptionsError, problemResult] = await Promise.all([
+      ensureFilterOptions(contextResult.data.profileId, requestedStatus),
+      commands.problemList(problemListInput(null)),
     ])
     if (sequence !== refreshSequence) return
-    const context = normalizeAppResult(contextResult)
     const list = normalizeAppResult(problemResult)
-    if (context.ok) profileName.value = context.data.profileName
     if (list.ok) {
-      problems.value = list.data
-      knownSubjects.value = [...new Set([
-        ...knownSubjects.value,
-        ...list.data.map(problem => problem.subject).filter(Boolean),
-      ])].sort((left, right) => left.localeCompare(right, 'zh-CN'))
-      knownTags.value = [...new Set([
-        ...knownTags.value,
-        ...list.data.flatMap(problem => problem.tags ?? []),
-      ])].sort((left, right) => left.localeCompare(right, 'zh-CN'))
-      const visible = new Set(list.data.map(problem => problem.id))
+      problems.value = list.data.items
+      nextCursor.value = list.data.nextCursor
+      const visible = new Set(list.data.items.map(problem => problem.id))
       selectedProblemIds.value = selectedProblemIds.value.filter(id => visible.has(id))
+      if (filterOptionsError) errorMessage.value = filterOptionsError
     }
     else errorMessage.value = list.error.userMessage
   }
@@ -149,7 +254,36 @@ async function refresh() {
   }
 }
 
+async function loadMore() {
+  const cursor = nextCursor.value
+  if (!cursor || loading.value || loadingMore.value) return
+  const sequence = refreshSequence
+  loadingMore.value = true
+  errorMessage.value = ''
+  try {
+    const list = normalizeAppResult(await commands.problemList(problemListInput(cursor)))
+    if (sequence !== refreshSequence) return
+    if (!list.ok) {
+      errorMessage.value = list.error.userMessage
+      return
+    }
+    const visible = new Set(problems.value.map(problem => problem.id))
+    const additions = list.data.items.filter(problem => !visible.has(problem.id))
+    problems.value = [...problems.value, ...additions]
+    nextCursor.value = list.data.nextCursor
+  }
+  catch {
+    if (sequence === refreshSequence) errorMessage.value = '后续题目加载中断，请重试。'
+  }
+  finally {
+    if (sequence === refreshSequence) loadingMore.value = false
+  }
+}
+
 function changeSearch(nextSearch: string) {
+  refreshSequence += 1
+  loadingMore.value = false
+  nextCursor.value = null
   search.value = nextSearch
   selectedProblemIds.value = []
   if (searchTimer !== undefined) window.clearTimeout(searchTimer)
@@ -188,6 +322,7 @@ async function submitBulkMetadata(change: {
     bulkMetadataOpen.value = false
     selectedProblemIds.value = []
     syncController?.scheduleMutation()
+    invalidateFilterOptions(status.value)
     await refresh()
   }
   catch {
@@ -240,6 +375,7 @@ const problemActions = useLibraryProblemActions({
       tags: [...input.tags],
       timeLimitSeconds: input.timeLimitSeconds,
     }
+    invalidateFilterOptions(status.value)
   },
   refresh,
   reloadDetail: openDetail,
@@ -249,7 +385,11 @@ const problemActions = useLibraryProblemActions({
   scheduleSync: () => syncController?.scheduleMutation(),
   operations: {
     update: async input => normalizeAppResult(await commands.problemUpdate(input)),
-    changeStatus: async input => normalizeAppResult(await commands.problemChangeStatus(input)),
+    changeStatus: async input => {
+      const result = normalizeAppResult(await commands.problemChangeStatus(input))
+      if (result.ok) invalidateFilterOptions(status.value, input.targetStatus)
+      return result
+    },
   },
 })
 const { updateProblem, changeProblemStatus } = problemActions
@@ -262,7 +402,11 @@ const batchStatus = useLibraryBatchStatus({
   onError: message => { errorMessage.value = message },
   scheduleSync: () => syncController?.scheduleMutation(),
   refresh,
-  operation: async input => normalizeAppResult(await commands.problemChangeStatus(input)),
+  operation: async input => {
+    const result = normalizeAppResult(await commands.problemChangeStatus(input))
+    if (result.ok) invalidateFilterOptions(status.value, input.targetStatus)
+    return result
+  },
 })
 const { changeBatchStatus } = batchStatus
 
@@ -300,6 +444,11 @@ async function trainProblem(problemId: string) {
 
 async function changeStatus(nextStatus: ProblemStatusFilter) {
   status.value = nextStatus
+  if (activeProfileId.value) showFilterOptions(activeProfileId.value, nextStatus)
+  else {
+    knownSubjects.value = []
+    knownTags.value = []
+  }
   selectedProblemIds.value = []
   await refresh()
 }
@@ -343,6 +492,8 @@ onBeforeUnmount(() => {
     :status="status"
     :search="search"
     :loading="loading"
+    :loading-more="loadingMore"
+    :has-more="Boolean(nextCursor)"
     :problems="problems"
     :selected-problem-ids="selectedProblemIds"
     :starting-experience="startingExperience"
@@ -364,6 +515,7 @@ onBeforeUnmount(() => {
     @select-all="selectAllVisible"
     @clear-selection="clearSelection"
     @bulk-metadata="bulkMetadataOpen = true"
+    @load-more="loadMore"
   />
   <LibraryBulkMetadataDialog
     :open="bulkMetadataOpen"

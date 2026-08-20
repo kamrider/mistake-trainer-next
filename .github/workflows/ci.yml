@@ -45,8 +45,12 @@ jobs:
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
       - name: Rust lint
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      - name: Test bounded Windows Rust runner
+        shell: powershell
+        run: .\scripts\windows-rust-test.tests.ps1
       - name: Rust tests
-        run: cargo test --all-targets --manifest-path src-tauri/Cargo.toml
+        shell: powershell
+        run: .\scripts\windows-rust-test.ps1 -TimeoutSeconds 3600
 
   windows-package:
     runs-on: windows-2025

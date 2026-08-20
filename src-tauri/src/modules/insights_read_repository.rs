@@ -95,19 +95,7 @@ pub(super) fn dashboard_overview(
         |row| row.get(0),
     )?;
 
-    let review_day_buckets = {
-        let mut statement = connection.prepare(
-            "SELECT DISTINCT (occurred_at_utc_ms + ?3) / ?4 AS day_bucket
-             FROM review_events
-             WHERE account_id = ?1 AND profile_id = ?2
-             ORDER BY day_bucket DESC",
-        )?;
-        statement
-            .query_map(params![account_id, profile_id, offset_ms, DAY_MS], |row| {
-                row.get::<_, i64>(0)
-            })?
-            .collect::<Result<Vec<_>, _>>()?
-    };
+    let review_day_buckets = review_day_buckets(connection, account_id, profile_id, offset_ms)?;
     let current_streak_days = current_streak_from_buckets(&review_day_buckets, today_bucket);
 
     let pending_capture_batch_count = connection.query_row(
@@ -198,24 +186,34 @@ pub(super) fn report_summary(
     } else {
         remembered_count as f64 / review_count as f64
     };
-    let today = now_utc_ms.div_euclid(DAY_MS) * DAY_MS;
-    let start = today - (REPORT_DAYS - 1) * DAY_MS;
+    let offset_ms = i64::from(utc_offset_minutes) * 60_000;
+    let today_bucket = (now_utc_ms + offset_ms).div_euclid(DAY_MS);
+    let start_bucket = today_bucket - (REPORT_DAYS - 1);
+    let start_utc_ms = start_bucket * DAY_MS - offset_ms;
+    let tomorrow_start_utc_ms = (today_bucket + 1) * DAY_MS - offset_ms;
     let mut daily_activity = (0..REPORT_DAYS)
         .map(|offset| DailyActivity {
-            day_start_utc_ms: (start + offset * DAY_MS) as f64,
+            day_start_utc_ms: ((start_bucket + offset) * DAY_MS - offset_ms) as f64,
             review_count: 0,
             duration_ms: 0.0,
         })
         .collect::<Vec<_>>();
     {
         let mut statement = connection.prepare(
-            "SELECT (occurred_at_utc_ms / ?1) * ?1 AS day_start, COUNT(*), COALESCE(SUM(duration_ms), 0)
+            "SELECT (occurred_at_utc_ms + ?1) / ?2 AS day_bucket, COUNT(*), COALESCE(SUM(duration_ms), 0)
              FROM review_events
-             WHERE account_id = ?2 AND profile_id = ?3 AND occurred_at_utc_ms >= ?4 AND occurred_at_utc_ms < ?5
-             GROUP BY day_start ORDER BY day_start",
+             WHERE account_id = ?3 AND profile_id = ?4 AND occurred_at_utc_ms >= ?5 AND occurred_at_utc_ms < ?6
+             GROUP BY day_bucket ORDER BY day_bucket",
         )?;
         let rows = statement.query_map(
-            params![DAY_MS, account_id, profile_id, start, today + DAY_MS],
+            params![
+                offset_ms,
+                DAY_MS,
+                account_id,
+                profile_id,
+                start_utc_ms,
+                tomorrow_start_utc_ms
+            ],
             |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
@@ -225,8 +223,8 @@ pub(super) fn report_summary(
             },
         )?;
         for row in rows {
-            let (day, count, duration) = row?;
-            if let Ok(index) = usize::try_from((day - start).div_euclid(DAY_MS))
+            let (day_bucket, count, duration) = row?;
+            if let Ok(index) = usize::try_from(day_bucket - start_bucket)
                 && let Some(item) = daily_activity.get_mut(index)
             {
                 item.review_count = bounded_i32(count);
@@ -234,7 +232,8 @@ pub(super) fn report_summary(
             }
         }
     }
-    let current_streak_days = current_streak(&daily_activity);
+    let review_day_buckets = review_day_buckets(connection, account_id, profile_id, offset_ms)?;
+    let current_streak_days = current_streak_from_buckets(&review_day_buckets, today_bucket);
     let subject_activity = {
         let mut statement = connection.prepare(
             "SELECT CASE WHEN trim(p.subject) = '' THEN '未分类' ELSE p.subject END,
@@ -468,22 +467,23 @@ fn scalar(
     connection.query_row(sql, params![account_id, profile_id], |row| row.get(0))
 }
 
-fn current_streak(days: &[DailyActivity]) -> i32 {
-    let mut days = days.iter().rev();
-    let Some(today) = days.next() else { return 0 };
-    let mut streak = 0;
-    if today.review_count > 0 {
-        streak = 1;
-    } else if days.clone().next().is_none_or(|day| day.review_count == 0) {
-        return 0;
-    }
-    for day in days {
-        if day.review_count == 0 {
-            break;
-        }
-        streak += 1;
-    }
-    streak
+fn review_day_buckets(
+    connection: &Connection,
+    account_id: &str,
+    profile_id: &str,
+    offset_ms: i64,
+) -> Result<Vec<i64>, rusqlite::Error> {
+    let mut statement = connection.prepare(
+        "SELECT DISTINCT (occurred_at_utc_ms + ?3) / ?4 AS day_bucket
+         FROM review_events
+         WHERE account_id = ?1 AND profile_id = ?2
+         ORDER BY day_bucket DESC",
+    )?;
+    statement
+        .query_map(params![account_id, profile_id, offset_ms, DAY_MS], |row| {
+            row.get::<_, i64>(0)
+        })?
+        .collect::<Result<Vec<_>, _>>()
 }
 
 fn current_streak_from_buckets(day_buckets: &[i64], today_bucket: i64) -> i32 {
