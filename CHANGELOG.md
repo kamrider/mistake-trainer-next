@@ -2,6 +2,25 @@
 
 All notable product changes are recorded in this file. Versions follow Semantic Versioning.
 
+## 0.1.5 — 2026-08-22
+
+Security and maintenance patch. It does not change the encrypted library format, updater trust
+model, or supported user workflow.
+
+### Security
+
+- Removed the vulnerable `quick-xml 0.36.2` path by upgrading `docx-rs` to `0.4.22`.
+- Updated the isolated question-region evaluation lab to Pillow `12.3.0`.
+- Pinned patched `js-yaml`, `undici`, and `brace-expansion` transitive versions and expanded
+  the pnpm audit to include build and test tooling.
+- Added full-history credential scanning and a pinned RustSec audit to every pull request and
+  `main` build.
+
+### Maintenance
+
+- Added weekly npm, Cargo, Python lab, and GitHub Actions dependency update checks.
+- Added public privacy, security-reporting, support, and production-readiness documentation.
+
 ## 0.1.4 — 2026-08-19
 
 Improves release stability, report accuracy, and large-library usability without changing the

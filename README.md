@@ -9,6 +9,22 @@ implemented. Capture supports persistent desktop batch organizing and an explici
 started QR phone session on trusted private networks. The legacy Electron application
 is a read-only migration fixture and is never modified by this repository.
 
+## Production scope
+
+The shortest supported path to a production-quality user pilot is the Windows 11 x64,
+offline-first local workflow: create or unlock an encrypted library, capture and organize
+questions, review them, and create a verified encrypted backup. Automatic question-region
+suggestions remain review-required and never silently create final library problems. Cloud sync
+is optional and unavailable in builds without an explicitly configured backend.
+
+Installers in the free Windows channel are intentionally not Authenticode-signed. Windows can
+show an Unknown publisher or Microsoft Defender SmartScreen warning. Updater payloads use a
+separate cryptographic signature and still require explicit user confirmation before install.
+
+See [docs/production-readiness.md](docs/production-readiness.md) for the current go/no-go gates,
+[PRIVACY.md](PRIVACY.md) for data handling, [SUPPORT.md](SUPPORT.md) for safe support requests,
+and [SECURITY.md](SECURITY.md) for private vulnerability reporting.
+
 ## Commands
 
 ```powershell

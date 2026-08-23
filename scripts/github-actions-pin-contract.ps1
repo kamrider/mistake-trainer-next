@@ -60,4 +60,33 @@ if ($writePermissions.Count -ne 1) {
   throw "Only the draft release job may receive contents: write; found $($writePermissions.Count) grants."
 }
 
+$ciWorkflowPath = Join-Path $resolvedWorkflowDirectory 'ci.yml'
+if (-not (Test-Path -LiteralPath $ciWorkflowPath -PathType Leaf)) {
+  throw 'CI workflow is missing.'
+}
+$ciWorkflow = Get-Content -LiteralPath $ciWorkflowPath -Raw
+$securityJobMatch = [regex]::Match(
+  $ciWorkflow,
+  '(?ms)^  security:\s*$.*?(?=^  [a-zA-Z0-9_-]+:\s*$)'
+)
+if (-not $securityJobMatch.Success) {
+  throw 'CI must contain a dedicated security job.'
+}
+$securityJob = $securityJobMatch.Value
+if ($securityJob -notmatch '(?m)^          fetch-depth: 0\s*$') {
+  throw 'The security job must check out the complete Git history.'
+}
+if ($securityJob -notmatch '(?m)^        uses: gitleaks/gitleaks-action@[0-9a-fA-F]{40}\s+# v3\.0\.0\s*$') {
+  throw 'The security job must pin Gitleaks action v3.0.0 to a full commit SHA.'
+}
+if ($securityJob -notmatch "(?m)^          GITLEAKS_VERSION: '8\.30\.1'\s*$") {
+  throw 'The security job must pin the Gitleaks scanner version.'
+}
+if ($securityJob -notmatch '(?m)^        run: cargo install cargo-audit --version 0\.22\.2 --locked\s*$') {
+  throw 'The security job must install the pinned RustSec auditor.'
+}
+if ($securityJob -notmatch '(?m)^        run: cargo audit --file src-tauri/Cargo\.lock\s*$') {
+  throw 'The security job must audit the production Rust lockfile.'
+}
+
 Write-Output "GitHub Actions pin contract passed for $($workflowFiles.Count) workflow files."

@@ -1,6 +1,6 @@
 {
   "name": "mistake-trainer-next",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.11.0",
@@ -12,7 +12,7 @@
     "lint": "eslint . --max-warnings 0",
     "mobile:vendor": "node scripts/vendor-mobile-assets.js",
     "mobile:vendor:check": "node scripts/vendor-mobile-assets.js --check",
-    "security:audit": "pnpm audit --prod",
+    "security:audit": "pnpm audit --audit-level high",
     "build": "pnpm mobile:vendor:check && vue-tsc --noEmit && vite build",
     "bindings:generate": ".\\scripts\\cargo-msvc.cmd run --manifest-path src-tauri\\Cargo.toml --bin mistake-trainer-next -- --export-bindings",
     "bindings:check": "pnpm bindings:generate && git diff --exit-code -- src/shared/api/bindings.ts",

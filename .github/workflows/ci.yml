@@ -10,6 +10,28 @@ permissions:
   contents: read
 
 jobs:
+  security:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - name: Scan the complete Git history for exposed secrets
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: 'false'
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: 'false'
+          GITLEAKS_VERSION: '8.30.1'
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.97.0
+      - name: Install pinned RustSec auditor
+        run: cargo install cargo-audit --version 0.22.2 --locked
+      - name: Audit production Rust dependencies
+        run: cargo audit --file src-tauri/Cargo.lock
+
   app:
     runs-on: windows-2025
     timeout-minutes: 90
